@@ -34,6 +34,24 @@ local function Suppress(btn)
   if btn.PushedTexture then btn.PushedTexture:SetAlpha(0) end
 end
 
+-- Make the round sweep circle coincide with the icon circle: anchor the
+-- cooldown widgets to the icon oversized by the art-padding ratio (same math
+-- as the icon mask). Blizzard insets the cooldown inside the icon (+1.7/-1
+-- points, small-button UpdateButtonArt re-anchors it) — which made the v0
+-- sweep visibly smaller than the icon.
+local function AlignCooldowns(btn)
+  local icon = btn.icon or btn.Icon
+  if not icon then return end
+  local grow = icon:GetWidth() * GROW_RATIO
+  for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
+    if cd then
+      cd:ClearAllPoints()
+      cd:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
+      cd:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
+    end
+  end
+end
+
 local function ApplyButton(btn)
   local icon = btn.icon or btn.Icon
   if not icon then return end
@@ -50,7 +68,10 @@ local function ApplyButton(btn)
     rec.texCoord = { icon:GetTexCoord() }
     if btn.UpdateButtonArt then
       hooksecurefunc(btn, "UpdateButtonArt", function(b)
-        if Skin.enabled then Suppress(b) end
+        if Skin.enabled then
+          Suppress(b)
+          AlignCooldowns(b)
+        end
       end)
     end
   end
@@ -76,6 +97,7 @@ local function ApplyButton(btn)
     end
     rec.cooldownStyled = true
   end
+  AlignCooldowns(btn)
   Suppress(btn)
   rec.active = true
 end
