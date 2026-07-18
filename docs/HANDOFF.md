@@ -72,27 +72,35 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
 
 ## What's BUILT + QA status
 - **Session 1 (2026-07-18):** repo scaffolded (TOC, Core.lua w/ tokens + saved vars +
-  `/gb` router + 2 probes; .pkgmeta; release workflow; README; CLAUDE.md; this file;
+  `/gb` router + probes; .pkgmeta; release workflow; README; CLAUDE.md; this file;
   fonts copied from GloomsAuras; wow-addon-dev skill vendored into docs/).
-  - ✅ QA'd in-game: addon loads, `/gb` command list prints, BugSack clean.
-  - ✅ QA'd in-game: `/gb debug` census — gates 1–2 closed (see table).
+  - ✅ QA'd in-game: addon loads, `/gb` router works, gates 1–3 + 3b/3c closed.
+  - ✅ **END STATE: `/gb round` renders ActionButton1 as a clean, sharp circle**
+    (bundled padded mask PNG + zoom crop + slot art hidden) — the differentiator's
+    core mechanism fully proven. Remaining known gap: border art returns on press
+    (re-assert hooks = Phase 2, by design).
   - GitHub repo live: https://github.com/HandofDevastation/GloomsBars (public,
-    HandofDevastation org). `gh` CLI installed + authorized on Jason's machine
-    (account `polaris1976`, scopes repo/workflow/read:org).
+    HandofDevastation org), release `v0.0.1` published + zip verified. `gh` CLI
+    installed + authorized on Jason's machine (account `polaris1976`,
+    scopes repo/workflow/read:org).
 
-## NEXT / START HERE
-1. ✅ QA'd: `/gb round` Q1 PASSED (2026-07-18, screenshot) — ActionButton1 renders as a
-   clean round icon, slot art fully suppressed, right next to a default square button.
-   The differentiator thesis is proven on a live button.
-2. ✅ QA'd Q2 (2026-07-18): pressing the button re-shows `NormalTexture` — re-assert
-   hooks confirmed necessary (API-NOTES §2). Cooldown swipe renders; shape assessment
-   deferred (border clutter).
-3. ✅ Root-caused the flattened edges: NOT baked border pixels — `CircleMaskScalable`
-   itself flattens when stretched (scalable/9-slice atlas). Switched probes to a
-   bundled 256px mask PNG (`Media/masks/circle.png`, script-generated). QA pending:
-   `/gb round` — fully round now? This also verifies the **bundled-mask pipeline**
-   that rounded-rects + shaped glows all depend on.
-4. Then Phase 2 (skin engine v0) — see item below.
+## NEXT / START HERE (session 2)
+Session 1 ended with the round-icon mechanism fully proven (see QA status above);
+the mask saga's learnings are all in [API-NOTES.md](API-NOTES.md) §2 — read them
+before touching mask/skin code.
+
+**Phase 2 — skin engine v0:**
+1. Research hook points (gate 5): read the Midnight client's `Blizzard_ActionBar*` /
+   `ActionButtonTemplate` source (Gethe wow-ui-source on GitHub, branch matching
+   12.0.7 — or extracted client source). We need: which functions re-show
+   `NormalTexture` on press, icon/vertex-color update paths, `showButtonArt` role,
+   Edit-Mode relayout entry points.
+2. Build `Skin.lua`: apply/re-assert engine over all 8 bars (per-button styling
+   records, `hooksecurefunc` re-assertions, event-driven refresh). Start with:
+   zoom+mask+slot-art suppression (the proven recipe) + hotkey/name/count fonts.
+3. QA loop with Jason as usual (one step at a time).
+4. Sometime: test WoWUp install-from-URL **on another machine** (NOT Jason's dev
+   machine — WoWUp would clobber the dev symlink).
 2. Then Phase 2 (skin engine v0): read the client's `Blizzard_ActionBar*` /
    `ActionButtonTemplate` source for hook points (gate 5) — we now know the exact
    member names to look for (API-NOTES §1). Probe the `showButtonArt` hypothesis.
