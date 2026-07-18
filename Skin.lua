@@ -42,13 +42,29 @@ end
 local function AlignCooldowns(btn)
   local icon = btn.icon or btn.Icon
   if not icon then return end
-  local grow = icon:GetWidth() * GROW_RATIO
+  -- Overshoot: the sweep must extend slightly PAST the icon circle or the
+  -- icon's anti-aliased rim leaks full brightness at the edge (QA-observed).
+  -- A sub-pixel dark fringe on the outside is invisible; a bright rim isn't.
+  -- Live-tunable via /gb sweep <px> for pixel-perfect QA.
+  local grow = icon:GetWidth() * GROW_RATIO + (GB.db and GB.db.sweepOvershoot or 0.75)
   for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
     if cd then
       cd:ClearAllPoints()
       cd:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
       cd:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
     end
+  end
+end
+
+function Skin:SetSweepOvershoot(px)
+  if px then
+    GB.db.sweepOvershoot = px
+    GB.msg(("sweep overshoot set to %.2f px."):format(px))
+  else
+    GB.msg(("sweep overshoot is %.2f px (usage: /gb sweep 1.25)"):format(GB.db.sweepOvershoot or 0.75))
+  end
+  if self.enabled then
+    GB:ForEachButton(function(btn) AlignCooldowns(btn) end)
   end
 end
 

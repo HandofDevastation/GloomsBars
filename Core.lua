@@ -116,6 +116,7 @@ end
 -- ---------------------------------------------------------------------------
 local DB_DEFAULTS = {
   schema = 1,
+  sweepOvershoot = 0.75,   -- px the cooldown sweep extends past the icon circle
 }
 
 local loader = CreateFrame("Frame")
@@ -323,7 +324,7 @@ end
 SLASH_GLOOMSBARS1 = "/gb"
 SLASH_GLOOMSBARS2 = "/gloomsbars"
 SlashCmdList.GLOOMSBARS = function(input)
-  local cmd = (input or ""):lower():match("^%s*(%S*)")
+  local cmd, arg = (input or ""):lower():match("^%s*(%S*)%s*(%S*)")
   if cmd == "debug" then
     DebugReport()
   elseif cmd == "mask" then
@@ -334,9 +335,12 @@ SlashCmdList.GLOOMSBARS = function(input)
     ToggleRoundProbe()
   elseif cmd == "skin" then
     GB.Skin:Toggle()
+  elseif cmd == "sweep" then
+    GB.Skin:SetSweepOvershoot(tonumber(arg))
   else
     msg("v" .. GB:Version() .. " — commands:")
     print("  /gb skin — toggle the round skin on all 8 action bars (persists)")
+    print("  /gb sweep <px> — tune how far the cooldown sweep overshoots the icon circle")
     print("  /gb debug — census of action bar buttons + regions")
     print("  /gb mask — toggle the standalone MaskTexture render probe (screen center)")
     print("  /gb maskinfo — inspect ActionButton1's icon/mask wiring")
