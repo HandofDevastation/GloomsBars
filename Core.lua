@@ -163,42 +163,71 @@ local function DebugReport()
     { "cooldown", sample.cooldown or sample.Cooldown },
     { "Border",   sample.Border },
     { "NormalTexture", sample.NormalTexture or (sample.GetNormalTexture and sample:GetNormalTexture()) },
+    { "IconMask", sample.IconMask },
   }
   for _, r in ipairs(regions) do
     print(("    .%s: %s"):format(r[1], r[2] and "|cff20ba56found|r" or "|cffc41e3amissing|r"))
   end
+  if sample.IconMask and sample.IconMask.GetAtlas then
+    print("    IconMask atlas: " .. tostring(sample.IconMask:GetAtlas()))
+  end
 end
 
 -- /gb mask — the ⚠ VERIFY that the whole differentiator rests on: does
--- MaskTexture render in Midnight? Toggles a circular mask (Blizzard's own
--- portrait alpha mask, no bundled art needed yet) on Action Bar 1's icons.
--- Expected if masks work: bar-1 icons clip to circles. Run again to remove.
-local maskedIcons = {}
+-- MaskTexture render in Midnight? Probe v2 after v1's ambiguous "slightly more
+-- rounded" result (2026-07-18): the buttons likely already carry Blizzard's own
+-- .IconMask, so v1's added mask may never have loaded its texture. v2 prefers
+-- swapping the atlas on Blizzard's OWN IconMask to a dramatic full circle —
+-- an unmistakable pass/fail. Falls back to v1's additive mask (with a
+-- did-it-load report) if .IconMask is gone. Run again to restore.
+local CIRCLE_ATLAS = "CircleMaskScalable"
+local maskProbe = { swapped = {}, added = {} }
 local function ToggleMaskProbe()
-  if #maskedIcons > 0 then
-    for _, entry in ipairs(maskedIcons) do
+  if #maskProbe.swapped > 0 or #maskProbe.added > 0 then
+    for _, entry in ipairs(maskProbe.swapped) do
+      if entry.atlas then
+        entry.mask:SetAtlas(entry.atlas)
+      else
+        -- No atlas to restore (mask used a plain texture we can't cheaply
+        -- stash) — a /reload fully resets Blizzard's state.
+        entry.mask:SetAtlas(nil)
+      end
+    end
+    for _, entry in ipairs(maskProbe.added) do
       entry.icon:RemoveMaskTexture(entry.mask)
       entry.mask:Hide()
     end
-    wipe(maskedIcons)
-    msg("mask probe OFF — bar 1 icons should be square again.")
+    wipe(maskProbe.swapped); wipe(maskProbe.added)
+    msg("mask probe OFF — bar 1 restored (if anything looks off, /reload fully resets).")
     return
   end
-  local applied = 0
+  if not (C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(CIRCLE_ATLAS)) then
+    msg(("|cffff7729atlas '%s' not found in this client|r — falling back to file-path mask."):format(CIRCLE_ATLAS))
+  end
+  local swapped, added, loadFailures = 0, 0, 0
   for i = 1, GB.BUTTONS_PER_BAR do
     local button = _G["ActionButton" .. i]
     local icon = button and (button.icon or button.Icon)
     if icon then
-      local mask = button:CreateMaskTexture()
-      mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask",
-        "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-      mask:SetAllPoints(icon)
-      icon:AddMaskTexture(mask)
-      maskedIcons[#maskedIcons + 1] = { icon = icon, mask = mask }
-      applied = applied + 1
+      local blizzMask = button.IconMask
+      if blizzMask and C_Texture.GetAtlasInfo(CIRCLE_ATLAS) then
+        maskProbe.swapped[#maskProbe.swapped + 1] = { mask = blizzMask, atlas = blizzMask:GetAtlas() }
+        blizzMask:SetAtlas(CIRCLE_ATLAS)
+        swapped = swapped + 1
+      else
+        local mask = button:CreateMaskTexture()
+        mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask",
+          "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        if not mask:GetTexture() then loadFailures = loadFailures + 1 end
+        mask:SetAllPoints(icon)
+        icon:AddMaskTexture(mask)
+        maskProbe.added[#maskProbe.added + 1] = { icon = icon, mask = mask }
+        added = added + 1
+      end
     end
   end
-  msg(("mask probe ON — circular mask applied to %d bar-1 icons. Are they round now?"):format(applied))
+  msg(("mask probe ON — %d Blizzard IconMasks swapped to '%s', %d additive masks added (%d texture load failures). Are bar-1 icons FULL circles now?")
+    :format(swapped, CIRCLE_ATLAS, added, loadFailures))
 end
 
 -- ---------------------------------------------------------------------------
