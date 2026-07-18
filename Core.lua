@@ -278,6 +278,43 @@ local function ButtonMaskProbe()
   end
 end
 
+-- /gb tint — discriminator after v4 (2026-07-18): the atlas swap persists, the
+-- mask is attached to the shown .icon, no overdraw among the button's own
+-- regions — yet no visual change. Either the VISIBLE icon isn't Blizzard's
+-- .icon (an addon overlay living in a child frame — ArcUI), or mask changes
+-- don't propagate to an already-rendered texture. This (a) tints .icon RED —
+-- if the visible icon doesn't go red, we've never been looking at it; (b) adds
+-- a FRESH additive circle mask (the exact config the standalone probe proved
+-- renders); (c) dumps the button's child frames. /reload reverts.
+local function TintProbe()
+  local b = _G["ActionButton1"]
+  local icon = b and (b.icon or b.Icon)
+  if not icon then msg("ActionButton1 .icon not found.") return end
+  icon:SetVertexColor(1, 0.15, 0.15)
+  local mask = b:CreateMaskTexture()
+  mask:SetAtlas(CIRCLE_ATLAS)
+  mask:SetAllPoints(icon)
+  icon:AddMaskTexture(mask)
+  msg("tint probe ON — Blizzard's real icon on ActionButton1 is now RED + freshly circle-masked.")
+  print("  child frames of the button (an overlay icon would live here):")
+  local kids = { b:GetChildren() }
+  if #kids == 0 then print("    (none)") end
+  for _, kid in ipairs(kids) do
+    local shownTex = 0
+    for _, r in ipairs({ kid:GetRegions() }) do
+      if r.IsShown and r:IsShown() and r:GetObjectType() == "Texture" then shownTex = shownTex + 1 end
+    end
+    print(("    %s (%s, level %d, shown=%s, %d shown textures)")
+      :format(tostring(kid:GetName() or "<unnamed>"), kid:GetObjectType(),
+        kid:GetFrameLevel(), tostring(kid:IsShown()), shownTex))
+  end
+  C_Timer.After(1, function()
+    local r, g = icon:GetVertexColor()
+    print(("  vertex color after 1s: r=%.2f g=%.2f (reverted: %s)"):format(r, g, tostring(r < 0.9 or g > 0.5)))
+    msg("Q: Is the FIRST icon on bar 1 now (a) RED and (b) CIRCULAR? (/reload to revert)")
+  end)
+end
+
 -- ---------------------------------------------------------------------------
 -- /gb slash router
 -- ---------------------------------------------------------------------------
@@ -293,11 +330,14 @@ SlashCmdList.GLOOMSBARS = function(input)
     MaskInfo()
   elseif cmd == "mask2" then
     ButtonMaskProbe()
+  elseif cmd == "tint" then
+    TintProbe()
   else
     msg("v" .. GB:Version() .. " — commands:")
     print("  /gb debug — census of action bar buttons + regions")
     print("  /gb mask — toggle the standalone MaskTexture render probe (screen center)")
     print("  /gb maskinfo — inspect ActionButton1's icon/mask wiring")
     print("  /gb mask2 — instrumented atlas swap on ActionButton1 (re-assert + overdraw check)")
+    print("  /gb tint — red-tint the real icon + fresh circle mask + child-frame dump")
   end
 end
