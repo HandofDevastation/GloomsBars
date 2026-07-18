@@ -60,6 +60,22 @@ local function ApplyButton(btn)
   end
   icon:SetTexCoord(ZOOM, 1 - ZOOM, ZOOM, 1 - ZOOM)
   icon:AddMaskTexture(rec.mask)
+  -- Shaped cooldown sweep: the swipe respects its texture's alpha, and
+  -- Blizzard's cooldown path never re-sets swipe textures (only SetCooldown/
+  -- Clear + SetSwipeColor around cast anims — API-NOTES §3), so one-time
+  -- setup persists. chargeCooldown is edge-only by default — left untouched.
+  if not rec.cooldownStyled then
+    for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
+      if cd and cd.SetSwipeTexture then
+        cd:SetSwipeTexture(GB.MASK.circleSwipe)
+        -- The rotating edge line + finish bling are drawn to the SQUARE frame
+        -- bounds and poke past a round sweep — off for the clean look.
+        if cd.SetDrawEdge then cd:SetDrawEdge(false) end
+        if cd.SetDrawBling then cd:SetDrawBling(false) end
+      end
+    end
+    rec.cooldownStyled = true
+  end
   Suppress(btn)
   rec.active = true
 end
@@ -80,6 +96,8 @@ local function RestoreButton(btn)
   -- Blizzard restores correct slot-art state itself (branching on the bar's
   -- Edit-Mode hide-bar-art setting).
   if btn.UpdateButtonArt then btn:UpdateButtonArt() end
+  -- Cooldown swipe/edge/bling defaults live in the template with no reliable
+  -- getters — a /reload fully restores them (Disable() says so).
 end
 
 function Skin:Enable()
@@ -97,7 +115,7 @@ function Skin:Disable()
   self.enabled = false
   if GB.db then GB.db.skinEnabled = false end
   GB:ForEachButton(function(btn) RestoreButton(btn) end)
-  GB.msg("skin OFF — Blizzard defaults restored.")
+  GB.msg("skin OFF — Blizzard defaults restored (/reload to also restore cooldown sweep shape).")
 end
 
 function Skin:Toggle()

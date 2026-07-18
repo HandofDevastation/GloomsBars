@@ -98,10 +98,18 @@ before touching mask/skin code.
    8 bars; per-button `hooksecurefunc(btn, "UpdateButtonArt")` re-assert; SetAlpha(0)
    for Normal/Pushed; persisted via `GB.db.skinEnabled` (re-applies at PLAYER_LOGIN);
    `/gb skin` toggles. `/gb round` refuses while skin is on (mask-cap safety).
-3. ❌ QA pending: `/gb skin` — all 96 buttons round? Border stays gone on press?
-   Survives /reload? Then: Edit Mode open/close, bar-art checkbox, spec change.
-4. Next build steps: text styling (fonts stick per §3; colors need hooks),
-   Highlight/Checked shaped states (known square in v0), shaped cooldown swipe,
+3. ✅ QA'd (2026-07-18): `/gb skin` — all bars round, border STAYS GONE on press
+   (SetAlpha(0) + UpdateButtonArt hook strategy confirmed in-game).
+4. Jason's noted remaining square offenders: cooldown swipe (addressed next, see 5),
+   cast/channel overlay (`SpellCastAnimFrame`), spell-highlight/assisted-rotation
+   blue glow (`SpellHighlightTexture`/`AssistedCombatRotationFrame`), plus known
+   Highlight/Checked hover states.
+5. ✅ Built (QA pending): **round cooldown sweep** — `SetSwipeTexture(circle-swipe.png)`
+   (0.8-alpha circular fill) on `cooldown` + `lossOfControlCooldown`; edge + bling off
+   (they draw to square bounds); `chargeCooldown` untouched (edge-only by default).
+   QA: does the sweep follow the circle? Count number still fine?
+6. Next build steps: text styling (fonts stick per §3; colors need hooks),
+   shaped cast/channel + highlight overlays, Highlight/Checked shaped states,
    then the glow phase (manager hook + shaped glow art).
 5. Sometime: test WoWUp install-from-URL **on another machine** (NOT Jason's dev
    machine — WoWUp would clobber the dev symlink).

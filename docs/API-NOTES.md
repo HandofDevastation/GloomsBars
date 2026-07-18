@@ -59,6 +59,7 @@ From `Interface/AddOns/Blizzard_ActionBar/` (`Shared/ActionButton.lua` unless no
 - **HotKey**: font face/size never re-set by Blizzard (template FontObject only) → `SetFont` sticks. Color IS stomped by the range path (:1278–89, `RED_FONT_COLOR` ↔ `ACTIONBAR_HOTKEY_FONT_COLOR`) — custom hotkey *colors* need a hook; custom *fonts* don't.
 - **Proc glows route through a central manager**: `ActionBarActionButtonMixin:UpdateSpellAlert` (:877) → `ActionButtonSpellAlertManager:ShowAlert(self)` / `:HideAlert(self)`, driven by `C_SpellActivationOverlay.IsSpellOverlayed(id)`. **The glow phase hooks the manager — one hook, not 96.**
 - Mixin methods are per-frame copies → always `hooksecurefunc` the BUTTON instances, never the mixin tables (GloomsAuras learning, holds here).
+- **Cooldown path never re-sets swipe textures**: `ActionButton_UpdateCooldown` → `ActionButton_ApplyCooldown` only calls `SetCooldown`/`Clear` (:823–868); `SetSwipeColor` appears only in cast-anim paths (:1211 hides, :1731 restores `0,0,0,1`) and per-bar OnLoads. One-time `SetSwipeTexture` on the widgets persists (⚠ in-game verify). Note `chargeCooldown` is edge-only by default — leave it untouched when shaping swipes. Swipe rendering respects the swipe texture's alpha → circular 0.8-alpha texture = round Blizzard-like sweep.
 
 ## §4 Misc verified behaviors
 - **Error inside a `SlashCmdList` handler ⇒ typed text stays undigested in the chat input** (the throw aborts `ChatEdit ParseText/SendText` cleanup). Symptom = handler error; always check BugSack.

@@ -50,6 +50,7 @@ GB.MEDIA = "Interface\\AddOns\\" .. ADDON_NAME .. "\\Media\\"
 -- CircleMaskScalable flatten when stretched; bundled art is the production path).
 GB.MASK = {
   circle = GB.MEDIA .. "masks\\circle.png",
+  circleSwipe = GB.MEDIA .. "masks\\circle-swipe.png",   -- 0.8-alpha fill for cooldown sweeps
 }
 local FONT_DIR = GB.MEDIA .. "fonts\\"
 GB.FONT = {
