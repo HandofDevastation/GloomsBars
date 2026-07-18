@@ -49,7 +49,8 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
 | 1 | The 8 bars' button globals are `ActionButton1-12`, `MultiBarBottomLeft/BottomRight/Right/LeftButton1-12`, `MultiBar5/6/7Button1-12` | ✅ VERIFIED 2026-07-18 in-game — 12/12 on all 8 bars | `/gb debug` |
 | 2 | Button subregions `.icon/.HotKey/.Name/.Count/.cooldown` exist as expected | ✅ VERIFIED 2026-07-18 — all found on ActionButton1, plus `.Border` + `:GetNormalTexture()` | `/gb debug` |
 | 3 | **`MaskTexture` renders in Midnight** (rounded corners + shaped sweeps depend on it) | ✅ VERIFIED 2026-07-18 — v3 standalone probe (own texture + `CircleMaskScalable` mask, own frame): clean full circle in-game. Note: the icon's baked-in square border stays visible at the circle's flat edges → production must SetTexCoord-zoom past baked borders before masking (spec anticipated this). | `/gb mask` v3 |
-| 3b | Why did v2's button-level mask swap show NO change? `/gb maskinfo`: `.IconMask` IS attached to the visible `.icon` (only mask; default atlas `UI-HUD-ActionBar-IconFrame-Mask`). `/gb mask2` (v4, 2026-07-18): the swap **persists** (atlas still `CircleMaskScalable` at 0s/1s — no re-assert), and the button's own regions show NO overdraw (just icon+mask+`IconFrame-Background`+mouseover) — yet never looked round. Remaining suspects: (a) the visible icon is an addon overlay in a **child frame** (ArcUI), (b) mask edits don't propagate to an already-rendered texture (engine quirk; standalone probe masked *before* first render). | ⚠ OPEN — tint probe written | `/gb tint` (red-tints the real `.icon` + fresh additive circle mask + child-frame dump) |
+| 3b | Why did v2's button-level mask swap show NO change? | ✅ CLOSED 2026-07-18 — `/gb tint` produced a **red, circular icon on ActionButton1**. Root cause: editing an existing MaskTexture's atlas does NOT propagate to an already-rendered texture (even with Remove+Add); a **freshly created mask renders immediately**. ArcUI-overlay theory refuted (tint visible ⇒ the visible icon IS Blizzard's `.icon`). | `/gb tint` |
+| 3c | Chat editbox anomaly: after `/gb tint` + Enter, the typed text stays undigested in the chat input. Classic symptom of the slash handler throwing mid-execution (after the tint/mask lines, before chat cleanup) — suspect the child-frame dump loop or a print. | ⚠ OPEN | Ask for BugSack error text |
 | 4 | `IsActionInRange` / `IsUsableAction` readable in Midnight combat (custom range tint) | ⚠ UNVERIFIED | later probe; fallback = restyle Blizzard's own indicator |
 | 5 | Exact Blizzard action-button/cooldown hook points | ⚠ UNVERIFIED | read client `Blizzard_ActionBar*` source (as done for CDM in GloomsAuras) |
 | 6 | `SPELL_ACTIVATION_OVERLAY_GLOW_SHOW/HIDE` still fire as plain events in Midnight | ⚠ UNVERIFIED | probe in glow phase |
@@ -97,8 +98,20 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
   MaskTexture. THE differentiator is viable. Icons keep their baked square borders at
   the mask's flat edges → always zoom-crop (`SetTexCoord`) before masking.
 - **2026-07-18:** Blizzard's default icon rounding = `.IconMask` (MaskTexture, atlas
-  `UI-HUD-ActionBar-IconFrame-Mask`) attached to `.icon` (drawLayer BACKGROUND). This
-  is the natural swap target for production icon shaping — pending gate 3b.
+  `UI-HUD-ActionBar-IconFrame-Mask`) attached to `.icon` (drawLayer BACKGROUND).
+- **2026-07-18: Icon shaping WORKS on live buttons — but only with FRESH masks.**
+  `SetAtlas` on Blizzard's already-rendered `IconMask` never re-renders (even after
+  `RemoveMaskTexture`+`AddMaskTexture`). Production: always `CreateMaskTexture()` our
+  own and `AddMaskTexture` it; never mutate Blizzard's. (Blizzard's own mask stays
+  attached — fine, masks intersect.)
+- **2026-07-18: What survives Blizzard's update cycle:** masks PERSIST through
+  mouseover/updates; icon `SetVertexColor` gets STOMPED (range/usability tinting) —
+  color/texcoord styling needs `hooksecurefunc` re-assert hooks (as the spec planned).
+- **2026-07-18: For shaped skins, the square slot art must be suppressed:** the dark
+  square behind a masked icon = `UI-HUD-ActionBar-IconFrame-Background` slot texture
+  (+ the border `NormalTexture`). Replace with our own shaped backdrop in Phase 2/3.
+- **2026-07-18:** The visible action button icon IS Blizzard's `.icon` even with ArcUI
+  loaded — ArcUI does not overdraw the icon (it styles other elements, e.g. keybinds).
 - **2026-07-18: Jason's client runs ArcUI** (+ StoneTweaks, VibeOverlay, BugSack). ArcUI
   restyles action bars — a live confound for button-level styling QA (see gate 3b) and a
   coexistence question for the product itself.
