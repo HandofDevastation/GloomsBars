@@ -42,7 +42,9 @@ Hard walls (from [docs/SPEC.md](docs/SPEC.md)):
 ## Files
 - `GloomsBars.toc` — manifest (Interface 120007).
 - `Core.lua` — namespace, tokens, saved vars, bar/button census (`GB.BARS`, `GB:ForEachButton`), `/gb` router + probes.
-- (Later phases) `Skin.lua`, `Glows.lua`, `Cooldowns.lua`, `Config.lua`, `Media/` art.
+- `Skin.lua` — GB.Skin engine v0: zoom+mask+art-suppression across all 8 bars, re-assert hooks, persisted toggle.
+- `Media/masks/` — bundled mask PNGs (script-generated; edge-padding rule in API-NOTES §2).
+- (Later phases) `Glows.lua`, `Cooldowns.lua`, `Config.lua`.
 
 ## Testing workflow
 The repo root **is** the addon folder, symlinked into the client at

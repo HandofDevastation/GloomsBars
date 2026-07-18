@@ -6,6 +6,7 @@
 ## SavedVariables: GloomsBarsDB
 ## X-Website: https://github.com/HandofDevastation/GloomsBars
 
-# Load order: Core (namespace + saved vars + /gb router) first; the styling
-# engine and config UI land in later files as the build phases progress.
+# Load order: Core (namespace + saved vars + /gb router) first, then the
+# skin engine; config UI lands in a later phase.
 Core.lua
+Skin.lua

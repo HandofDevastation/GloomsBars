@@ -89,17 +89,21 @@ Session 1 ended with the round-icon mechanism fully proven (see QA status above)
 the mask saga's learnings are all in [API-NOTES.md](API-NOTES.md) §2 — read them
 before touching mask/skin code.
 
-**Phase 2 — skin engine v0:**
-1. Research hook points (gate 5): read the Midnight client's `Blizzard_ActionBar*` /
-   `ActionButtonTemplate` source (Gethe wow-ui-source on GitHub, branch matching
-   12.0.7 — or extracted client source). We need: which functions re-show
-   `NormalTexture` on press, icon/vertex-color update paths, `showButtonArt` role,
-   Edit-Mode relayout entry points.
-2. Build `Skin.lua`: apply/re-assert engine over all 8 bars (per-button styling
-   records, `hooksecurefunc` re-assertions, event-driven refresh). Start with:
-   zoom+mask+slot-art suppression (the proven recipe) + hotkey/name/count fonts.
-3. QA loop with Jason as usual (one step at a time).
-4. Sometime: test WoWUp install-from-URL **on another machine** (NOT Jason's dev
+**Phase 2 — skin engine v0 (STARTED 2026-07-18, same session):**
+1. ✅ Hook-point research (gate 5 CLOSED for action bars): wow-ui-source `live` cloned
+   at exactly **12.0.7 build 68453** → findings in [API-NOTES.md](API-NOTES.md) §3
+   (UpdateButtonArt is the only slot-art re-shower; press re-show is C-side → use
+   SetAlpha(0); zoom never stomped; glow phase hooks `ActionButtonSpellAlertManager`).
+2. ✅ Built `Skin.lua` (GB.Skin): applies zoom+circle-mask+slot-art suppression to all
+   8 bars; per-button `hooksecurefunc(btn, "UpdateButtonArt")` re-assert; SetAlpha(0)
+   for Normal/Pushed; persisted via `GB.db.skinEnabled` (re-applies at PLAYER_LOGIN);
+   `/gb skin` toggles. `/gb round` refuses while skin is on (mask-cap safety).
+3. ❌ QA pending: `/gb skin` — all 96 buttons round? Border stays gone on press?
+   Survives /reload? Then: Edit Mode open/close, bar-art checkbox, spec change.
+4. Next build steps: text styling (fonts stick per §3; colors need hooks),
+   Highlight/Checked shaped states (known square in v0), shaped cooldown swipe,
+   then the glow phase (manager hook + shaped glow art).
+5. Sometime: test WoWUp install-from-URL **on another machine** (NOT Jason's dev
    machine — WoWUp would clobber the dev symlink).
 2. Then Phase 2 (skin engine v0): read the client's `Blizzard_ActionBar*` /
    `ActionButtonTemplate` source for hook points (gate 5) — we now know the exact

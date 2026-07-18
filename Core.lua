@@ -249,6 +249,10 @@ end
 -- (verified: AddMaskTexture throws), so ONE stored mask is reused forever.
 local roundProbe
 local function ToggleRoundProbe()
+  if GB.Skin and GB.Skin.enabled then
+    msg("skin is ON — turn it off first (/gb skin) before using the single-button probe.")
+    return
+  end
   local b = _G["ActionButton1"]
   local icon = b and (b.icon or b.Icon)
   if not icon then msg("ActionButton1 .icon not found.") return end
@@ -327,11 +331,14 @@ SlashCmdList.GLOOMSBARS = function(input)
     MaskInfo()
   elseif cmd == "round" then
     ToggleRoundProbe()
+  elseif cmd == "skin" then
+    GB.Skin:Toggle()
   else
     msg("v" .. GB:Version() .. " — commands:")
+    print("  /gb skin — toggle the round skin on all 8 action bars (persists)")
     print("  /gb debug — census of action bar buttons + regions")
     print("  /gb mask — toggle the standalone MaskTexture render probe (screen center)")
     print("  /gb maskinfo — inspect ActionButton1's icon/mask wiring")
-    print("  /gb round — toggle the mini-skin preview on ActionButton1 (circle mask + slot art hidden)")
+    print("  /gb round — single-button probe (only while skin is off)")
   end
 end

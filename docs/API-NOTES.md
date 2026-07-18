@@ -49,6 +49,17 @@ Bar 1 buttons parented via `MainActionBarButtonContainer#` (`ActionBar.lua:14`),
 - Icons have baked-in square border art → **zoom-crop (`SetTexCoord ~0.08–0.92`) before masking** so a shaped mask's edge lands on artwork, not border pixels.
 - Cooldown swipe + Blizzard's countdown number render normally on a styled (masked/zoomed) icon; swipe *shape* on round icons not yet assessed (too much border clutter in the test — revisit after the skin suppresses art cleanly).
 
-## §3 Misc verified behaviors
+## §3 Hook points — SOURCE-VERIFIED (wow-ui-source `live` branch @ **12.0.7 build 68453**, cloned 2026-07-18; in-game verification pending where noted)
+
+From `Interface/AddOns/Blizzard_ActionBar/` (`Shared/ActionButton.lua` unless noted):
+- **`UpdateButtonArt`** (Mainline `ActionButtonOverrides.lua` overrides the empty Shared base) — the ONLY Lua path that re-shows `SlotArt`/`SlotBackground` and re-sets Normal/Pushed atlases. Branches on `self.bar.hideBarArt` (Edit Mode per-bar "hide bar art"): art shown → `SlotArt` + `UI-HUD-ActionBar-IconFrame` 46×45; art hidden → `SlotBackground` + `UI-HUD-ActionBar-IconFrame-AddRow` 51×51. Called from `BaseActionButtonMixin_OnLoad` (:1505). `SmallActionButtonMixin:UpdateButtonArt` variant sets 35×35. **Skin re-assert = per-button `hooksecurefunc(btn, "UpdateButtonArt", ...)`.**
+- **Press border re-show is NOT Lua** — no Lua re-shows `NormalTexture` on press; it's the C-side Button state machine (toggles Show/Hide, never alpha). **Suppress border art with `SetAlpha(0)`, never `Hide()`.** (In-game verified: alpha-0 pending; Hide() failing = verified.)
+- **No `SetTexCoord` on `.icon` anywhere** in Blizzard_ActionBar → zoom crops persist. (Consistent with in-game observation.)
+- **`UpdateUsable`** (:679) owns icon vertex color: `1,1,1` usable / `0.5,0.5,1` out-of-mana / `0.4,0.4,0.4` unusable; `:Update` also `SetDesaturated`. Pure skin leaves this alone — it's Blizzard's usability feedback.
+- **HotKey**: font face/size never re-set by Blizzard (template FontObject only) → `SetFont` sticks. Color IS stomped by the range path (:1278–89, `RED_FONT_COLOR` ↔ `ACTIONBAR_HOTKEY_FONT_COLOR`) — custom hotkey *colors* need a hook; custom *fonts* don't.
+- **Proc glows route through a central manager**: `ActionBarActionButtonMixin:UpdateSpellAlert` (:877) → `ActionButtonSpellAlertManager:ShowAlert(self)` / `:HideAlert(self)`, driven by `C_SpellActivationOverlay.IsSpellOverlayed(id)`. **The glow phase hooks the manager — one hook, not 96.**
+- Mixin methods are per-frame copies → always `hooksecurefunc` the BUTTON instances, never the mixin tables (GloomsAuras learning, holds here).
+
+## §4 Misc verified behaviors
 - **Error inside a `SlashCmdList` handler ⇒ typed text stays undigested in the chat input** (the throw aborts `ChatEdit ParseText/SendText` cleanup). Symptom = handler error; always check BugSack.
 - Bar button globals + subregions: see HANDOFF gates 1–2 (all 8 bars = Dragonflight-era names, 12 buttons each).
