@@ -46,8 +46,8 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
 ## Verification gates (⚠ unproven — probe in-game before building on them)
 | # | Claim | Status | Probe |
 |---|-------|--------|-------|
-| 1 | The 8 bars' button globals are `ActionButton1-12`, `MultiBarBottomLeft/BottomRight/Right/LeftButton1-12`, `MultiBar5/6/7Button1-12` | ⚠ UNVERIFIED | `/gb debug` (built, not yet run) |
-| 2 | Button subregions `.icon/.HotKey/.Name/.Count/.cooldown` exist as expected | ⚠ UNVERIFIED | `/gb debug` |
+| 1 | The 8 bars' button globals are `ActionButton1-12`, `MultiBarBottomLeft/BottomRight/Right/LeftButton1-12`, `MultiBar5/6/7Button1-12` | ✅ VERIFIED 2026-07-18 in-game — 12/12 on all 8 bars | `/gb debug` |
+| 2 | Button subregions `.icon/.HotKey/.Name/.Count/.cooldown` exist as expected | ✅ VERIFIED 2026-07-18 — all found on ActionButton1, plus `.Border` + `:GetNormalTexture()` | `/gb debug` |
 | 3 | **`MaskTexture` renders in Midnight** (rounded corners + shaped sweeps depend on it) | ⚠ UNVERIFIED | `/gb mask` (built, not yet run) |
 | 4 | `IsActionInRange` / `IsUsableAction` readable in Midnight combat (custom range tint) | ⚠ UNVERIFIED | later probe; fallback = restyle Blizzard's own indicator |
 | 5 | Exact Blizzard action-button/cooldown hook points | ⚠ UNVERIFIED | read client `Blizzard_ActionBar*` source (as done for CDM in GloomsAuras) |
@@ -72,21 +72,25 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
 - **Session 1 (2026-07-18):** repo scaffolded (TOC, Core.lua w/ tokens + saved vars +
   `/gb` router + 2 probes; .pkgmeta; release workflow; README; CLAUDE.md; this file;
   fonts copied from GloomsAuras; wow-addon-dev skill vendored into docs/).
-  **Nothing has been loaded in-game yet.** Git repo initialized; GitHub repo not yet created.
+  - ✅ QA'd in-game: addon loads, `/gb` command list prints, BugSack clean.
+  - ✅ QA'd in-game: `/gb debug` census — gates 1–2 closed (see table).
+  - GitHub repo live: https://github.com/HandofDevastation/GloomsBars (public,
+    HandofDevastation org). `gh` CLI installed + authorized on Jason's machine
+    (account `polaris1976`, scopes repo/workflow/read:org).
 
 ## NEXT / START HERE (session 2 — or later today)
-1. Confirm symlink exists: `…/Interface/AddOns/GloomsBars` → repo root.
-2. QA step 1 (ONE step): in-game `/reload`, then `/gb` — expect the purple-prefixed
-   command list. If nothing prints, ask for BugSack text.
-3. QA step 2: `/gb debug` — record the census results in the table above (gates 1–2).
-4. QA step 3: `/gb mask` — do bar-1 icons go round? Record gate 3. `/gb mask` again to undo.
-5. Then: create the GitHub repo (HandofDevastation/GloomsBars), push, tag `v0.0.1` to
-   prove the release pipeline, test WoWUp install-from-URL.
-6. Then start Phase 2 (skin engine v0): read client `Blizzard_ActionBar*` source for
+1. QA step: `/gb mask` — do bar-1 icons go round? Record gate 3 (THE differentiator
+   gate). `/gb mask` again to undo.
+2. Confirm the `v0.0.1` release pipeline ran green (Actions tab / `gh run list`),
+   then have Jason test WoWUp install-from-URL with the repo URL.
+3. Then start Phase 2 (skin engine v0): read client `Blizzard_ActionBar*` source for
    hook points first (gate 5).
 
 ## Hard-won LEARNINGS (verified — do NOT rediscover)
-- *(none yet — populate as gates close)*
+- **2026-07-18:** All 8 Edit-Mode bars use the Dragonflight-era global names in
+  Midnight 12.0.7 (`ActionButton#`, `MultiBarBottomLeft/BottomRight/Right/LeftButton#`,
+  `MultiBar5/6/7Button#`, 12 each). Subregions on `ActionButton1`: `.icon`, `.HotKey`,
+  `.Name`, `.Count`, `.cooldown`, `.Border`, `:GetNormalTexture()` — all present.
 - From siblings, already trusted: the secret-values model (GloomsAuras
   docs/API-NOTES.md), the release pipeline (Build Barn ships this exact workflow),
   bundled-font pre-warm fix (GloomsAuras Core.lua).
