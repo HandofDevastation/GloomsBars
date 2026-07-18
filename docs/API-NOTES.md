@@ -1,0 +1,44 @@
+# Gloom's Bars — verified API notes (Midnight 12.0.7)
+
+> Source of truth for client facts **verified in-game** (probes, BugSack locals).
+> Same rule as GloomsAuras' API-NOTES: only verified facts here; hypotheses are
+> marked ⚠. Do not re-derive anything in this file.
+
+## §1 ActionButton anatomy (VERIFIED 2026-07-18 — BugSack locals dump of `ActionButton1`)
+
+Template chain: `ActionBar.lua:31` / `ActionButtonTemplate.xml` / `ActionButtonComponentTemplate.xml`.
+Bar 1 buttons parented via `MainActionBarButtonContainer#` (`ActionBar.lua:14`), `.bar = MainActionBar`.
+
+**Icon + shape:**
+- `.icon` (`ActionButton1Icon`, xml:23) — the spell icon texture, drawLayer BACKGROUND. THE styling target.
+- `.IconMask` (MaskTexture, xml:24) — Blizzard's default rounding, atlas `UI-HUD-ActionBar-IconFrame-Mask`, attached to `.icon`.
+
+**Slot art (the square backdrop — suppress for shaped skins):**
+- `.SlotBackground` (xml:32) — dark square behind the icon (seen as `UI-HUD-ActionBar-IconFrame-Background` in region dumps).
+- `.SlotArt` (xml:33)
+- `.NormalTexture` (`ActionButton1NormalTexture`, xml:146) — border frame art.
+- `.showButtonArt = true` — ⚠ HYPOTHESIS: may gate slot/border art via Blizzard's update path; probe before relying on it.
+
+**Button-state textures:** `.PushedTexture` (xml:152), `.HighlightTexture` (xml:158), `.CheckedTexture` (xml:164), `.QuickKeybindHighlightTexture`, `.Flash` (xml:36), `.Border` (xml:49), `.NewActionTexture` (xml:56), `.LevelLinkLockIcon` (xml:66).
+
+**Text:** `.HotKey` (`ActionButton1HotKey`, xml:85), `.Name` (xml:43), `.Count` (xml:92), inside/near `.TextOverlayContainer` (xml:82). Hotkey offsets exposed: `hotkeyTextKeyboardX=-4`, `hotkeyTextKeyboardY=-5` (gamepad variants = 0).
+
+**Cooldown widgets — there are THREE:** `.cooldown` (xml:111), `.chargeCooldown` (xml:130), `.lossOfControlCooldown` (xml:120), plus `.CooldownFlash` frame and `enableLOCCooldown=true`.
+
+**Proc/cast machinery:** `.SpellHighlightTexture` (xml:61) + `.SpellHighlightAnim` (AnimationGroup, xml:75) — the proc glow highlight; `.SpellCastAnimFrame`, `.InterruptDisplay`, `.TargetReticleAnimFrame`, `.AutoCastOverlay` (component template ~xml:330).
+
+**Identity/binding:** `.action`, `.index`, `.bindingAction="ACTIONBUTTON1"`, `.commandName`, flyout members (`.Arrow`, `arrowNormalTexture=UI-HUD-ActionBar-Flyout*`).
+
+**Foreign members:** `EQOL_ActionBarName` — a third-party addon (EQOL/EnhanceQoL family) also decorates these buttons on Jason's client. ArcUI also loaded. QA confound awareness.
+
+## §2 Mask facts (VERIFIED 2026-07-18, probe series — see HANDOFF gate 3/3b history)
+- **MaskTexture renders in Midnight.** `CircleMaskScalable` atlas exists; `SetAtlas` on a MaskTexture works.
+- **Hard cap: 3 masks per texture.** `AddMaskTexture` throws `"Texture already has the maximum number of mask textures (3)"`. Blizzard uses 1 (`IconMask`) → we have budget for 2, production uses 1. Probes must be idempotent toggles.
+- **Editing an already-rendered mask does NOT re-render** — `SetAtlas` on Blizzard's live `IconMask` changed `GetAtlas()` but never changed pixels, even after `RemoveMaskTexture`+`AddMaskTexture`. A **freshly created** `CreateMaskTexture` + `AddMaskTexture` renders immediately. Production: always create our own masks; never mutate Blizzard's.
+- **Masks persist** through Blizzard's update cycle (mouseover etc.).
+- **`SetVertexColor` on `.icon` is stomped** on mouseover (Blizzard's range/usability tint path) — color/texcoord styling needs `hooksecurefunc` re-assertion.
+- Icons keep their baked-in square border art at a mask's flat edges → **always zoom-crop (`SetTexCoord`) before masking**.
+
+## §3 Misc verified behaviors
+- **Error inside a `SlashCmdList` handler ⇒ typed text stays undigested in the chat input** (the throw aborts `ChatEdit ParseText/SendText` cleanup). Symptom = handler error; always check BugSack.
+- Bar button globals + subregions: see HANDOFF gates 1–2 (all 8 bars = Dragonflight-era names, 12 buttons each).

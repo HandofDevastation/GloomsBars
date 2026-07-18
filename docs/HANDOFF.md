@@ -50,7 +50,7 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
 | 2 | Button subregions `.icon/.HotKey/.Name/.Count/.cooldown` exist as expected | ✅ VERIFIED 2026-07-18 — all found on ActionButton1, plus `.Border` + `:GetNormalTexture()` | `/gb debug` |
 | 3 | **`MaskTexture` renders in Midnight** (rounded corners + shaped sweeps depend on it) | ✅ VERIFIED 2026-07-18 — v3 standalone probe (own texture + `CircleMaskScalable` mask, own frame): clean full circle in-game. Note: the icon's baked-in square border stays visible at the circle's flat edges → production must SetTexCoord-zoom past baked borders before masking (spec anticipated this). | `/gb mask` v3 |
 | 3b | Why did v2's button-level mask swap show NO change? | ✅ CLOSED 2026-07-18 — `/gb tint` produced a **red, circular icon on ActionButton1**. Root cause: editing an existing MaskTexture's atlas does NOT propagate to an already-rendered texture (even with Remove+Add); a **freshly created mask renders immediately**. ArcUI-overlay theory refuted (tint visible ⇒ the visible icon IS Blizzard's `.icon`). | `/gb tint` |
-| 3c | Chat editbox anomaly: after `/gb tint` + Enter, the typed text stays undigested in the chat input. Classic symptom of the slash handler throwing mid-execution (after the tint/mask lines, before chat cleanup) — suspect the child-frame dump loop or a print. | ⚠ OPEN | Ask for BugSack error text |
+| 3c | Chat editbox anomaly after `/gb tint` | ✅ CLOSED 2026-07-18 — BugSack: `AddMaskTexture(): Texture already has the maximum number of mask textures (3)`. Tint probe created a new mask every run (no toggle) and hit the **3-mask-per-texture engine cap**; the throw aborted ChatEdit cleanup → undigested input text. Fix: probes are now idempotent toggles. Bonus: the error's Locals dump gave the full button anatomy → [API-NOTES.md](API-NOTES.md) §1. | BugSack |
 | 4 | `IsActionInRange` / `IsUsableAction` readable in Midnight combat (custom range tint) | ⚠ UNVERIFIED | later probe; fallback = restyle Blizzard's own indicator |
 | 5 | Exact Blizzard action-button/cooldown hook points | ⚠ UNVERIFIED | read client `Blizzard_ActionBar*` source (as done for CDM in GloomsAuras) |
 | 6 | `SPELL_ACTIVATION_OVERLAY_GLOW_SHOW/HIDE` still fire as plain events in Midnight | ⚠ UNVERIFIED | probe in glow phase |
@@ -80,13 +80,16 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
     HandofDevastation org). `gh` CLI installed + authorized on Jason's machine
     (account `polaris1976`, scopes repo/workflow/read:org).
 
-## NEXT / START HERE (session 2 — or later today)
-1. QA step: `/gb mask` — do bar-1 icons go round? Record gate 3 (THE differentiator
-   gate). `/gb mask` again to undo.
-2. Confirm the `v0.0.1` release pipeline ran green (Actions tab / `gh run list`),
-   then have Jason test WoWUp install-from-URL with the repo URL.
-3. Then start Phase 2 (skin engine v0): read client `Blizzard_ActionBar*` source for
-   hook points first (gate 5).
+## NEXT / START HERE
+1. QA: `/gb round` — mini-skin preview on ActionButton1 (fresh circle mask + hide
+   `SlotBackground`/`SlotArt`/`NormalTexture`). Q1: clean round icon? Q2: does square
+   art come back on hover/press (= which pieces need re-assert hooks)?
+2. Then Phase 2 (skin engine v0): read the client's `Blizzard_ActionBar*` /
+   `ActionButtonTemplate` source for hook points (gate 5) — we now know the exact
+   member names to look for (API-NOTES §1). Probe the `showButtonArt` hypothesis.
+3. Sometime: test WoWUp install-from-URL **on another machine** (NOT Jason's dev
+   machine — WoWUp would clobber the dev symlink). Release `v0.0.1` pipeline already
+   verified green (zip contents + version substitution checked 2026-07-18).
 
 ## Hard-won LEARNINGS (verified — do NOT rediscover)
 - **2026-07-18:** All 8 Edit-Mode bars use the Dragonflight-era global names in
@@ -112,9 +115,15 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
   (+ the border `NormalTexture`). Replace with our own shaped backdrop in Phase 2/3.
 - **2026-07-18:** The visible action button icon IS Blizzard's `.icon` even with ArcUI
   loaded — ArcUI does not overdraw the icon (it styles other elements, e.g. keybinds).
-- **2026-07-18: Jason's client runs ArcUI** (+ StoneTweaks, VibeOverlay, BugSack). ArcUI
-  restyles action bars — a live confound for button-level styling QA (see gate 3b) and a
-  coexistence question for the product itself.
+- **2026-07-18: Jason's client runs ArcUI** (+ StoneTweaks, VibeOverlay, BugSack, and
+  something in the EQOL family per a foreign button member). ArcUI restyles action bars —
+  a QA confound and a coexistence question for the product itself (icon overdraw ruled
+  out; keybind text styling etc. still ArcUI's).
+- **2026-07-18: 3-mask-per-texture engine cap** (`AddMaskTexture` throws at 3) — probes
+  and production styling must be idempotent; create ONE mask per icon and reuse.
+- **2026-07-18: Full ActionButton anatomy captured** from BugSack locals →
+  [API-NOTES.md](API-NOTES.md) §1 (slot art members, three cooldown widgets, proc
+  highlight machinery, text members + offsets, `showButtonArt` hypothesis).
 - From siblings, already trusted: the secret-values model (GloomsAuras
   docs/API-NOTES.md), the release pipeline (Build Barn ships this exact workflow),
   bundled-font pre-warm fix (GloomsAuras Core.lua).

@@ -2,8 +2,9 @@
 
 > **▶ NEW SESSION: read [docs/HANDOFF.md](docs/HANDOFF.md) FIRST.** It has current build
 > state, settled decisions (do not relitigate), verification gates, how Jason works, and
-> the next steps. Then this file (conventions) + [docs/SPEC.md](docs/SPEC.md) (the design
-> brief) + `docs/wow-addon-dev/` (vendored addon-dev skill).
+> the next steps. Then this file (conventions), [docs/API-NOTES.md](docs/API-NOTES.md)
+> (verified client facts — button anatomy, mask rules), [docs/SPEC.md](docs/SPEC.md)
+> (the design brief), and `docs/wow-addon-dev/` (vendored addon-dev skill).
 
 Bespoke WoW addon: a **pure appearance layer** for Blizzard's built-in action bars —
 rounded/3:2 icons, restyled text, and **shape-matched proc glows + cooldown sweeps** (the

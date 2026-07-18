@@ -237,82 +237,41 @@ local function MaskInfo()
     :format(loaded and tostring(loaded("ArcUI")) or "?", loaded and tostring(loaded("Masque")) or "?"))
 end
 
--- /gb mask2 — button-level probe v4, after /gb maskinfo showed IconMask IS
--- attached to the visible .icon (so v2's no-change result is unexplained).
--- Two suspects: (a) something re-asserts the atlas right after we set it
--- (ArcUI re-skin or Blizzard update cycle), (b) another texture is drawn over
--- the masked icon. This swaps the atlas on ActionButton1 ONLY, re-checks the
--- atlas at 0/1/3 seconds (a revert = suspect a), and dumps the button's shown
--- texture stack (an overlay icon = suspect b). /reload to revert.
-local function ButtonMaskProbe()
-  local b = _G["ActionButton1"]
-  local icon = b and (b.icon or b.Icon)
-  local m = b and b.IconMask
-  if not (icon and m) then msg("ActionButton1 .icon/.IconMask not found.") return end
-  msg("button mask probe (ActionButton1 only):")
-  print("  atlas before: " .. tostring(m:GetAtlas()))
-  m:SetAtlas(CIRCLE_ATLAS)
-  -- Force the masked texture to re-evaluate, in case mask edits don't dirty it.
-  icon:RemoveMaskTexture(m)
-  icon:AddMaskTexture(m)
-  print("  atlas set to: " .. tostring(m:GetAtlas()))
-  print("  shown textures on the button (layer / atlas-or-fileID):")
-  for _, region in ipairs({ b:GetRegions() }) do
-    if region.IsShown and region:IsShown() and region.GetDrawLayer then
-      local kind = region:GetObjectType()
-      if kind == "Texture" or kind == "MaskTexture" then
-        local what = (region.GetAtlas and region:GetAtlas())
-          or (region.GetTexture and tostring(region:GetTexture())) or "?"
-        local tag = (region == icon) and " <== .icon" or (region == m and " <== .IconMask" or "")
-        print(("    %s %s: %s%s"):format(kind, tostring(region:GetDrawLayer()), tostring(what), tag))
-      end
-    end
-  end
-  for _, delay in ipairs({ 0, 1, 3 }) do
-    C_Timer.After(delay, function()
-      print(("  atlas after %ds: %s"):format(delay, tostring(m:GetAtlas())))
-      if delay == 3 then
-        msg("Done. Did ActionButton1 (first button, bar 1) LOOK circular at any point? (/reload to revert)")
-      end
-    end)
-  end
-end
-
--- /gb tint — discriminator after v4 (2026-07-18): the atlas swap persists, the
--- mask is attached to the shown .icon, no overdraw among the button's own
--- regions — yet no visual change. Either the VISIBLE icon isn't Blizzard's
--- .icon (an addon overlay living in a child frame — ArcUI), or mask changes
--- don't propagate to an already-rendered texture. This (a) tints .icon RED —
--- if the visible icon doesn't go red, we've never been looking at it; (b) adds
--- a FRESH additive circle mask (the exact config the standalone probe proved
--- renders); (c) dumps the button's child frames. /reload reverts.
-local function TintProbe()
+-- /gb round — the first real mini-skin preview on ActionButton1, built from
+-- what the probe series proved (see docs/API-NOTES.md): a FRESH circle mask
+-- (mutating Blizzard's IconMask never re-renders) + suppression of the square
+-- slot art behind the icon (SlotBackground/SlotArt/NormalTexture, identified
+-- from the BugSack locals dump). Proper toggle — textures cap at 3 masks
+-- (verified: AddMaskTexture throws), so ONE stored mask is reused forever.
+local roundProbe
+local function ToggleRoundProbe()
   local b = _G["ActionButton1"]
   local icon = b and (b.icon or b.Icon)
   if not icon then msg("ActionButton1 .icon not found.") return end
-  icon:SetVertexColor(1, 0.15, 0.15)
-  local mask = b:CreateMaskTexture()
-  mask:SetAtlas(CIRCLE_ATLAS)
-  mask:SetAllPoints(icon)
-  icon:AddMaskTexture(mask)
-  msg("tint probe ON — Blizzard's real icon on ActionButton1 is now RED + freshly circle-masked.")
-  print("  child frames of the button (an overlay icon would live here):")
-  local kids = { b:GetChildren() }
-  if #kids == 0 then print("    (none)") end
-  for _, kid in ipairs(kids) do
-    local shownTex = 0
-    for _, r in ipairs({ kid:GetRegions() }) do
-      if r.IsShown and r:IsShown() and r:GetObjectType() == "Texture" then shownTex = shownTex + 1 end
-    end
-    print(("    %s (%s, level %d, shown=%s, %d shown textures)")
-      :format(tostring(kid:GetName() or "<unnamed>"), kid:GetObjectType(),
-        kid:GetFrameLevel(), tostring(kid:IsShown()), shownTex))
+  if roundProbe and roundProbe.on then
+    icon:RemoveMaskTexture(roundProbe.mask)
+    for _, tex in ipairs(roundProbe.hidden) do tex:Show() end
+    wipe(roundProbe.hidden)
+    roundProbe.on = false
+    msg("round probe OFF — ActionButton1 restored.")
+    return
   end
-  C_Timer.After(1, function()
-    local r, g = icon:GetVertexColor()
-    print(("  vertex color after 1s: r=%.2f g=%.2f (reverted: %s)"):format(r, g, tostring(r < 0.9 or g > 0.5)))
-    msg("Q: Is the FIRST icon on bar 1 now (a) RED and (b) CIRCULAR? (/reload to revert)")
-  end)
+  if not roundProbe then
+    roundProbe = { hidden = {} }
+    roundProbe.mask = b:CreateMaskTexture()
+    roundProbe.mask:SetAtlas(CIRCLE_ATLAS)
+    roundProbe.mask:SetAllPoints(icon)
+  end
+  icon:AddMaskTexture(roundProbe.mask)
+  for _, key in ipairs({ "SlotBackground", "SlotArt", "NormalTexture" }) do
+    local tex = b[key]
+    if tex and tex.IsShown and tex:IsShown() then
+      tex:Hide()
+      roundProbe.hidden[#roundProbe.hidden + 1] = tex
+    end
+  end
+  roundProbe.on = true
+  msg("round probe ON — ActionButton1: circle mask + slot art hidden. Q1: clean round icon on a bare background? Q2: does any square art come back when you hover/press it?")
 end
 
 -- ---------------------------------------------------------------------------
@@ -328,16 +287,13 @@ SlashCmdList.GLOOMSBARS = function(input)
     ToggleMaskProbe()
   elseif cmd == "maskinfo" then
     MaskInfo()
-  elseif cmd == "mask2" then
-    ButtonMaskProbe()
-  elseif cmd == "tint" then
-    TintProbe()
+  elseif cmd == "round" then
+    ToggleRoundProbe()
   else
     msg("v" .. GB:Version() .. " — commands:")
     print("  /gb debug — census of action bar buttons + regions")
     print("  /gb mask — toggle the standalone MaskTexture render probe (screen center)")
     print("  /gb maskinfo — inspect ActionButton1's icon/mask wiring")
-    print("  /gb mask2 — instrumented atlas swap on ActionButton1 (re-assert + overdraw check)")
-    print("  /gb tint — red-tint the real icon + fresh circle mask + child-frame dump")
+    print("  /gb round — toggle the mini-skin preview on ActionButton1 (circle mask + slot art hidden)")
   end
 end
