@@ -104,13 +104,18 @@ before touching mask/skin code.
    cast/channel overlay (`SpellCastAnimFrame`), spell-highlight/assisted-rotation
    blue glow (`SpellHighlightTexture`/`AssistedCombatRotationFrame`), plus known
    Highlight/Checked hover states.
-5. ✅ Built (QA pending): **round cooldown sweep** — `SetSwipeTexture(circle-swipe.png)`
-   (0.8-alpha circular fill) on `cooldown` + `lossOfControlCooldown`; edge + bling off
-   (they draw to square bounds); `chargeCooldown` untouched (edge-only by default).
-   QA: does the sweep follow the circle? Count number still fine?
-6. Next build steps: text styling (fonts stick per §3; colors need hooks),
-   shaped cast/channel + highlight overlays, Highlight/Checked shaped states,
-   then the glow phase (manager hook + shaped glow art).
+5. ✅ QA'd (2026-07-18): **round cooldown sweep** — circular 0.8-alpha swipe on
+   `cooldown` + LoC, edge/bling off, `chargeCooldown` untouched. Sweep aligned to the
+   icon circle via icon-anchored oversizing + **overshoot 0.75px (QA-confirmed
+   default; live-tunable `/gb sweep <px>`, persisted)** — overshoot cures the bright
+   AA rim; needed because the sweep isn't clipped by the icon mask.
+6. ✅ Built (QA pending): **round plain-texture overlays** — the shared circle mask
+   is now also attached to `HighlightTexture`/`CheckedTexture`/`Flash`/
+   `NewActionTexture`/`SpellHighlightTexture` (one mask, many textures — cap is
+   per-texture). QA: hover highlight round? Blue suggested-ability glow round?
+7. Next build steps: text styling (fonts stick per §3; colors need hooks), shaped
+   cast/channel overlay frames (`SpellCastAnimFrame` etc.), then the glow phase
+   (manager hook + shaped glow art).
 5. Sometime: test WoWUp install-from-URL **on another machine** (NOT Jason's dev
    machine — WoWUp would clobber the dev symlink).
 2. Then Phase 2 (skin engine v0): read the client's `Blizzard_ActionBar*` /
