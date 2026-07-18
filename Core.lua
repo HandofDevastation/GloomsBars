@@ -271,7 +271,13 @@ local function ToggleRoundProbe()
     -- Bundled PNG, not CircleMaskScalable: the scalable atlas 9-slices when
     -- stretched → flattened cardinal edges (observed twice in QA).
     roundProbe.mask:SetTexture(GB.MASK.circle, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    roundProbe.mask:SetAllPoints(icon)
+    -- The circle art is padded to radius 240/256 of the canvas (transparent
+    -- margin defeats edge-clamp filtering bleed — the blurred-flat-tangents
+    -- artifact). Oversize the mask region by 256/240 so the circle itself
+    -- still spans the icon exactly.
+    local grow = icon:GetWidth() * (256 / 240 - 1) / 2
+    roundProbe.mask:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
+    roundProbe.mask:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
   end
   -- Masks INTERSECT: Blizzard's .IconMask (rounded square, soft edges) was
   -- still clipping our circle — the "flattened AND blurred cardinal edges,
