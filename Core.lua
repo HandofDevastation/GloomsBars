@@ -254,6 +254,10 @@ local function ToggleRoundProbe()
   if not icon then msg("ActionButton1 .icon not found.") return end
   if roundProbe and roundProbe.on then
     icon:RemoveMaskTexture(roundProbe.mask)
+    if roundProbe.removedIconMask and b.IconMask then
+      icon:AddMaskTexture(b.IconMask)
+      roundProbe.removedIconMask = nil
+    end
     if roundProbe.texCoord then icon:SetTexCoord(unpack(roundProbe.texCoord)) end
     for _, tex in ipairs(roundProbe.hidden) do tex:Show() end
     wipe(roundProbe.hidden)
@@ -269,11 +273,28 @@ local function ToggleRoundProbe()
     roundProbe.mask:SetTexture(GB.MASK.circle, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
     roundProbe.mask:SetAllPoints(icon)
   end
+  -- Masks INTERSECT: Blizzard's .IconMask (rounded square, soft edges) was
+  -- still clipping our circle — the "flattened AND blurred cardinal edges,
+  -- sharp round corners" QA observation. Remove it for the probe's duration
+  -- (restored on toggle-off) so only our circle applies.
+  if b.IconMask then
+    icon:RemoveMaskTexture(b.IconMask)
+    roundProbe.removedIconMask = true
+  end
   icon:AddMaskTexture(roundProbe.mask)
   -- Zoom past the icon's baked-in square border so the circle's tangent points
-  -- show art instead of border pixels (the "flattened edges" QA observation).
+  -- show art instead of border pixels.
   roundProbe.texCoord = { icon:GetTexCoord() }
   icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+  -- Numbers for the size-mismatch theory (icon art bleeds under the border;
+  -- IconMask crops it to the visible slot → smaller region than .icon).
+  local function fmtSize(region)
+    if not region then return "?" end
+    local w, h = region:GetSize()
+    return ("%.1fx%.1f"):format(w, h)
+  end
+  print(("  sizes — .icon: %s, IconMask: %s, SlotBackground: %s")
+    :format(fmtSize(icon), fmtSize(b.IconMask), fmtSize(b.SlotBackground)))
   for _, key in ipairs({ "SlotBackground", "SlotArt", "NormalTexture" }) do
     local tex = b[key]
     if tex and tex.IsShown and tex:IsShown() then
