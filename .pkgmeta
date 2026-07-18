@@ -1,0 +1,20 @@
+# BigWigs packager config. Publishes to GitHub Releases ONLY (no CurseForge/
+# Wago) — same model as GloomsBuildBarn/GloomsAuras. WoWUp installs + auto-
+# updates from those releases via the repo URL.
+
+package-as: GloomsBars
+
+enable-nolib-creation: no
+
+# No embedded libraries yet. When the config UI phase lands, add LibStub +
+# CallbackHandler + LibSharedMedia (and LibDataBroker/LibDBIcon if we ship a
+# minimap button) here, fetched into Libs/ at release build time — see the
+# GloomsAuras .pkgmeta for the exact external URLs.
+
+# Keep repo-management files out of the packaged addon zip.
+ignore:
+  - README.md
+  - .github
+  - .gitignore
+  - .pkgmeta
+  - docs
