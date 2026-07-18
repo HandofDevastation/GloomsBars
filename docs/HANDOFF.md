@@ -115,10 +115,15 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
   (+ the border `NormalTexture`). Replace with our own shaped backdrop in Phase 2/3.
 - **2026-07-18:** The visible action button icon IS Blizzard's `.icon` even with ArcUI
   loaded — ArcUI does not overdraw the icon (it styles other elements, e.g. keybinds).
-- **2026-07-18: Jason's client runs ArcUI** (+ StoneTweaks, VibeOverlay, BugSack, and
-  something in the EQOL family per a foreign button member). ArcUI restyles action bars —
-  a QA confound and a coexistence question for the product itself (icon overdraw ruled
-  out; keybind text styling etc. still ArcUI's).
+- **2026-07-18: Jason's client runs ArcUI** (+ StoneTweaks, VibeOverlay, BugSack). ArcUI
+  restyles action bars — a QA confound and a coexistence question for the product itself
+  (icon overdraw ruled out; keybind text styling etc. still ArcUI's).
+- **2026-07-18: The `EQOL_ActionBarName` foreign member = EnhanceQoL** (UI-tweak suite).
+  Its **"Hide action button borders" toggle was ON during all session-1 probes** — so the
+  "default" baseline we observed had `NormalTexture` border art already suppressed by
+  EQOL. Jason disabled it (2026-07-18) for a clean baseline. Long-term, Gloom's Bars owns
+  border suppression; users should keep EQOL's Button-appearance tweaks off. Coexistence
+  test with EQOL re-enabled belongs in late-phase QA.
 - **2026-07-18: 3-mask-per-texture engine cap** (`AddMaskTexture` throws at 3) — probes
   and production styling must be idempotent; create ONE mask per icon and reuse.
 - **2026-07-18: Full ActionButton anatomy captured** from BugSack locals →
