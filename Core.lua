@@ -250,6 +250,7 @@ local function ToggleRoundProbe()
   if not icon then msg("ActionButton1 .icon not found.") return end
   if roundProbe and roundProbe.on then
     icon:RemoveMaskTexture(roundProbe.mask)
+    if roundProbe.texCoord then icon:SetTexCoord(unpack(roundProbe.texCoord)) end
     for _, tex in ipairs(roundProbe.hidden) do tex:Show() end
     wipe(roundProbe.hidden)
     roundProbe.on = false
@@ -263,6 +264,10 @@ local function ToggleRoundProbe()
     roundProbe.mask:SetAllPoints(icon)
   end
   icon:AddMaskTexture(roundProbe.mask)
+  -- Zoom past the icon's baked-in square border so the circle's tangent points
+  -- show art instead of border pixels (the "flattened edges" QA observation).
+  roundProbe.texCoord = { icon:GetTexCoord() }
+  icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
   for _, key in ipairs({ "SlotBackground", "SlotArt", "NormalTexture" }) do
     local tex = b[key]
     if tex and tex.IsShown and tex:IsShown() then

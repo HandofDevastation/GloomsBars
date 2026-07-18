@@ -81,9 +81,17 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
     (account `polaris1976`, scopes repo/workflow/read:org).
 
 ## NEXT / START HERE
-1. QA: `/gb round` — mini-skin preview on ActionButton1 (fresh circle mask + hide
-   `SlotBackground`/`SlotArt`/`NormalTexture`). Q1: clean round icon? Q2: does square
-   art come back on hover/press (= which pieces need re-assert hooks)?
+1. ✅ QA'd: `/gb round` Q1 PASSED (2026-07-18, screenshot) — ActionButton1 renders as a
+   clean round icon, slot art fully suppressed, right next to a default square button.
+   The differentiator thesis is proven on a live button.
+2. QA note (2026-07-18): Jason confirmed the flattened-tangent effect on the live
+   button (baked border pixels at the circle's edges) → zoom crop
+   `SetTexCoord(0.08, 0.92, 0.08, 0.92)` added to the round probe. Verify it reads
+   as fully round now.
+3. QA pending: `/gb round` Q2 — hover + press the round button: does any square art
+   reappear (= which pieces need re-assert hooks)? Also watch whether the cooldown
+   swipe draws square on the round icon when the ability is used (the known
+   masked-sweep problem, spec §D).
 2. Then Phase 2 (skin engine v0): read the client's `Blizzard_ActionBar*` /
    `ActionButtonTemplate` source for hook points (gate 5) — we now know the exact
    member names to look for (API-NOTES §1). Probe the `showButtonArt` hypothesis.
