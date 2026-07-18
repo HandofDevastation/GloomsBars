@@ -14,6 +14,7 @@ enable-nolib-creation: no
 # Keep repo-management files out of the packaged addon zip.
 ignore:
   - README.md
+  - CLAUDE.md
   - .github
   - .gitignore
   - .pkgmeta
