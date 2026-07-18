@@ -237,6 +237,47 @@ local function MaskInfo()
     :format(loaded and tostring(loaded("ArcUI")) or "?", loaded and tostring(loaded("Masque")) or "?"))
 end
 
+-- /gb mask2 — button-level probe v4, after /gb maskinfo showed IconMask IS
+-- attached to the visible .icon (so v2's no-change result is unexplained).
+-- Two suspects: (a) something re-asserts the atlas right after we set it
+-- (ArcUI re-skin or Blizzard update cycle), (b) another texture is drawn over
+-- the masked icon. This swaps the atlas on ActionButton1 ONLY, re-checks the
+-- atlas at 0/1/3 seconds (a revert = suspect a), and dumps the button's shown
+-- texture stack (an overlay icon = suspect b). /reload to revert.
+local function ButtonMaskProbe()
+  local b = _G["ActionButton1"]
+  local icon = b and (b.icon or b.Icon)
+  local m = b and b.IconMask
+  if not (icon and m) then msg("ActionButton1 .icon/.IconMask not found.") return end
+  msg("button mask probe (ActionButton1 only):")
+  print("  atlas before: " .. tostring(m:GetAtlas()))
+  m:SetAtlas(CIRCLE_ATLAS)
+  -- Force the masked texture to re-evaluate, in case mask edits don't dirty it.
+  icon:RemoveMaskTexture(m)
+  icon:AddMaskTexture(m)
+  print("  atlas set to: " .. tostring(m:GetAtlas()))
+  print("  shown textures on the button (layer / atlas-or-fileID):")
+  for _, region in ipairs({ b:GetRegions() }) do
+    if region.IsShown and region:IsShown() and region.GetDrawLayer then
+      local kind = region:GetObjectType()
+      if kind == "Texture" or kind == "MaskTexture" then
+        local what = (region.GetAtlas and region:GetAtlas())
+          or (region.GetTexture and tostring(region:GetTexture())) or "?"
+        local tag = (region == icon) and " <== .icon" or (region == m and " <== .IconMask" or "")
+        print(("    %s %s: %s%s"):format(kind, tostring(region:GetDrawLayer()), tostring(what), tag))
+      end
+    end
+  end
+  for _, delay in ipairs({ 0, 1, 3 }) do
+    C_Timer.After(delay, function()
+      print(("  atlas after %ds: %s"):format(delay, tostring(m:GetAtlas())))
+      if delay == 3 then
+        msg("Done. Did ActionButton1 (first button, bar 1) LOOK circular at any point? (/reload to revert)")
+      end
+    end)
+  end
+end
+
 -- ---------------------------------------------------------------------------
 -- /gb slash router
 -- ---------------------------------------------------------------------------
@@ -250,10 +291,13 @@ SlashCmdList.GLOOMSBARS = function(input)
     ToggleMaskProbe()
   elseif cmd == "maskinfo" then
     MaskInfo()
+  elseif cmd == "mask2" then
+    ButtonMaskProbe()
   else
     msg("v" .. GB:Version() .. " — commands:")
     print("  /gb debug — census of action bar buttons + regions")
     print("  /gb mask — toggle the standalone MaskTexture render probe (screen center)")
     print("  /gb maskinfo — inspect ActionButton1's icon/mask wiring")
+    print("  /gb mask2 — instrumented atlas swap on ActionButton1 (re-assert + overdraw check)")
   end
 end
