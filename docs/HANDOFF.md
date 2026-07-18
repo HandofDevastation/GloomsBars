@@ -48,7 +48,8 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
 |---|-------|--------|-------|
 | 1 | The 8 bars' button globals are `ActionButton1-12`, `MultiBarBottomLeft/BottomRight/Right/LeftButton1-12`, `MultiBar5/6/7Button1-12` | ✅ VERIFIED 2026-07-18 in-game — 12/12 on all 8 bars | `/gb debug` |
 | 2 | Button subregions `.icon/.HotKey/.Name/.Count/.cooldown` exist as expected | ✅ VERIFIED 2026-07-18 — all found on ActionButton1, plus `.Border` + `:GetNormalTexture()` | `/gb debug` |
-| 3 | **`MaskTexture` renders in Midnight** (rounded corners + shaped sweeps depend on it) | 🟡 IN PROGRESS — v1 "slightly more rounded" (ambiguous). v2: swapping Blizzard's `.IconMask` atlas → `CircleMaskScalable` succeeded 12/12, atlas exists, zero errors, **NO visual change**. Confound: Jason runs **ArcUI** (restyles action buttons, possibly draws its own icon). v3 = standalone texture+mask, screen center, addon-free — isolates whether masks render at all. `/gb maskinfo` inspects icon↔mask attachment. | `/gb mask` v3 + `/gb maskinfo` |
+| 3 | **`MaskTexture` renders in Midnight** (rounded corners + shaped sweeps depend on it) | ✅ VERIFIED 2026-07-18 — v3 standalone probe (own texture + `CircleMaskScalable` mask, own frame): clean full circle in-game. Note: the icon's baked-in square border stays visible at the circle's flat edges → production must SetTexCoord-zoom past baked borders before masking (spec anticipated this). | `/gb mask` v3 |
+| 3b | Why did v2's button-level mask swap show NO change? (Blizzard `.IconMask` atlas swap succeeded 12/12, zero errors — masks provably render per gate 3.) Suspect: visible icon isn't the masked texture — Jason runs **ArcUI**, which restyles action buttons and may draw its own icon. | ⚠ OPEN | `/gb maskinfo` (inspects icon↔mask attachment + ArcUI/Masque presence) |
 | 4 | `IsActionInRange` / `IsUsableAction` readable in Midnight combat (custom range tint) | ⚠ UNVERIFIED | later probe; fallback = restyle Blizzard's own indicator |
 | 5 | Exact Blizzard action-button/cooldown hook points | ⚠ UNVERIFIED | read client `Blizzard_ActionBar*` source (as done for CDM in GloomsAuras) |
 | 6 | `SPELL_ACTIVATION_OVERLAY_GLOW_SHOW/HIDE` still fire as plain events in Midnight | ⚠ UNVERIFIED | probe in glow phase |
@@ -91,6 +92,13 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
   Midnight 12.0.7 (`ActionButton#`, `MultiBarBottomLeft/BottomRight/Right/LeftButton#`,
   `MultiBar5/6/7Button#`, 12 each). Subregions on `ActionButton1`: `.icon`, `.HotKey`,
   `.Name`, `.Count`, `.cooldown`, `.Border`, `:GetNormalTexture()` — all present.
+- **2026-07-18: MaskTexture WORKS in Midnight** (standalone circle probe = clean
+  circle). `CircleMaskScalable` atlas exists and masks correctly via `SetAtlas` on a
+  MaskTexture. THE differentiator is viable. Icons keep their baked square borders at
+  the mask's flat edges → always zoom-crop (`SetTexCoord`) before masking.
+- **2026-07-18: Jason's client runs ArcUI** (+ StoneTweaks, VibeOverlay, BugSack). ArcUI
+  restyles action bars — a live confound for button-level styling QA (see gate 3b) and a
+  coexistence question for the product itself.
 - From siblings, already trusted: the secret-values model (GloomsAuras
   docs/API-NOTES.md), the release pipeline (Build Barn ships this exact workflow),
   bundled-font pre-warm fix (GloomsAuras Core.lua).
