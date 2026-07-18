@@ -46,6 +46,11 @@ GB.COLOR = {
 }
 
 GB.MEDIA = "Interface\\AddOns\\" .. ADDON_NAME .. "\\Media\\"
+-- Bundled mask shapes (own PNGs — see API-NOTES §2: scalable atlases like
+-- CircleMaskScalable flatten when stretched; bundled art is the production path).
+GB.MASK = {
+  circle = GB.MEDIA .. "masks\\circle.png",
+}
 local FONT_DIR = GB.MEDIA .. "fonts\\"
 GB.FONT = {
   title = FONT_DIR .. "Khand-SemiBold.ttf",
@@ -187,7 +192,6 @@ end
 --       texture, our own mask, screen center. No Blizzard buttons, no other
 --       addons. Circle = masks work (gate 3 PASSES; the button path is the
 --       problem). Square = masks are dead in Midnight (differentiator plan B).
-local CIRCLE_ATLAS = "CircleMaskScalable"
 local standaloneProbe
 local function ToggleMaskProbe()
   if standaloneProbe then
@@ -204,7 +208,7 @@ local function ToggleMaskProbe()
   tex:SetAllPoints()
   tex:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
   local mask = frame:CreateMaskTexture()
-  mask:SetAtlas(CIRCLE_ATLAS)
+  mask:SetTexture(GB.MASK.circle, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
   mask:SetAllPoints(tex)
   tex:AddMaskTexture(mask)
   standaloneProbe = frame
@@ -260,7 +264,9 @@ local function ToggleRoundProbe()
   if not roundProbe then
     roundProbe = { hidden = {} }
     roundProbe.mask = b:CreateMaskTexture()
-    roundProbe.mask:SetAtlas(CIRCLE_ATLAS)
+    -- Bundled PNG, not CircleMaskScalable: the scalable atlas 9-slices when
+    -- stretched → flattened cardinal edges (observed twice in QA).
+    roundProbe.mask:SetTexture(GB.MASK.circle, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
     roundProbe.mask:SetAllPoints(icon)
   end
   icon:AddMaskTexture(roundProbe.mask)
