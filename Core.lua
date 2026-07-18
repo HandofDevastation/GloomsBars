@@ -174,60 +174,67 @@ local function DebugReport()
 end
 
 -- /gb mask — the ⚠ VERIFY that the whole differentiator rests on: does
--- MaskTexture render in Midnight? Probe v2 after v1's ambiguous "slightly more
--- rounded" result (2026-07-18): the buttons likely already carry Blizzard's own
--- .IconMask, so v1's added mask may never have loaded its texture. v2 prefers
--- swapping the atlas on Blizzard's OWN IconMask to a dramatic full circle —
--- an unmistakable pass/fail. Falls back to v1's additive mask (with a
--- did-it-load report) if .IconMask is gone. Run again to restore.
+-- MaskTexture render in Midnight AT ALL?
+--
+-- Probe history (2026-07-18):
+--   v1: additive TempPortraitAlphaMask on button icons → "slightly more
+--       rounded" (ambiguous; that's likely just Blizzard's default rounding).
+--   v2: swapped Blizzard's own .IconMask atlas to CircleMaskScalable — swap
+--       succeeded on 12/12, atlas exists, zero errors → NO visual change.
+--       So either masks don't render, or the visible icon isn't masked by
+--       IconMask (other addons — ArcUI — also restyle these buttons).
+--   v3 (this): isolate the mechanism completely — our own frame, our own
+--       texture, our own mask, screen center. No Blizzard buttons, no other
+--       addons. Circle = masks work (gate 3 PASSES; the button path is the
+--       problem). Square = masks are dead in Midnight (differentiator plan B).
 local CIRCLE_ATLAS = "CircleMaskScalable"
-local maskProbe = { swapped = {}, added = {} }
+local standaloneProbe
 local function ToggleMaskProbe()
-  if #maskProbe.swapped > 0 or #maskProbe.added > 0 then
-    for _, entry in ipairs(maskProbe.swapped) do
-      if entry.atlas then
-        entry.mask:SetAtlas(entry.atlas)
-      else
-        -- No atlas to restore (mask used a plain texture we can't cheaply
-        -- stash) — a /reload fully resets Blizzard's state.
-        entry.mask:SetAtlas(nil)
-      end
-    end
-    for _, entry in ipairs(maskProbe.added) do
-      entry.icon:RemoveMaskTexture(entry.mask)
-      entry.mask:Hide()
-    end
-    wipe(maskProbe.swapped); wipe(maskProbe.added)
-    msg("mask probe OFF — bar 1 restored (if anything looks off, /reload fully resets).")
+  if standaloneProbe then
+    standaloneProbe:Hide()
+    standaloneProbe = nil
+    msg("mask probe OFF — test icon removed.")
     return
   end
-  if not (C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(CIRCLE_ATLAS)) then
-    msg(("|cffff7729atlas '%s' not found in this client|r — falling back to file-path mask."):format(CIRCLE_ATLAS))
-  end
-  local swapped, added, loadFailures = 0, 0, 0
-  for i = 1, GB.BUTTONS_PER_BAR do
-    local button = _G["ActionButton" .. i]
-    local icon = button and (button.icon or button.Icon)
-    if icon then
-      local blizzMask = button.IconMask
-      if blizzMask and C_Texture.GetAtlasInfo(CIRCLE_ATLAS) then
-        maskProbe.swapped[#maskProbe.swapped + 1] = { mask = blizzMask, atlas = blizzMask:GetAtlas() }
-        blizzMask:SetAtlas(CIRCLE_ATLAS)
-        swapped = swapped + 1
-      else
-        local mask = button:CreateMaskTexture()
-        mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask",
-          "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-        if not mask:GetTexture() then loadFailures = loadFailures + 1 end
-        mask:SetAllPoints(icon)
-        icon:AddMaskTexture(mask)
-        maskProbe.added[#maskProbe.added + 1] = { icon = icon, mask = mask }
-        added = added + 1
-      end
+  local frame = CreateFrame("Frame", nil, UIParent)
+  frame:SetSize(96, 96)
+  frame:SetPoint("CENTER", 0, 140)
+  frame:SetFrameStrata("DIALOG")
+  local tex = frame:CreateTexture(nil, "ARTWORK")
+  tex:SetAllPoints()
+  tex:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+  local mask = frame:CreateMaskTexture()
+  mask:SetAtlas(CIRCLE_ATLAS)
+  mask:SetAllPoints(tex)
+  tex:AddMaskTexture(mask)
+  standaloneProbe = frame
+  msg("mask probe ON — a big question-mark icon is above your character, screen center. Is it a FULL CIRCLE (pass) or a SQUARE (fail)?")
+end
+
+-- /gb maskinfo — introspect ActionButton1's icon↔mask wiring, to explain the
+-- v2 mystery: is IconMask actually attached to the texture the player SEES?
+local function MaskInfo()
+  local b = _G["ActionButton1"]
+  local icon = b and (b.icon or b.Icon)
+  if not icon then msg("ActionButton1 / .icon not found.") return end
+  msg("ActionButton1 mask wiring:")
+  print(("  .icon shown: %s, drawLayer: %s, texture: %s")
+    :format(tostring(icon:IsShown()), tostring(icon:GetDrawLayer()), tostring(icon:GetTexture())))
+  if icon.GetNumMaskTextures then
+    local n = icon:GetNumMaskTextures()
+    print(("  .icon mask count: %d"):format(n))
+    for i = 1, n do
+      local m = icon:GetMaskTexture(i)
+      print(("    mask %d: %s (atlas: %s)"):format(i,
+        m == b.IconMask and "IS .IconMask" or tostring(m),
+        m and m.GetAtlas and tostring(m:GetAtlas()) or "?"))
     end
+  else
+    print("  GetNumMaskTextures API not present on this client")
   end
-  msg(("mask probe ON — %d Blizzard IconMasks swapped to '%s', %d additive masks added (%d texture load failures). Are bar-1 icons FULL circles now?")
-    :format(swapped, CIRCLE_ATLAS, added, loadFailures))
+  local loaded = C_AddOns and C_AddOns.IsAddOnLoaded
+  print(("  Other bar addons loaded: ArcUI=%s Masque=%s")
+    :format(loaded and tostring(loaded("ArcUI")) or "?", loaded and tostring(loaded("Masque")) or "?"))
 end
 
 -- ---------------------------------------------------------------------------
@@ -241,9 +248,12 @@ SlashCmdList.GLOOMSBARS = function(input)
     DebugReport()
   elseif cmd == "mask" then
     ToggleMaskProbe()
+  elseif cmd == "maskinfo" then
+    MaskInfo()
   else
     msg("v" .. GB:Version() .. " — commands:")
     print("  /gb debug — census of action bar buttons + regions")
-    print("  /gb mask — toggle the MaskTexture render probe on bar 1")
+    print("  /gb mask — toggle the standalone MaskTexture render probe (screen center)")
+    print("  /gb maskinfo — inspect ActionButton1's icon/mask wiring")
   end
 end
