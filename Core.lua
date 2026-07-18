@@ -52,6 +52,9 @@ GB.MASK = {
   circle = GB.MEDIA .. "masks\\circle.png",
   circleSwipe = GB.MEDIA .. "masks\\circle-swipe.png",   -- 0.8-alpha fill for cooldown sweeps
 }
+GB.ART = {
+  ring = GB.MEDIA .. "art\\ring-glow.png",   -- soft round state glow (white; tint via vertex color)
+}
 local FONT_DIR = GB.MEDIA .. "fonts\\"
 GB.FONT = {
   title = FONT_DIR .. "Khand-SemiBold.ttf",

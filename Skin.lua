@@ -27,17 +27,15 @@ local GROW_RATIO = (256 / 240 - 1) / 2
 
 local records = {}   -- [button] = { mask, texCoord, active, iconMaskRemoved }
 
--- Square overlay textures that are plain Textures on the button — one shared
--- circle mask clips them all to the icon shape (a MaskTexture may be attached
--- to multiple textures; the 3-mask cap is per masked texture, not per mask).
+-- Button-state art (hover/checked/flash): REPLACED with our round ring-glow,
+-- not masked — runtime mask attachment failed to clip the highlight in QA
+-- (API-NOTES §2), and we want our own art here for the design language anyway.
 -- Deeper overlay FRAMES (SpellCastAnimFrame, AssistedCombatRotationFrame,
--- AutoCastOverlay) are a later pass.
-local OVERLAY_KEYS = {
-  "HighlightTexture",       -- mouseover
-  "CheckedTexture",         -- active/auto-repeat state
-  "Flash",                  -- auto-attack / flash
-  "NewActionTexture",       -- "newly placed action" glow
-  "SpellHighlightTexture",  -- Blizzard's "suggested ability" blue-yellow glow
+-- AutoCastOverlay, the spell-alert proc glow) are a later pass.
+local STATE_TINT = {
+  highlight = { 1, 0.82, 0.35 },   -- gold hover
+  checked   = { 0.45, 0.75, 1 },   -- blue active/auto-repeat
+  flash     = { 1, 0.25, 0.25 },   -- red attack flash
 }
 
 local function Suppress(btn)
@@ -110,9 +108,35 @@ local function ApplyButton(btn)
   end
   icon:SetTexCoord(ZOOM, 1 - ZOOM, ZOOM, 1 - ZOOM)
   icon:AddMaskTexture(rec.mask)
-  for _, key in ipairs(OVERLAY_KEYS) do
-    local tex = btn[key]
-    if tex and tex.AddMaskTexture then tex:AddMaskTexture(rec.mask) end
+  -- Round state art. One-time: originals aren't recoverable without /reload
+  -- (Disable() says so). Anchored to the icon oversized by the padding ratio
+  -- so the ring rim coincides with the icon circle.
+  if not rec.stateArt then
+    local grow = icon:GetWidth() * GROW_RATIO
+    local function fit(tex)
+      tex:ClearAllPoints()
+      tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
+      tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
+    end
+    if btn.SetHighlightTexture and btn.GetHighlightTexture then
+      btn:SetHighlightTexture(GB.ART.ring, "ADD")
+      local hl = btn:GetHighlightTexture()
+      hl:SetVertexColor(unpack(STATE_TINT.highlight))
+      fit(hl)
+    end
+    if btn.SetCheckedTexture and btn.GetCheckedTexture then
+      btn:SetCheckedTexture(GB.ART.ring)
+      local ct = btn:GetCheckedTexture()
+      ct:SetBlendMode("ADD")
+      ct:SetVertexColor(unpack(STATE_TINT.checked))
+      fit(ct)
+    end
+    if btn.Flash then
+      btn.Flash:SetTexture(GB.ART.ring)
+      btn.Flash:SetVertexColor(unpack(STATE_TINT.flash))
+      fit(btn.Flash)
+    end
+    rec.stateArt = true
   end
   -- Shaped cooldown sweep: the swipe respects its texture's alpha, and
   -- Blizzard's cooldown path never re-sets swipe textures (only SetCooldown/
@@ -140,10 +164,6 @@ local function RestoreButton(btn)
   local icon = btn.icon or btn.Icon
   if not (rec and rec.active and icon) then return end
   icon:RemoveMaskTexture(rec.mask)
-  for _, key in ipairs(OVERLAY_KEYS) do
-    local tex = btn[key]
-    if tex and tex.RemoveMaskTexture then tex:RemoveMaskTexture(rec.mask) end
-  end
   if rec.iconMaskRemoved and btn.IconMask then
     icon:AddMaskTexture(btn.IconMask)
     rec.iconMaskRemoved = nil
