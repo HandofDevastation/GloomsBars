@@ -357,10 +357,20 @@ local function buildShapeSection(bf, s)
     end)
   lockTog:SetPoint("TOPRIGHT", -18, -320)
 
+  -- Crop to fill vs stretch — how a non-square icon shows the (square) spell art.
+  local fillLbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); fillLbl:SetPoint("TOPLEFT", 18, -350); fillLbl:SetText("Crop to fill")
+  local fillTog = makeToggle(bf,
+    function() return not (GB.db and GB.db.iconFill == "stretch") end,
+    function(v)
+      if GB.Skin then GB.Skin:SetIconFill(v and "fill" or "stretch") else GB.db.iconFill = v and "fill" or "stretch" end
+      C:RefreshPreview()
+    end)
+  fillTog:SetPoint("TOPRIGHT", -18, -348)
+
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -352); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("Size is the VISIBLE icon; the clickable hit area stays Edit Mode's. Unlock aspect for non-square.")
-  bf:SetHeight(384)
+  hint:SetPoint("TOPLEFT", 18, -380); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Size is the VISIBLE icon; the clickable hit area stays Edit Mode's. Unlock aspect for non-square; Crop to fill keeps art undistorted.")
+  bf:SetHeight(414)
 
   s.refresh = function()
     local pat, _, circ = parse()
@@ -377,6 +387,7 @@ local function buildShapeSection(bf, s)
     wRow:refresh()
     hRow:refresh()
     lockTog:refresh()
+    fillTog:refresh()
   end
 end
 
@@ -506,21 +517,26 @@ function C:RefreshPreview()
   previewIcon:SetTexture(sampleIconTexture())
   if previewMask then previewIcon:RemoveMaskTexture(previewMask) end
   previewMask = previewFrame:CreateMaskTexture()
-  previewMask:SetTexture(shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-  local grow = previewIcon:GetWidth() * (256 / 240 - 1) / 2
+  -- Match the engine: use the aspect-correct mask for a non-square preview.
+  local aSrc = GB.Skin:AspectMask(pw, ph)
+  previewMask:SetTexture(aSrc or shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+  local growX = pw * (256 / 240 - 1) / 2
+  local growY = ph * (256 / 240 - 1) / 2
   previewMask:ClearAllPoints()
-  previewMask:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -grow, grow)
-  previewMask:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", grow, -grow)
+  previewMask:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -growX, growY)
+  previewMask:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", growX, -growY)
   previewIcon:AddMaskTexture(previewMask)
-  local z = (GB.db and GB.db.zoom) or 0.08
-  previewIcon:SetTexCoord(z, 1 - z, z, 1 - z)
+  -- Same cover-fit crop as the engine so the preview matches the bars (part a).
+  previewIcon:SetTexCoord(GB.Skin:TexCoordFor(previewIcon:GetWidth(), previewIcon:GetHeight()))
   previewGlow:SetTexture(shp.glow)
   previewRing:SetTexture(shp.ring)
   if previewCD.SetSwipeTexture then previewCD:SetSwipeTexture(shp.swipe) end
 end
 
 function C:PreviewZoom(v)
-  if previewIcon then previewIcon:SetTexCoord(v, 1 - v, v, 1 - v) end
+  if previewIcon then
+    previewIcon:SetTexCoord(GB.Skin:TexCoordFor(previewIcon:GetWidth(), previewIcon:GetHeight()))
+  end
 end
 
 function C:SetPreviewState(st)

@@ -26,6 +26,30 @@ local function zoomVal() return (GB.db and GB.db.zoom) or ZOOM end
 -- API-NOTES §2); oversize the mask region so the circle spans the icon.
 local GROW_RATIO = (256 / 240 - 1) / 2
 
+-- Icon texcoord for a w×h frame at the current zoom + fill mode. The spell art
+-- is square, so mapping the square zoom-crop onto a non-square icon STRETCHES it
+-- (Jason's QA feedback). "fill" (cover, default) keeps the art's aspect and
+-- CROPS the overflow dimension so a non-square icon shows undistorted art;
+-- "stretch" is Blizzard's default look (distorts). Square frames → identical.
+function Skin:TexCoordFor(w, h)
+  local z = zoomVal()
+  local mode = (GB.db and GB.db.iconFill) or "fill"
+  if mode == "stretch" or not (w and h) or w <= 0 or h <= 0 or math.abs(w - h) < 0.5 then
+    return z, 1 - z, z, 1 - z
+  end
+  local s = 1 - 2 * z   -- side of the square zoom-crop, in UV space
+  if w >= h then
+    local ch = s * h / w
+    return z, 1 - z, 0.5 - ch / 2, 0.5 + ch / 2   -- full width, centered slice of height
+  else
+    local cw = s * w / h
+    return 0.5 - cw / 2, 0.5 + cw / 2, z, 1 - z   -- full height, centered slice of width
+  end
+end
+local function applyTexCoord(icon)
+  icon:SetTexCoord(Skin:TexCoordFor(icon:GetWidth(), icon:GetHeight()))
+end
+
 local records = {}   -- [button] = { mask, texCoord, active, iconMaskRemoved }
 
 -- Button-state art (hover/checked/flash): REPLACED with our round ring-glow,
@@ -122,6 +146,62 @@ local function AnchorConstructionMask(mask, icon, ext)
   mask:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", growX, -(growY + ext))
 end
 
+-- ---------------------------------------------------------------------------
+-- Aspect-correct masks — the "clean pill" fix. One square mask PNG stretched
+-- onto a non-square icon OVALIZES its rounded corners. Instead we ship rounded
+-- masks pre-generated at a range of aspect ratios with genuinely CIRCULAR
+-- corners (tools/generate-art.py → pill-<t|w>-a<ratio>-r<level>); the engine
+-- picks the nearest aspect and stretches it to the icon, so a uniform-ish
+-- stretch keeps the corners round — a clean pill at full radius. Square icons
+-- and mixed-corner shapes keep the plain per-corner masks.
+-- ---------------------------------------------------------------------------
+local PILL_RATIOS = { 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0 }   -- = generate-art.py PILL_RATIOS
+
+-- Current shape → corner pattern ("1111") + radius level. "circle" == all-round, full.
+local function parseShape()
+  local sh = GB.db and GB.db.shape
+  if sh == "circle" then return "1111", 5 end
+  local a, b, c, d, r = tostring(sh):match("^corner%-(%d)(%d)(%d)(%d)%-r(%d)$")
+  if a then return a .. b .. c .. d, tonumber(r) end
+  return "1111", 2
+end
+
+-- Aspect mask path for a w×h construction: an aspect-correct rounded mask when
+-- the shape is NON-square and ALL-rounded (circle / corner-1111), else nil
+-- (square + mixed-corner shapes keep the plain mask). Picks the nearest baked
+-- aspect ratio + orientation.
+local function aspectMask(w, h)
+  if not (w and h) or w <= 0 or h <= 0 or math.abs(w - h) < 0.5 then return nil end
+  local pattern, level = parseShape()
+  if pattern ~= "1111" then return nil end
+  local tall = h > w
+  local ratio = tall and (h / w) or (w / h)
+  local bi, be = 1, math.huge
+  for i, rr in ipairs(PILL_RATIOS) do
+    local e = math.abs(rr - ratio)
+    if e < be then be, bi = e, i end
+  end
+  return GB.MEDIA .. "masks\\" .. ("pill-%s-a%d-r%d"):format(tall and "t" or "w", bi - 1, level) .. ".png"
+end
+function Skin:AspectMask(w, h) return aspectMask(w, h) end
+
+-- (maskPath, cacheKey) for the construction around `icon` (+ext). src is the
+-- aspect mask when the shape/aspect calls for one, else nil (plain shape mask).
+-- The key lets callers skip a fresh-mask rebuild (source swaps never re-render —
+-- §2) when nothing shape-relevant changed (a plain re-anchor re-clips live).
+local function maskPlan(icon, ext)
+  local src = aspectMask(icon:GetWidth(), icon:GetHeight() + (ext or 0))
+  return src, tostring(src or (GB.db and GB.db.shape))
+end
+
+-- Build a fresh mask from the given source (aspect mask, or the plain shape mask).
+local function buildMask(parent, icon, ext, src)
+  local m = parent:CreateMaskTexture()
+  m:SetTexture(src or GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+  AnchorConstructionMask(m, icon, ext or 0)
+  return m
+end
+
 local function ApplyHotkeyOverride(btn)
   local rec = records[btn]
   local hk = btn.HotKey
@@ -158,10 +238,20 @@ local function ApplyDecor(btn)
   local style = GB:GetStyle()
   rec.plates = rec.plates or {}
   local ext = ExtensionHeight(icon)
-  -- The ICON's own mask must span the construction too, so icon + extension
-  -- read as one continuous shape. (Anchor edits on a live mask: verified-by-QA
-  -- pending; /reload applies pre-render and is always exact.)
-  AnchorConstructionMask(rec.mask, icon, ext)
+  -- The ICON's own mask spans the whole construction, so icon + extension read
+  -- as one continuous shape (a single clean pill wrapping both — Jason's mock).
+  -- The aspect mask comes from the construction's aspect (maskPlan); a fresh
+  -- mask is built only when that plan changes (source swaps never re-render —
+  -- §2), otherwise a plain re-anchor re-clips live.
+  local maskSrc, maskKey = maskPlan(icon, ext)
+  if rec.mask and rec.maskKey == maskKey then
+    AnchorConstructionMask(rec.mask, icon, ext)
+  else
+    if rec.mask then icon:RemoveMaskTexture(rec.mask) end
+    rec.mask = buildMask(btn, icon, ext, maskSrc)
+    icon:AddMaskTexture(rec.mask)
+    rec.maskKey = maskKey
+  end
   local function getPlate(idx)
     local plate = rec.plates[idx]
     if not plate then
@@ -172,13 +262,19 @@ local function ApplyDecor(btn)
       -- A white texture FILE, not SetColorTexture: masks don't clip
       -- solid-color textures (QA 2026-07-18 — square plate corners).
       tex:SetTexture("Interface\\Buttons\\WHITE8X8")
-      local mask = rec.decorFrame:CreateMaskTexture()
-      mask:SetTexture(GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-      tex:AddMaskTexture(mask)
-      plate = { tex = tex, mask = mask }
+      plate = { tex = tex }
       rec.plates[idx] = plate
     end
-    AnchorConstructionMask(plate.mask, icon, ext)
+    -- The plate shares the icon's mask plan so it joins the pill; rebuild the
+    -- mask only when the plan changes, else re-anchor (re-clips live).
+    if plate.mask and plate.maskKey == maskKey then
+      AnchorConstructionMask(plate.mask, icon, ext)
+    else
+      if plate.mask then plate.tex:RemoveMaskTexture(plate.mask) end
+      plate.mask = buildMask(rec.decorFrame, icon, ext, maskSrc)
+      plate.tex:AddMaskTexture(plate.mask)
+      plate.maskKey = maskKey
+    end
     plate.tex:ClearAllPoints()
     return plate
   end
@@ -314,9 +410,21 @@ function Skin:SetZoom(v)
     GB:ForEachButton(function(btn)
       local rec = records[btn]
       local icon = btn.icon or btn.Icon
-      if rec and rec.active and icon then icon:SetTexCoord(v, 1 - v, v, 1 - v) end
+      if rec and rec.active and icon then applyTexCoord(icon) end
     end)
   end
+end
+
+-- Live icon fill mode: "fill" (cover, keeps aspect + crops) or "stretch". Pure
+-- SetTexCoord re-apply, safe live. Driven by the Config UI's "Crop to fill" toggle.
+function Skin:SetIconFill(mode)
+  if GB.db then GB.db.iconFill = mode end
+  if not self.enabled then return end
+  GB:ForEachButton(function(btn)
+    local rec = records[btn]
+    local icon = btn.icon or btn.Icon
+    if rec and rec.active and icon then applyTexCoord(icon) end
+  end)
 end
 
 -- Live shape change. Editing a live mask's texture never re-renders (API-NOTES
@@ -332,25 +440,9 @@ function Skin:SetShape(name)
     local rec = records[btn]
     local icon = btn.icon or btn.Icon
     if not (rec and rec.active and icon) then return end
-    -- Fresh icon mask
-    if rec.mask then icon:RemoveMaskTexture(rec.mask) end
-    local ext = ExtensionHeight(icon)
-    local m = btn:CreateMaskTexture()
-    m:SetTexture(shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    AnchorConstructionMask(m, icon, ext)
-    rec.mask = m
-    icon:AddMaskTexture(m)
-    -- Fresh plate masks (decoration layers)
-    if rec.plates then
-      for _, plate in ipairs(rec.plates) do
-        if plate.mask then plate.tex:RemoveMaskTexture(plate.mask) end
-        local pm = rec.decorFrame:CreateMaskTexture()
-        pm:SetTexture(shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-        plate.mask = pm
-        plate.tex:AddMaskTexture(pm)
-      end
-    end
-    -- SetTexture-based shaped art re-sets live (no mask quirk)
+    -- Icon + plate masks are rebuilt by ApplyDecor below — it picks the 9-slice
+    -- plan for the new shape (and detects the change via the slice cache key).
+    -- Here we only re-set the SetTexture-based shaped art, which re-sets live.
     for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
       if cd and cd.SetSwipeTexture then cd:SetSwipeTexture(shp.swipe) end
     end
@@ -399,6 +491,7 @@ function Skin:SetIconSize(w, h)
     local icon = btn.icon or btn.Icon
     if not (rec and rec.active and icon) then return end
     applyIconSize(btn)
+    applyTexCoord(icon)   -- cover-fit crop follows the new aspect (no art stretch)
     local grow = icon:GetWidth() * GROW_RATIO
     local function fit(tex)
       if not tex then return end
@@ -423,11 +516,10 @@ local function ApplyButton(btn)
   if not rec then
     rec = {}
     records[btn] = rec
-    rec.mask = btn:CreateMaskTexture()
-    rec.mask:SetTexture(GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    local grow = icon:GetWidth() * GROW_RATIO
-    rec.mask:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
-    rec.mask:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
+    local ext0 = ExtensionHeight(icon)
+    local src0, key0 = maskPlan(icon, ext0)
+    rec.mask = buildMask(btn, icon, ext0, src0)
+    rec.maskKey = key0
     rec.texCoord = { icon:GetTexCoord() }
     if btn.UpdateButtonArt then
       hooksecurefunc(btn, "UpdateButtonArt", function(b)
@@ -460,8 +552,7 @@ local function ApplyButton(btn)
     icon:RemoveMaskTexture(btn.IconMask)
     rec.iconMaskRemoved = true
   end
-  local z = zoomVal()
-  icon:SetTexCoord(z, 1 - z, z, 1 - z)
+  applyTexCoord(icon)   -- zoom crop, cover-fit to the icon's aspect (part a)
   icon:AddMaskTexture(rec.mask)
   -- Round state art. One-time: originals aren't recoverable without /reload
   -- (Disable() says so). Anchored to the icon oversized by the padding ratio

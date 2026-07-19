@@ -202,6 +202,7 @@ local DB_DEFAULTS = {
   -- iconW / iconH absent = "auto" (icon matches the Edit-Mode button size); set
   -- explicitly by the Config UI to resize the VISIBLE icon (hit area unchanged).
   iconLockAspect = true,   -- keep width and height equal while sizing
+  iconFill = "fill",       -- "fill" (cover: keep art aspect, crop) or "stretch"
   sweepOvershoot = 0.75,   -- px the cooldown sweep extends past the icon circle
   -- State-highlight tints (hover/selected/flash) + intensity — Config-editable.
   stateColors = { hover = { 1, 0.82, 0.35 }, selected = { 0.45, 0.75, 1 }, flash = { 1, 0.25, 0.25 } },
@@ -467,6 +468,65 @@ local function GlowInfo()
   end
 end
 
+-- /gb pill — the deferred "clean pill" question (HANDOFF next-steps 1b): a
+-- rounded mask stretched onto a non-square icon OVALIZES its corners. Candidate
+-- cure = 9-slice the mask (SetTextureSliceMargins) so the corner cells stay
+-- fixed and only the straight edges stretch. TWO unknowns in Midnight: does a
+-- MaskTexture honor texture-slicing at all, and how do margins map to on-screen
+-- corner size? This probe answers both with a direct A/B: two purple rounded
+-- rectangles, same r1 mask source, both stretched ~3:1 —
+--   TOP    = plain stretched mask (current behavior) → expect OVAL corners.
+--   BOTTOM = 9-sliced mask                            → expect CIRCULAR corners.
+-- r1's arc radius = 0.25*120 = 30 texels; +8 padding = 38-texel slice margin.
+local pillProbe
+local function TogglePillProbe()
+  if pillProbe then
+    pillProbe:Hide(); pillProbe = nil
+    msg("pill probe OFF.")
+    return
+  end
+  local host = CreateFrame("Frame", nil, UIParent)
+  host:SetSize(320, 260); host:SetPoint("CENTER", 0, 170); host:SetFrameStrata("DIALOG")
+  pillProbe = host
+  local src = GB.SHAPES["corner-1111-r1"].mask   -- rounded rect, radius level 1
+  local W, H, MARGIN = 300, 100, 38
+  local sliceOK, sliceMissing = false, false
+  local function panel(yOff, sliced, label)
+    local f = CreateFrame("Frame", nil, host)
+    f:SetSize(W, H); f:SetPoint("TOP", 0, yOff)
+    local tex = f:CreateTexture(nil, "ARTWORK")
+    tex:SetAllPoints()
+    -- White texture FILE + vertex color: masks clip this (not SetColorTexture — §4).
+    tex:SetTexture("Interface\\Buttons\\WHITE8X8")
+    tex:SetVertexColor(GB.COLOR.purple.r, GB.COLOR.purple.g, GB.COLOR.purple.b, 1)
+    local m = f:CreateMaskTexture()
+    m:SetTexture(src, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    m:SetAllPoints(tex)
+    if sliced then
+      if m.SetTextureSliceMargins then
+        m:SetTextureSliceMargins(MARGIN, MARGIN, MARGIN, MARGIN)
+        if m.SetTextureSliceMode and Enum and Enum.UITextureSliceMode then
+          m:SetTextureSliceMode(Enum.UITextureSliceMode.Stretched)
+        end
+        sliceOK = true
+      else
+        sliceMissing = true
+        label = label .. "  |cffc41e3a[slicing API MISSING]|r"
+      end
+    end
+    tex:AddMaskTexture(m)
+    local fs = f:CreateFontString(nil, "OVERLAY")
+    fs:SetFont(GB.FONT.body, 12, "OUTLINE"); fs:SetPoint("TOP", f, "BOTTOM", 0, -4); fs:SetText(label)
+  end
+  panel(0, false, "TOP — plain (expect OVAL corners)")
+  panel(-150, true, "BOTTOM — 9-sliced (expect ROUND corners)")
+  if sliceMissing then
+    msg("pill probe ON, but |cffc41e3aSetTextureSliceMargins is MISSING on MaskTexture|r — 9-slice won't work; we'll fall back to per-aspect masks.")
+  else
+    msg("pill probe ON — two purple rounded rectangles above your character. Q1: does the BOTTOM one have rounder/more EVEN corners than the TOP (whose corners look squished/oval)? Q2: roughly how big are the BOTTOM corners — chunky (~40px) or smaller (~15px)?")
+  end
+end
+
 -- ---------------------------------------------------------------------------
 -- /gb slash router
 -- ---------------------------------------------------------------------------
@@ -484,6 +544,8 @@ SlashCmdList.GLOOMSBARS = function(input)
     MaskInfo()
   elseif cmd == "round" then
     ToggleRoundProbe()
+  elseif cmd == "pill" then
+    TogglePillProbe()
   elseif cmd == "skin" then
     GB.Skin:Toggle()
   elseif cmd == "sweep" then
@@ -526,5 +588,6 @@ SlashCmdList.GLOOMSBARS = function(input)
     print("  /gb mask — toggle the standalone MaskTexture render probe (screen center)")
     print("  /gb maskinfo — inspect ActionButton1's icon/mask wiring")
     print("  /gb round — single-button probe (only while skin is off)")
+    print("  /gb pill — probe 9-slice masks for clean non-square rounded corners")
   end
 end

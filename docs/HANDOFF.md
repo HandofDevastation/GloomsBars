@@ -1,8 +1,8 @@
 # Gloom's Bars — Session Handoff
-**Last updated: end of session 2 (2026-07-18). Current release: v0.2.0 (unchanged — session 2's
-Config-UI work is UNCOMMITTED in the working tree; offer to commit at session start). Git history
-holds the full narrative; this file is the current-state snapshot. ⇒ Read the SESSION 2 section
-below first — the whole style editor was built this session.**
+**Last updated: end of session 3 (2026-07-19). Current release: v0.2.0. Session 2's Config-UI work
+IS committed (`f878fc1`); session 3's icon-sizing work (crop-to-fill + the aspect-correct pill) is
+UNCOMMITTED in the working tree — offer to commit at session start. Git history holds the full
+narrative; this file is the current-state snapshot. ⇒ Read SESSION 3 then SESSION 2 below.**
 
 > Update this file at the end of EVERY session: what was built, what was QA'd in-game,
 > what was learned, what's next. This is the anti-relitigation record — if it's marked
@@ -177,13 +177,37 @@ fork — rows/gap; Edit-Mode-owned; scope decision still OPEN with Jason) · App
 + `RADII`) → ~384 corner PNGs. **Generation is SLOW (~4 min, pure Python) — run it in the
 background.**
 
-## ▶▶ NEXT (session 3) — in priority order
-1. **Icon-sizing polish (Jason's last live feedback):**
-   (a) the size sliders STRETCH the icon ART (square spell art → distorted rectangle) — it
-   should keep the art's aspect and CROP-TO-FILL the shape (SetTexCoord cover-fit), ideally
-   with a toggle for stretch-vs-fill. (b) A non-square rounded icon OVALIZES (mask stretch)
-   instead of a clean PILL → needs aspect-correct masks (9-slice a rounded-rect mask, or
-   per-aspect generation) — this is THE deferred masking item and unlocks the pill.
+## ★ SESSION 3 (2026-07-19) — ICON-SIZING POLISH DONE (next-step #1 complete, QA'd in-game)
+Both halves of the old next-step #1 are built and verified in-game (clean vertical pills on a full
+action bar, plate + keybinds inside the pill shape). UNCOMMITTED — offer to commit.
+
+**(a) Crop-to-fill (art no longer stretches).** Resizing to a non-square icon used to stretch the
+square spell art. New `Skin:TexCoordFor(w,h)` computes a cover-fit `SetTexCoord` (keep the art's
+aspect, crop the overflow); used everywhere the icon texcoord is set (initial, zoom, size). New
+`Skin:SetIconFill(mode)` + db `iconFill` ("fill" default / "stretch") + a **"Crop to fill" toggle**
+in Shape & icon. Preview matches. ✅ QA'd.
+
+**(b) The clean PILL via aspect-correct masks** (THE deferred masking item — resolved). Two findings
+(now in API-NOTES §2): 9-slicing a MaskTexture WORKS in Midnight but CANNOT scale a pill from fixed
+padded sources (corner radius locks to the baked arc; small icons collapse to square) — proven, kept
+only as the `/gb pill` probe. The solution shipped is **pre-generated aspect masks**: `generate-art.py`
+`gen_pills` emits `pill-<t|w>-a<ratioIdx>-r<level>` (8 ratios × 6 radii × 2 orientations = 96 masks,
+circular corners, 240/256 padding). Engine: `Skin:AspectMask(w,h)` picks the nearest aspect+orientation
+for a NON-square ALL-rounded shape (circle / corner-1111); `maskPlan`/`buildMask` build a fresh mask
+only when the plan changes (cache key `rec.maskKey`/`plate.maskKey`), else re-anchor. The mask spans
+the whole CONSTRUCTION (icon+extension), so a plated icon is one continuous pill. Square + mixed-corner
+shapes keep the plain per-corner masks untouched. Fast regen: `python3 tools/generate-art.py pills`.
+✅ QA'd on a full bar (round caps, straight sides, no ovalization; a couple of sizes).
+
+📌 NOW-VISIBLE follow-up (was backlog, now obvious on pills): the **state ring / cooldown sweep / proc
+glow overlays are still the base square art** (GROW_RATIO-anchored) → they read oval on a pill. Making
+them aspect-aware is the natural next masking task (they'd want the same aspect-mask or a shaped-art
+treatment). Also: nearest-aspect snapping (8 ratios) can slightly stretch caps at odd sizes → densify
+`PILL_RATIOS` if Jason notices.
+
+## ▶▶ NEXT (session 4) — in priority order
+1. **Overlays follow the pill/aspect** (state ring, cooldown sweep, proc glow, cast ring) — currently
+   square base art, visibly oval on non-square icons. Biggest visual gap now that pills exist.
 2. Wire the remaining stub sections: **Text** (keybind zone/anchor/nudge/font/size/color — the
    engine's `ApplyHotkeyOverride` exists; route it through `styleData.hotkey`), **Proc glow**
    (read Glows.lua first; tint/intensity/width → db), **Apply to bars** (per-bar enable).

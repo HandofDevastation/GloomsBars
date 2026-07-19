@@ -111,28 +111,29 @@ def ring_alpha(d):
 
 # --- PNG writer -------------------------------------------------------------
 
-def render(sdf, profile):
+def render(sdf, profile, W=SIZE, H=SIZE):
+    # sdf is evaluated in centered coordinates (origin at the canvas center).
     rows = []
-    for y in range(SIZE):
+    for y in range(H):
         row = bytearray([0])               # filter type 0 per scanline
-        for x in range(SIZE):
+        for x in range(W):
             acc = 0.0
             for sy in range(SS):
                 for sx in range(SS):
-                    px = (x * SS + sx + 0.5) / SS - 128.0
-                    py = (y * SS + sy + 0.5) / SS - 128.0
+                    px = (x * SS + sx + 0.5) / SS - W / 2.0
+                    py = (y * SS + sy + 0.5) / SS - H / 2.0
                     acc += profile(sdf(px, py))
             row += bytes((255, 255, 255, round(acc * 255 / (SS * SS))))
         rows.append(bytes(row))
     return rows
 
 
-def write_png(path, rows):
+def write_png(path, rows, W=SIZE, H=SIZE):
     def chunk(tag, data):
         return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
 
     png = b"\x89PNG\r\n\x1a\n"
-    png += chunk(b"IHDR", struct.pack(">IIBBBBB", SIZE, SIZE, 8, 6, 0, 0, 0))
+    png += chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 6, 0, 0, 0))
     png += chunk(b"IDAT", zlib.compress(b"".join(rows), 9))
     png += chunk(b"IEND", b"")
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -141,10 +142,52 @@ def write_png(path, rows):
     print("wrote", path)
 
 
+# --- aspect-correct pill / rounded-rect masks -------------------------------
+# The single square masks above OVALIZE when stretched onto a non-square icon
+# (docs/HANDOFF §1b). These are generated at a range of aspect ratios with
+# genuinely CIRCULAR corners, so the engine can pick the nearest aspect and
+# stretch it to the icon with the corners staying round — a clean pill at full
+# radius. Short axis = 128 texels (shape spans 120, 4px pad = the 240/256 rule);
+# long axis = 128 * ratio. Corner radius = RADII[level] * 60 (half the shape's
+# short side), so r5 == full semicircle caps == pill.
+PILL_SHORT = 128
+PILL_PAD_RATIO = 8 / 256          # keep the 240/256 edge-padding ratio on BOTH axes
+PILL_SHORT_HALF = PILL_SHORT / 2 * (1 - 2 * PILL_PAD_RATIO)   # 60: shape half-extent, short axis
+PILL_RATIOS = [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
+
+
+def sd_roundrect_wh(px, py, hw, hh, r):
+    # Centered rounded rect: half-width hw, half-height hh, circular corner radius r.
+    qx = abs(px) - (hw - r)
+    qy = abs(py) - (hh - r)
+    return math.hypot(max(qx, 0.0), max(qy, 0.0)) + min(max(qx, qy), 0.0) - r
+
+
+def gen_pills():
+    for ai, ratio in enumerate(PILL_RATIOS):
+        longd = round(PILL_SHORT * ratio)
+        long_half = longd / 2.0 * (1 - 2 * PILL_PAD_RATIO)   # per-axis padding → uniform 240/256
+        for lvl, frac in enumerate(RADII):
+            r = frac * PILL_SHORT_HALF              # r5 → 60 → semicircle caps
+            # Tall: short axis = width (128), long axis = height.
+            tall = lambda px, py, r=r, lh=long_half: sd_roundrect_wh(px, py, PILL_SHORT_HALF, lh, min(r, lh))
+            write_png(f"Media/masks/pill-t-a{ai}-r{lvl}.png",
+                      render(tall, mask_alpha, PILL_SHORT, longd), PILL_SHORT, longd)
+            # Wide: short axis = height (128), long axis = width (transpose).
+            wide = lambda px, py, r=r, lh=long_half: sd_roundrect_wh(px, py, lh, PILL_SHORT_HALF, min(r, lh))
+            write_png(f"Media/masks/pill-w-a{ai}-r{lvl}.png",
+                      render(wide, mask_alpha, longd, PILL_SHORT), longd, PILL_SHORT)
+
+
 if __name__ == "__main__":
-    for name, sdf in SHAPES.items():
-        write_png(f"Media/masks/{name}.png", render(sdf, mask_alpha))
-        write_png(f"Media/masks/{name}-swipe.png", render(sdf, swipe_alpha))
-        write_png(f"Media/art/{name}-ring.png", render(sdf, ring_alpha))
-        glow_sdf = lambda px, py, s=sdf: s(px, py, GLOW_EXTENT)
-        write_png(f"Media/art/{name}-glow.png", render(glow_sdf, glow_alpha))
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "pills":
+        gen_pills()   # fast: only the aspect masks, not the ~384 corner PNGs
+    else:
+        for name, sdf in SHAPES.items():
+            write_png(f"Media/masks/{name}.png", render(sdf, mask_alpha))
+            write_png(f"Media/masks/{name}-swipe.png", render(sdf, swipe_alpha))
+            write_png(f"Media/art/{name}-ring.png", render(sdf, ring_alpha))
+            glow_sdf = lambda px, py, s=sdf: s(px, py, GLOW_EXTENT)
+            write_png(f"Media/art/{name}-glow.png", render(glow_sdf, glow_alpha))
+        gen_pills()
