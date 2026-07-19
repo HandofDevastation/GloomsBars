@@ -206,6 +206,30 @@ local function ApplyButton(btn)
     StyleText(btn)
     rec.textStyled = true
   end
+  -- Shaped cast/channel fill: Blizzard clips the sliding CastFill with its
+  -- rounded-square FillMask and leaves InnerGlowTexture unmasked (square).
+  -- Replace with fresh per-texture shape masks (the proven-safe path — never
+  -- multi-attach one mask, never mutate Blizzard's). Blizzard re-sets these
+  -- textures' ATLASES per cast type (cast vs channel) but never their masks,
+  -- so one-time setup persists (API-NOTES §3).
+  if not rec.castStyled then
+    local fill = btn.SpellCastAnimFrame and btn.SpellCastAnimFrame.Fill
+    if fill then
+      local grow = icon:GetWidth() * GROW_RATIO
+      local function shapeClip(target, blizzMask)
+        if not target then return end
+        if blizzMask then target:RemoveMaskTexture(blizzMask) end
+        local m = fill:CreateMaskTexture()
+        m:SetTexture(GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        m:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
+        m:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
+        target:AddMaskTexture(m)
+      end
+      shapeClip(fill.CastFill, fill.FillMask)
+      shapeClip(fill.InnerGlowTexture)
+    end
+    rec.castStyled = true
+  end
   StyleAssistedFrame(btn)
   AlignCooldowns(btn)
   Suppress(btn)
