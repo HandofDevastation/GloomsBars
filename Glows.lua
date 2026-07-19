@@ -1,17 +1,20 @@
 -- Glows.lua — Gloom's Bars shaped proc glows (GB.Glows) — THE differentiator.
 --
--- Every other restyle addon leaves Blizzard's square proc glow (or a square
--- LibCustomGlow tracer) floating around shaped icons. We substitute our own
--- shape-matched halo, driven by Blizzard's OWN alert decisions — no secret
--- combat data is ever read.
+-- Every other restyle addon leaves Blizzard's square glow art floating around
+-- shaped icons. We substitute our own shape-matched halo, driven by Blizzard's
+-- OWN decisions — no secret combat data is ever read.
 --
--- Hook point (source-verified, docs/API-NOTES.md §3): the global table
--- ActionButtonSpellAlertManager routes ALL spell alerts — gold procs, the
--- blue assisted highlight (ProcAltGlow "downgrade"), and the one-button
--- rotation variant — through :ShowAlert(btn)/:HideAlert(btn). Alert frames
--- are per-button (btn.SpellActivationAlert, created on demand, never pooled).
--- We post-hook the manager, alpha-0 Blizzard's alert frame (Show/Hide cycles
--- never touch alpha — proven pattern), and drive our own glow.
+-- Blizzard has THREE glow mechanisms (all source-verified, API-NOTES §3):
+--   1. Spell alerts (gold procs + variants) — ActionButtonSpellAlertManager
+--      :ShowAlert/:HideAlert, per-button frames (btn.SpellActivationAlert).
+--   2. The assisted HIGHLIGHT — AssistedCombatManager
+--      :SetAssistedHighlightFrameShown(btn, shown) parenting a 66×66 blue
+--      "marching ants" flipbook (btn.AssistedCombatHighlightFrame; anim only
+--      plays IN COMBAT — frozen single frame out of combat).
+--   3. The rotation-helper ActiveFrame (only when the one-button rotation
+--      feature is on) — reskinned separately in Skin.lua.
+-- We post-hook 1 and 2, alpha-0 Blizzard's frames (Show/Hide cycles never
+-- touch alpha — proven pattern), and drive one shaped halo per button.
 
 local GB = _G.GloomsBars
 
@@ -29,7 +32,8 @@ local TINT = {
 }
 
 local glows = {}      -- [button] = { frame, tex, anim }
-local silenced = {}   -- [alertFrame] = true — Blizzard alerts we alpha-0'd
+local sources = {}    -- [button] = { alert = "gold"|"assist"|nil, assist = true|nil }
+local silenced = {}   -- [blizzard frame] = true — frames we alpha-0'd
 
 local function GetGlow(btn)
   local icon = btn.icon or btn.Icon
@@ -58,71 +62,96 @@ local function GetGlow(btn)
   return g
 end
 
+local function Silence(frame)
+  if frame and not silenced[frame] then
+    frame:SetAlpha(0)
+    silenced[frame] = true
+  end
+end
+
 local function BlizzAlertFor(btn)
   return btn.SpellActivationAlert
     or (btn.AssistedCombatRotationFrame and btn.AssistedCombatRotationFrame.SpellActivationAlert)
 end
 
-local function SilenceBlizzAlert(btn)
-  local alert = BlizzAlertFor(btn)
-  if alert and not silenced[alert] then
-    alert:SetAlpha(0)
-    silenced[alert] = true
-  end
-end
-
-local function ShowOurGlow(btn)
+-- One shaped halo per button; sources (alert / assist highlight) set flags and
+-- this reconciles visibility + tint. Assist blue wins when both are active
+-- (mirrors Blizzard's own downgrade logic).
+local function Refresh(btn)
+  local s = sources[btn]
   local g = GetGlow(btn)
   if not g then return end
-  local alert = BlizzAlertFor(btn)
-  local _, alertType = ActionButtonSpellAlertManager:HasAlert(btn)
-  local isAssist = (alertType == ActionButtonSpellAlertManager.SpellAlertType.AssistedCombatRotation)
-    or (alert and alert.ProcAltGlow and alert.ProcAltGlow.IsShown and alert.ProcAltGlow:IsShown())
-  local tint = isAssist and TINT.assist or TINT.gold
-  g.tex:SetVertexColor(tint[1], tint[2], tint[3])
-  if not g.frame:IsShown() then
-    g.frame:Show()
-    g.anim:Play()
-  end
-end
-
-local function HideOurGlow(btn)
-  local g = glows[btn]
-  if g and g.frame:IsShown() then
+  local tintKey = s and (s.assist and "assist" or s.alert) or nil
+  if tintKey then
+    local tint = TINT[tintKey] or TINT.gold
+    g.tex:SetVertexColor(tint[1], tint[2], tint[3])
+    if not g.frame:IsShown() then
+      g.frame:Show()
+      g.anim:Play()
+    end
+  elseif g.frame:IsShown() then
     g.anim:Stop()
     g.frame:Hide()
   end
 end
 
+local function SetSource(btn, key, value)
+  local s = sources[btn]
+  if not s then s = {}; sources[btn] = s end
+  s[key] = value or nil
+  Refresh(btn)
+end
+
 function Glows:Init()
-  if self.hooked or not ActionButtonSpellAlertManager then return end
+  if self.hooked then return end
+  local alertMgr = ActionButtonSpellAlertManager
+  local assistMgr = AssistedCombatManager
+  if not alertMgr then return end
   self.hooked = true
-  hooksecurefunc(ActionButtonSpellAlertManager, "ShowAlert", function(_, btn)
+  hooksecurefunc(alertMgr, "ShowAlert", function(_, btn)
     if not Glows.enabled then return end
-    SilenceBlizzAlert(btn)   -- frame exists now: ShowAlert just created it
-    ShowOurGlow(btn)
+    Silence(BlizzAlertFor(btn))   -- frame exists now: ShowAlert just created it
+    local _, alertType = alertMgr:HasAlert(btn)
+    local isAssistType = alertType == alertMgr.SpellAlertType.AssistedCombatRotation
+    SetSource(btn, "alert", isAssistType and "assist" or "gold")
   end)
-  hooksecurefunc(ActionButtonSpellAlertManager, "HideAlert", function(_, btn)
+  hooksecurefunc(alertMgr, "HideAlert", function(_, btn)
     if not Glows.enabled then return end
-    HideOurGlow(btn)
+    SetSource(btn, "alert", nil)
   end)
+  if assistMgr and assistMgr.SetAssistedHighlightFrameShown then
+    hooksecurefunc(assistMgr, "SetAssistedHighlightFrameShown", function(_, btn, shown)
+      if not Glows.enabled then return end
+      Silence(btn.AssistedCombatHighlightFrame)
+      SetSource(btn, "assist", shown and true or nil)
+    end)
+  end
 end
 
 function Glows:SetEnabled(on)
   self:Init()
   self.enabled = on
-  if not ActionButtonSpellAlertManager then return end
   if on then
-    -- Adopt alerts already active at enable time.
+    -- Adopt glow state already active at enable time.
     GB:ForEachButton(function(btn)
-      if ActionButtonSpellAlertManager:HasAlert(btn) then
-        SilenceBlizzAlert(btn)
-        ShowOurGlow(btn)
+      if ActionButtonSpellAlertManager and select(1, ActionButtonSpellAlertManager:HasAlert(btn)) then
+        Silence(BlizzAlertFor(btn))
+        local _, alertType = ActionButtonSpellAlertManager:HasAlert(btn)
+        local isAssistType = alertType == ActionButtonSpellAlertManager.SpellAlertType.AssistedCombatRotation
+        SetSource(btn, "alert", isAssistType and "assist" or "gold")
+      end
+      local hf = btn.AssistedCombatHighlightFrame
+      if hf then
+        Silence(hf)
+        SetSource(btn, "assist", hf:IsShown() and true or nil)
       end
     end)
   else
-    for alert in pairs(silenced) do alert:SetAlpha(1) end
+    for frame in pairs(silenced) do frame:SetAlpha(1) end
     wipe(silenced)
-    for btn in pairs(glows) do HideOurGlow(btn) end
+    for btn in pairs(sources) do
+      sources[btn] = nil
+      Refresh(btn)
+    end
   end
 end
