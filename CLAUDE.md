@@ -41,10 +41,16 @@ Hard walls (from [docs/SPEC.md](docs/SPEC.md)):
 
 ## Files
 - `GloomsBars.toc` — manifest (Interface 120007).
-- `Core.lua` — namespace, tokens, saved vars, bar/button census (`GB.BARS`, `GB:ForEachButton`), `/gb` router + probes.
-- `Skin.lua` — GB.Skin engine v0: zoom+mask+art-suppression across all 8 bars, re-assert hooks, persisted toggle.
-- `Media/masks/` — bundled mask PNGs (script-generated; edge-padding rule in API-NOTES §2).
-- (Later phases) `Glows.lua`, `Cooldowns.lua`, `Config.lua`.
+- `Core.lua` — namespace, design tokens, `GB.SHAPES` (shape registry) + `GB.STYLES`
+  (style recipes — scaffolding; real styles will be user-authored data), saved vars,
+  `GB.BARS`/`GB:ForEachButton`, `/gb` router + diagnostic probes.
+- `Skin.lua` — GB.Skin: skin engine (zoom/mask/art-suppression, cooldown sweeps, state
+  art, cast/channel shaping, re-assert hooks) + the decoration/construction engine.
+- `Glows.lua` — GB.Glows: shape-matched proc glow engine (hooks all three Blizzard glow
+  mechanisms; THE differentiator).
+- `Media/masks/`, `Media/art/` — generated per-shape art; `tools/generate-art.py`
+  regenerates everything (SDF-based; edge-padding rule in API-NOTES §2).
+- (Next phase) `Config.lua` — the style editor.
 
 ## Testing workflow
 The repo root **is** the addon folder, symlinked into the client at
