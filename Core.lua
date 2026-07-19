@@ -46,15 +46,30 @@ GB.COLOR = {
 }
 
 GB.MEDIA = "Interface\\AddOns\\" .. ADDON_NAME .. "\\Media\\"
--- Bundled mask shapes (own PNGs — see API-NOTES §2: scalable atlases like
--- CircleMaskScalable flatten when stretched; bundled art is the production path).
-GB.MASK = {
-  circle = GB.MEDIA .. "masks\\circle.png",
-  circleSwipe = GB.MEDIA .. "masks\\circle-swipe.png",   -- 0.8-alpha fill for cooldown sweeps
+
+-- ---------------------------------------------------------------------------
+-- Shape registry — the skin engine is SHAPE-AGNOSTIC (Jason's requirement:
+-- flexibility on icon shape/size/aspect). Every shape is a data entry whose
+-- three PNGs come from tools/generate-art.py (bundled art, edge-padded — see
+-- API-NOTES §2). Selected via GB.db.shape (/gb shape <name>; applies on
+-- /reload — live-swapping masks trips the no-re-render quirk). Future:
+-- per-bar shapes, aspect-ratio letterbox entries (3:2), §B size/gap fork.
+-- ---------------------------------------------------------------------------
+local function shape(name)
+  return {
+    mask  = GB.MEDIA .. "masks\\" .. name .. ".png",
+    swipe = GB.MEDIA .. "masks\\" .. name .. "-swipe.png",
+    ring  = GB.MEDIA .. "art\\" .. name .. "-ring.png",
+  }
+end
+GB.SHAPES = {
+  circle = shape("circle"),
+  roundrect = shape("roundrect"),
 }
-GB.ART = {
-  ring = GB.MEDIA .. "art\\ring-glow.png",   -- soft round state glow (white; tint via vertex color)
-}
+
+function GB:GetShape()
+  return GB.SHAPES[(GB.db and GB.db.shape) or "circle"] or GB.SHAPES.circle
+end
 local FONT_DIR = GB.MEDIA .. "fonts\\"
 GB.FONT = {
   title = FONT_DIR .. "Khand-SemiBold.ttf",
@@ -119,6 +134,7 @@ end
 -- ---------------------------------------------------------------------------
 local DB_DEFAULTS = {
   schema = 1,
+  shape = "circle",        -- key into GB.SHAPES
   sweepOvershoot = 0.75,   -- px the cooldown sweep extends past the icon circle
 }
 
@@ -213,7 +229,7 @@ local function ToggleMaskProbe()
   tex:SetAllPoints()
   tex:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
   local mask = frame:CreateMaskTexture()
-  mask:SetTexture(GB.MASK.circle, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+  mask:SetTexture(GB.SHAPES.circle.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
   mask:SetAllPoints(tex)
   tex:AddMaskTexture(mask)
   standaloneProbe = frame
@@ -279,7 +295,7 @@ local function ToggleRoundProbe()
     roundProbe.mask = b:CreateMaskTexture()
     -- Bundled PNG, not CircleMaskScalable: the scalable atlas 9-slices when
     -- stretched → flattened cardinal edges (observed twice in QA).
-    roundProbe.mask:SetTexture(GB.MASK.circle, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    roundProbe.mask:SetTexture(GB.SHAPES.circle.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
     -- The circle art is padded to radius 240/256 of the canvas (transparent
     -- margin defeats edge-clamp filtering bleed — the blurred-flat-tangents
     -- artifact). Oversize the mask region by 256/240 so the circle itself
@@ -340,10 +356,22 @@ SlashCmdList.GLOOMSBARS = function(input)
     GB.Skin:Toggle()
   elseif cmd == "sweep" then
     GB.Skin:SetSweepOvershoot(tonumber(arg))
+  elseif cmd == "shape" then
+    if arg ~= "" and GB.SHAPES[arg] then
+      GB.db.shape = arg
+      msg(("shape set to '%s' — /reload to apply."):format(arg))
+    else
+      local names = {}
+      for name in pairs(GB.SHAPES) do names[#names + 1] = name end
+      table.sort(names)
+      msg(("shape is '%s'. Available: %s (usage: /gb shape roundrect, then /reload)")
+        :format(GB.db.shape or "circle", table.concat(names, ", ")))
+    end
   else
     msg("v" .. GB:Version() .. " — commands:")
-    print("  /gb skin — toggle the round skin on all 8 action bars (persists)")
-    print("  /gb sweep <px> — tune how far the cooldown sweep overshoots the icon circle")
+    print("  /gb skin — toggle the skin on all 8 action bars (persists)")
+    print("  /gb shape <name> — pick the icon shape (circle, roundrect, …); applies on /reload")
+    print("  /gb sweep <px> — tune how far the cooldown sweep overshoots the icon edge")
     print("  /gb debug — census of action bar buttons + regions")
     print("  /gb mask — toggle the standalone MaskTexture render probe (screen center)")
     print("  /gb maskinfo — inspect ActionButton1's icon/mask wiring")

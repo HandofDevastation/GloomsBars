@@ -51,7 +51,7 @@ local function StyleAssistedFrame(btn)
   if not icon then return end
   local grow = icon:GetWidth() * GROW_RATIO
   if active.Border then
-    active.Border:SetTexture(GB.ART.ring)
+    active.Border:SetTexture(GB:GetShape().ring)
     active.Border:SetVertexColor(unpack(STATE_TINT.assist))
     active.Border:ClearAllPoints()
     active.Border:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
@@ -111,7 +111,7 @@ local function ApplyButton(btn)
     rec = {}
     records[btn] = rec
     rec.mask = btn:CreateMaskTexture()
-    rec.mask:SetTexture(GB.MASK.circle, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    rec.mask:SetTexture(GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
     local grow = icon:GetWidth() * GROW_RATIO
     rec.mask:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
     rec.mask:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
@@ -147,20 +147,20 @@ local function ApplyButton(btn)
       tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
     end
     if btn.SetHighlightTexture and btn.GetHighlightTexture then
-      btn:SetHighlightTexture(GB.ART.ring, "ADD")
+      btn:SetHighlightTexture(GB:GetShape().ring, "ADD")
       local hl = btn:GetHighlightTexture()
       hl:SetVertexColor(unpack(STATE_TINT.highlight))
       fit(hl)
     end
     if btn.SetCheckedTexture and btn.GetCheckedTexture then
-      btn:SetCheckedTexture(GB.ART.ring)
+      btn:SetCheckedTexture(GB:GetShape().ring)
       local ct = btn:GetCheckedTexture()
       ct:SetBlendMode("ADD")
       ct:SetVertexColor(unpack(STATE_TINT.checked))
       fit(ct)
     end
     if btn.Flash then
-      btn.Flash:SetTexture(GB.ART.ring)
+      btn.Flash:SetTexture(GB:GetShape().ring)
       btn.Flash:SetVertexColor(unpack(STATE_TINT.flash))
       fit(btn.Flash)
     end
@@ -173,7 +173,7 @@ local function ApplyButton(btn)
   if not rec.cooldownStyled then
     for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
       if cd and cd.SetSwipeTexture then
-        cd:SetSwipeTexture(GB.MASK.circleSwipe)
+        cd:SetSwipeTexture(GB:GetShape().swipe)
         -- The rotating edge line + finish bling are drawn to the SQUARE frame
         -- bounds and poke past a round sweep — off for the clean look.
         if cd.SetDrawEdge then cd:SetDrawEdge(false) end

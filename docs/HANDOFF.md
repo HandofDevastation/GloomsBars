@@ -114,15 +114,27 @@ before touching mask/skin code.
    tinted: gold hover / blue checked / red flash). Hover confirmed round in-game.
    **📌 PINNED (Jason): state glows are dimmer than default — color/opacity/intensity
    must become user controls in the Config UI phase.**
-7. ✅ Built (QA pending): **assisted-rotation reskin** — the persistent blue square =
-   `AssistedCombatRotationFrame.ActiveFrame` (`UI-HUD-RotationHelper-Active` Border +
-   rotating FX). Border → our ring (assist-blue), FX alpha 0; lazy creation hooked
-   via per-button `UpdateAssistedCombatRotationFrame`. QA: round blue ring on the
-   suggested ability?
-8. Next build steps: text styling (fonts stick per §3; colors need hooks), shaped
+7. ⚠ REVISED (2026-07-18): the persistent blue square is **NOT** the rotation-helper
+   frame — Jason disabled the rotation assistant and the glow REMAINED. Source says
+   it's the **assisted highlight**, rendered by `ActionButtonSpellAlertManager`
+   (`Shared/ActionButtonSpellAlerts.lua`) — the SAME system as gold proc glows, just
+   with blue `OneButton_Proc*_Flipbook` atlases + alt-glow logic. **It gets
+   shape-matched for free in the glow phase** (one manager hook covers procs AND the
+   assist highlight). The `StyleAssistedFrame` reskin code stays (styles the
+   rotation-helper frame if Jason re-enables that feature; QA deferred).
+8. **FLEXIBILITY ARCHITECTURE (Jason's explicit requirement 2026-07-18 — do not
+   regress):** the engine must stay flexible on icon shape/size/aspect; circle was
+   only the proving ground. Now codified: `GB.SHAPES` registry (each shape = mask +
+   swipe + ring PNGs), art generated reproducibly by `tools/generate-art.py` (adding
+   a signed-distance function = a new shape), selected via `GB.db.shape` /
+   `/gb shape <name>` (applies on /reload — live mask swap trips the no-re-render
+   quirk). Shipped: `circle`, `roundrect`. Roadmap: aspect-ratio letterbox entries
+   (3:2 = shape art + texcoord math, still pure-skin), per-bar shape selection in the
+   Config UI, size/gaps = the §B geometry fork (still optional/later).
+9. Next build steps: text styling (fonts stick per §3; colors need hooks), shaped
    cast/channel overlay frames (`SpellCastAnimFrame` etc.), then the glow phase
-   (manager hook + shaped glow art).
-5. Sometime: test WoWUp install-from-URL **on another machine** (NOT Jason's dev
+   (manager hook + shaped glow art — gold procs AND blue assist highlight).
+10. Sometime: test WoWUp install-from-URL **on another machine** (NOT Jason's dev
    machine — WoWUp would clobber the dev symlink).
 2. Then Phase 2 (skin engine v0): read the client's `Blizzard_ActionBar*` /
    `ActionButtonTemplate` source for hook points (gate 5) — we now know the exact

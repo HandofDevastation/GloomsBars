@@ -19,3 +19,4 @@ ignore:
   - .gitignore
   - .pkgmeta
   - docs
+  - tools
