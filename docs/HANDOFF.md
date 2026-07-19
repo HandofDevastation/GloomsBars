@@ -201,6 +201,12 @@ Accumulate every ad-hoc control here:
 - **2026-07-18: Jason's client runs ArcUI** (+ StoneTweaks, VibeOverlay, BugSack). ArcUI
   restyles action bars — a QA confound and a coexistence question for the product itself
   (icon overdraw ruled out; keybind text styling etc. still ArcUI's).
+- **2026-07-18: Jason's HotKey text is owned by Platynator** (keybind-styling addon:
+  Lato @ 16 thick-outline, green, "s-R"-style modifier abbreviations — verified via
+  `/gb fontinfo`; earlier ArcUI attribution was wrong). Our font swap on `.Count` and
+  `.Name` VERIFIED working in-game. Decision: coexist — Platynator keeps hotkeys until
+  our text phase ships full controls (font/size/color/position + consider absorbing
+  modifier abbreviations as a feature); then Jason disables Platynator's styling.
 - **2026-07-18: The `EQOL_ActionBarName` foreign member = EnhanceQoL** (UI-tweak suite).
   Its **"Hide action button borders" toggle was ON during all session-1 probes** — so the
   "default" baseline we observed had `NormalTexture` border art already suppressed by
