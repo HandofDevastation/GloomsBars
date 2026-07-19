@@ -89,7 +89,9 @@ GB.STYLES = {
   plate = {
     construction = { extendBottomPct = 0.40 },   -- extension height, % of icon height
     layers = {
-      { kind = "gradient", zone = "extension", bleedPct = 0.45,
+      -- Figma reference (2026-07-18): fade begins at the icon's vertical
+      -- midpoint (bleedPct 0.5), full opacity at its bottom edge, solid below.
+      { kind = "gradient", zone = "extension", bleedPct = 0.5,
         color = { 1, 0.47, 0.16 }, fromAlpha = 1, toAlpha = 0 },
     },
     hotkey = {
