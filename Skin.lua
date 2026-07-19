@@ -152,44 +152,58 @@ local function ApplyDecor(btn)
   -- read as one continuous shape. (Anchor edits on a live mask: verified-by-QA
   -- pending; /reload applies pre-render and is always exact.)
   AnchorConstructionMask(rec.mask, icon, ext)
+  local function getPlate(idx)
+    local plate = rec.plates[idx]
+    if not plate then
+      rec.decorFrame = rec.decorFrame or CreateFrame("Frame", nil, btn)
+      rec.decorFrame:SetAllPoints(icon)
+      rec.decorFrame:SetFrameLevel(btn:GetFrameLevel() + 2)
+      local tex = rec.decorFrame:CreateTexture(nil, "ARTWORK")
+      -- A white texture FILE, not SetColorTexture: masks don't clip
+      -- solid-color textures (QA 2026-07-18 — square plate corners).
+      tex:SetTexture("Interface\\Buttons\\WHITE8X8")
+      local mask = rec.decorFrame:CreateMaskTexture()
+      mask:SetTexture(GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+      tex:AddMaskTexture(mask)
+      plate = { tex = tex, mask = mask }
+      rec.plates[idx] = plate
+    end
+    AnchorConstructionMask(plate.mask, icon, ext)
+    plate.tex:ClearAllPoints()
+    return plate
+  end
   local used = 0
   for i, layer in ipairs(style.layers or {}) do
     if layer.kind == "gradient" then
-      used = used + 1
-      local plate = rec.plates[used]
-      if not plate then
-        rec.decorFrame = rec.decorFrame or CreateFrame("Frame", nil, btn)
-        rec.decorFrame:SetAllPoints(icon)
-        rec.decorFrame:SetFrameLevel(btn:GetFrameLevel() + 2)
-        local tex = rec.decorFrame:CreateTexture(nil, "ARTWORK")
-        -- A white texture FILE, not SetColorTexture: masks don't clip
-        -- solid-color textures (QA 2026-07-18 — square plate corners).
-        tex:SetTexture("Interface\\Buttons\\WHITE8X8")
-        local mask = rec.decorFrame:CreateMaskTexture()
-        mask:SetTexture(GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-        tex:AddMaskTexture(mask)
-        plate = { tex = tex, mask = mask }
-        rec.plates[used] = plate
-      end
-      AnchorConstructionMask(plate.mask, icon, ext)
-      local tex = plate.tex
-      tex:ClearAllPoints()
       local c = layer.color or { 1, 1, 1 }
       local fromA, toA = layer.fromAlpha or 1, layer.toAlpha or 0
       if layer.zone == "extension" and ext > 0 then
-        -- Fill the extension below the icon, bleeding up into the icon's
-        -- bottom edge so the gradient fades across the boundary (mockup).
-        tex:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, -ext)
-        tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, -ext)
-        tex:SetHeight(ext + icon:GetHeight() * (layer.bleedPct or 0.4))
+        -- Mock-matched (QA 2026-07-18): the extension is FULL opacity all the
+        -- way to the icon's bottom edge; the fade lives INSIDE the icon.
+        used = used + 1
+        local solid = getPlate(used)
+        solid.tex:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, -ext)
+        solid.tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, -ext)
+        solid.tex:SetHeight(ext)
+        solid.tex:SetGradient("VERTICAL", CreateColor(c[1], c[2], c[3], fromA), CreateColor(c[1], c[2], c[3], fromA))
+        solid.tex:Show()
+        used = used + 1
+        local fade = getPlate(used)
+        fade.tex:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, 0)
+        fade.tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
+        fade.tex:SetHeight(icon:GetHeight() * (layer.bleedPct or 0.4))
+        fade.tex:SetGradient("VERTICAL", CreateColor(c[1], c[2], c[3], fromA), CreateColor(c[1], c[2], c[3], toA))
+        fade.tex:Show()
       else
-        tex:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, 0)
-        tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
-        tex:SetHeight(icon:GetHeight() * (layer.sizePct or 0.4))
+        used = used + 1
+        local plate = getPlate(used)
+        plate.tex:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, 0)
+        plate.tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
+        plate.tex:SetHeight(icon:GetHeight() * (layer.sizePct or 0.4))
+        -- VERTICAL gradient: min color = bottom, max color = top.
+        plate.tex:SetGradient("VERTICAL", CreateColor(c[1], c[2], c[3], fromA), CreateColor(c[1], c[2], c[3], toA))
+        plate.tex:Show()
       end
-      -- VERTICAL gradient: min color = bottom, max color = top.
-      tex:SetGradient("VERTICAL", CreateColor(c[1], c[2], c[3], fromA), CreateColor(c[1], c[2], c[3], toA))
-      tex:Show()
     end
   end
   for i = used + 1, #rec.plates do rec.plates[i].tex:Hide() end
