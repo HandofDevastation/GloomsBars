@@ -155,7 +155,17 @@ before touching mask/skin code.
     drain (`CastFill`, mask swap), inner glow (art replacement via
     `PlaySpellCastAnim` hook, lime/gold, `RING_FIT` sizing so the rim lands on the
     icon edge), and `EndBurst` end flash (mask swap). All three follow the shape.
-13. Next build steps: decoration layers (the north star), text controls, Config UI.
+13. ✅ Built (QA pending): **DECORATION ENGINE v0 (the north star)** — `GB.STYLES`
+    recipes (data) interpreted by Skin.lua: pooled gradient plates (native
+    `SetGradient`, fresh per-plate shape masks — safe path), HotKey override
+    (position on a layer / font / size / color, re-asserted via per-button
+    `UpdateHotkeys` hook, text container raised above plates). `/gb style <name>`
+    switches LIVE, persisted. Shipped recipes: `none`, `plate` (Jason's mockup:
+    orange bottom gradient + centered white bold keybind). QA: `/gb style plate` —
+    does it look like the mockup? Note best-effort revert (`/gb style none`);
+    /reload = exact.
+14. Next build steps: more layer kinds (borders, badges, top plates), per-style
+    Count/Name overrides, text controls, then the Config UI over the recipes.
 10. ✅ QA'd (2026-07-18): `/gb shape roundrect` + /reload → all 8 bars rounded-rects.
     The shape registry is proven end-to-end.
 

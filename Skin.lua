@@ -88,6 +88,98 @@ local function Suppress(btn)
   if btn.PushedTexture then btn.PushedTexture:SetAlpha(0) end
 end
 
+-- ---------------------------------------------------------------------------
+-- Decoration engine — interprets GB.STYLES recipes (the design north star).
+-- Plates are pooled per button (textures can't be destroyed, only reused) and
+-- clipped by fresh per-plate shape masks (our-own-texture + fresh-mask = the
+-- provably safe path). The HotKey override re-asserts via an UpdateHotkeys
+-- post-hook (Blizzard re-anchors it top-right on every update).
+-- ---------------------------------------------------------------------------
+local function ApplyHotkeyOverride(btn)
+  local rec = records[btn]
+  local hk = btn.HotKey
+  local icon = btn.icon or btn.Icon
+  if not (rec and hk and icon) then return end
+  local conf = GB:GetStyle().hotkey
+  if not conf then
+    if rec.hkOverridden then
+      -- Best-effort revert: Blizzard restores anchors/size; /reload is exact.
+      rec.hkOverridden = nil
+      hk:SetJustifyH("RIGHT")
+      if btn.UpdateHotkeys then btn:UpdateHotkeys(btn.buttonType) end
+    end
+    return
+  end
+  local target = (conf.layer and rec.plates and rec.plates[conf.layer] and rec.plates[conf.layer].tex) or icon
+  hk:ClearAllPoints()
+  hk:SetPoint("CENTER", target, "CENTER", conf.offsetX or 0, conf.offsetY or 0)
+  hk:SetSize(icon:GetWidth(), (conf.size or 13) + 4)
+  hk:SetJustifyH("CENTER")
+  hk:SetFont(GB.FONT[conf.font or "label"], conf.size or 13, conf.flags or "OUTLINE")
+  if conf.color then hk:SetTextColor(unpack(conf.color)) end
+  rec.hkOverridden = true
+end
+
+local function ApplyDecor(btn)
+  local rec = records[btn]
+  local icon = btn.icon or btn.Icon
+  if not (rec and icon) then return end
+  local style = GB:GetStyle()
+  rec.plates = rec.plates or {}
+  local grow = icon:GetWidth() * GROW_RATIO
+  local used = 0
+  for i, layer in ipairs(style.layers or {}) do
+    if layer.kind == "gradient" then
+      used = used + 1
+      local plate = rec.plates[used]
+      if not plate then
+        rec.decorFrame = rec.decorFrame or CreateFrame("Frame", nil, btn)
+        rec.decorFrame:SetAllPoints(icon)
+        rec.decorFrame:SetFrameLevel(btn:GetFrameLevel() + 2)
+        local tex = rec.decorFrame:CreateTexture(nil, "ARTWORK")
+        local mask = rec.decorFrame:CreateMaskTexture()
+        mask:SetTexture(GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        mask:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
+        mask:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
+        tex:AddMaskTexture(mask)
+        plate = { tex = tex, mask = mask }
+        rec.plates[used] = plate
+      end
+      local tex = plate.tex
+      tex:SetColorTexture(1, 1, 1, 1)
+      tex:ClearAllPoints()
+      local c = layer.color or { 1, 1, 1 }
+      local fromA, toA = layer.fromAlpha or 1, layer.toAlpha or 0
+      if layer.side == "TOP" then
+        tex:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0)
+        tex:SetPoint("TOPRIGHT", icon, "TOPRIGHT", 0, 0)
+        tex:SetHeight(icon:GetHeight() * (layer.sizePct or 0.4))
+        tex:SetGradient("VERTICAL", CreateColor(c[1], c[2], c[3], toA), CreateColor(c[1], c[2], c[3], fromA))
+      else -- BOTTOM
+        tex:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, 0)
+        tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
+        tex:SetHeight(icon:GetHeight() * (layer.sizePct or 0.4))
+        -- VERTICAL gradient: min color = bottom, max color = top.
+        tex:SetGradient("VERTICAL", CreateColor(c[1], c[2], c[3], fromA), CreateColor(c[1], c[2], c[3], toA))
+      end
+      tex:Show()
+    end
+  end
+  for i = used + 1, #rec.plates do rec.plates[i].tex:Hide() end
+  -- Text must render above plates: raise Blizzard's text container once.
+  if btn.TextOverlayContainer then
+    btn.TextOverlayContainer:SetFrameLevel(btn:GetFrameLevel() + 4)
+  end
+  ApplyHotkeyOverride(btn)
+end
+
+function Skin:ReapplyDecor()
+  if not self.enabled then return end
+  GB:ForEachButton(function(btn)
+    if records[btn] and records[btn].active then ApplyDecor(btn) end
+  end)
+end
+
 -- The cast/channel InnerGlowTexture can't be masked at runtime (see
 -- ApplyButton), so its square art is REPLACED with our shaped ring on every
 -- cast start — Blizzard re-sets its atlas per cast type inside
@@ -180,6 +272,13 @@ local function ApplyButton(btn)
         if Skin.enabled then StyleCastInnerGlow(b, castType) end
       end)
     end
+    if btn.UpdateHotkeys then
+      hooksecurefunc(btn, "UpdateHotkeys", function(b)
+        if Skin.enabled and records[b] and records[b].hkOverridden then
+          ApplyHotkeyOverride(b)
+        end
+      end)
+    end
   end
   if btn.IconMask then
     icon:RemoveMaskTexture(btn.IconMask)
@@ -270,6 +369,7 @@ local function ApplyButton(btn)
   AlignCooldowns(btn)
   Suppress(btn)
   rec.active = true
+  ApplyDecor(btn)
 end
 
 local function RestoreButton(btn)
@@ -284,6 +384,14 @@ local function RestoreButton(btn)
   if rec.texCoord then icon:SetTexCoord(unpack(rec.texCoord)) end
   if btn.NormalTexture then btn.NormalTexture:SetAlpha(1) end
   if btn.PushedTexture then btn.PushedTexture:SetAlpha(1) end
+  if rec.plates then
+    for _, plate in ipairs(rec.plates) do plate.tex:Hide() end
+  end
+  if rec.hkOverridden then
+    rec.hkOverridden = nil
+    btn.HotKey:SetJustifyH("RIGHT")
+    if btn.UpdateHotkeys then btn:UpdateHotkeys(btn.buttonType) end
+  end
   rec.active = false
   -- Blizzard restores correct slot-art state itself (branching on the bar's
   -- Edit-Mode hide-bar-art setting).

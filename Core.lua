@@ -72,6 +72,34 @@ GB.SHAPES = {
 function GB:GetShape()
   return GB.SHAPES[(GB.db and GB.db.shape) or "circle"] or GB.SHAPES.circle
 end
+
+-- ---------------------------------------------------------------------------
+-- Style recipes — the DESIGN NORTH STAR (docs/HANDOFF.md): a style is DATA
+-- (decoration layers + text overrides); the engine in Skin.lua interprets it.
+-- v0 supports layer kind "gradient" (a shape-clipped gradient plate) and a
+-- HotKey override (position on a layer, font/size/color). The Config UI will
+-- eventually edit these recipes; /gb style <name> switches live meanwhile.
+-- ---------------------------------------------------------------------------
+GB.STYLES = {
+  none = {},
+  -- Jason's mockup (2026-07-18): orange gradient plate over the icon's bottom,
+  -- keybind bold white centered ON the plate.
+  plate = {
+    layers = {
+      { kind = "gradient", side = "BOTTOM", sizePct = 0.42,
+        color = { 1, 0.47, 0.16 }, fromAlpha = 1, toAlpha = 0 },
+    },
+    hotkey = {
+      layer = 1, offsetY = 0,
+      font = "label", size = 13, flags = "OUTLINE",
+      color = { 1, 1, 1 },
+    },
+  },
+}
+
+function GB:GetStyle()
+  return GB.STYLES[(GB.db and GB.db.style) or "none"] or GB.STYLES.none
+end
 local FONT_DIR = GB.MEDIA .. "fonts\\"
 GB.FONT = {
   title = FONT_DIR .. "Khand-SemiBold.ttf",
@@ -137,6 +165,7 @@ end
 local DB_DEFAULTS = {
   schema = 1,
   shape = "circle",        -- key into GB.SHAPES
+  style = "none",          -- key into GB.STYLES
   sweepOvershoot = 0.75,   -- px the cooldown sweep extends past the icon circle
 }
 
@@ -423,10 +452,24 @@ SlashCmdList.GLOOMSBARS = function(input)
       msg(("shape is '%s'. Available: %s (usage: /gb shape roundrect, then /reload)")
         :format(GB.db.shape or "circle", table.concat(names, ", ")))
     end
+  elseif cmd == "style" then
+    if arg ~= "" and GB.STYLES[arg] then
+      GB.db.style = arg
+      if GB.Skin and GB.Skin.enabled then GB.Skin:ReapplyDecor() end
+      msg(("style set to '%s'%s."):format(arg,
+        (GB.Skin and GB.Skin.enabled) and " — applied live" or " (enable the skin to see it)"))
+    else
+      local names = {}
+      for name in pairs(GB.STYLES) do names[#names + 1] = name end
+      table.sort(names)
+      msg(("style is '%s'. Available: %s (usage: /gb style plate)")
+        :format(GB.db.style or "none", table.concat(names, ", ")))
+    end
   else
     msg("v" .. GB:Version() .. " — commands:")
     print("  /gb skin — toggle the skin on all 8 action bars (persists)")
     print("  /gb shape <name> — pick the icon shape (circle, roundrect, …); applies on /reload")
+    print("  /gb style <name> — pick a decoration style (none, plate, …); applies live")
     print("  /gb sweep <px> — tune how far the cooldown sweep overshoots the icon edge")
     print("  /gb debug — census of action bar buttons + regions")
     print("  /gb mask — toggle the standalone MaskTexture render probe (screen center)")
