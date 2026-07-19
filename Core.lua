@@ -66,6 +66,7 @@ end
 GB.SHAPES = {
   circle = shape("circle"),
   roundrect = shape("roundrect"),
+  square = shape("square"),
 }
 
 function GB:GetShape()

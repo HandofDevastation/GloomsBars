@@ -53,7 +53,7 @@ baked shape-matched glow art + MaskTexture clipping, triggered by Blizzard's
 | 3c | Chat editbox anomaly after `/gb tint` | ✅ CLOSED 2026-07-18 — BugSack: `AddMaskTexture(): Texture already has the maximum number of mask textures (3)`. Tint probe created a new mask every run (no toggle) and hit the **3-mask-per-texture engine cap**; the throw aborted ChatEdit cleanup → undigested input text. Fix: probes are now idempotent toggles. Bonus: the error's Locals dump gave the full button anatomy → [API-NOTES.md](API-NOTES.md) §1. | BugSack |
 | 4 | `IsActionInRange` / `IsUsableAction` readable in Midnight combat (custom range tint) | ⚠ UNVERIFIED | later probe; fallback = restyle Blizzard's own indicator |
 | 5 | Exact Blizzard action-button/cooldown hook points | ⚠ UNVERIFIED | read client `Blizzard_ActionBar*` source (as done for CDM in GloomsAuras) |
-| 6 | `SPELL_ACTIVATION_OVERLAY_GLOW_SHOW/HIDE` still fire as plain events in Midnight | ⚠ UNVERIFIED | probe in glow phase |
+| 6 | Proc glows are hookable without secret reads | ✅ VERIFIED 2026-07-18 — implemented via `ActionButtonSpellAlertManager` hooks (not the legacy events); **real in-combat proc produced our shaped gold halo on a round icon. THE DIFFERENTIATOR IS PROVEN.** Jason: needs visibility/intensity controls (Config backlog). | in-combat QA |
 
 ## Build phases (≈ one session each)
 1. **[CURRENT] Skeleton + probes** — TOC/Core, `/gb debug` (button census), `/gb mask`
@@ -145,8 +145,10 @@ before touching mask/skin code.
    square ants frame gone and our shaped soft-pulsing halo on Hatchet Toss.**
    (Reads white-ish: additive assist-blue washes out over the bright icon rim —
    tint/intensity = Config backlog, not a bug to chase.)
-10. ❌ **QA pending — THE core differentiator case: a real gold proc in combat**
-    (shaped pulsing gold halo instead of Blizzard's square flipbook).
+10. ✅ **QA'd 2026-07-18 — THE CORE DIFFERENTIATOR CASE PASSED**: real in-combat
+    proc → shaped pulsing gold halo following the round icon (screenshot). Jason:
+    "hard to see" → glow intensity/visibility controls = Config backlog priority.
+    `square` added as third registry shape (generator corner≈0 variant).
 11. Next build steps: shaped cast/channel overlay frames (`SpellCastAnimFrame`),
     decoration layers (the north star), text controls, Config UI.
 10. ✅ QA'd (2026-07-18): `/gb shape roundrect` + /reload → all 8 bars rounded-rects.

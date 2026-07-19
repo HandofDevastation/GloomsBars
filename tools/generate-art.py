@@ -35,9 +35,21 @@ def sd_roundrect(px, py, extent=EXTENT):
     return outside + inside - corner
 
 
+def sd_square(px, py, extent=EXTENT):
+    # A crisp square: the roundrect SDF with a token corner (~1px at button
+    # scale) so the silhouette anti-aliases cleanly.
+    corner = extent * 0.04
+    qx = abs(px) - (extent - corner)
+    qy = abs(py) - (extent - corner)
+    outside = math.hypot(max(qx, 0.0), max(qy, 0.0))
+    inside = min(max(qx, qy), 0.0)
+    return outside + inside - corner
+
+
 SHAPES = {
     "circle": sd_circle,
     "roundrect": sd_roundrect,
+    "square": sd_square,
 }
 
 
