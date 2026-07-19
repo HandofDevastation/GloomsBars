@@ -358,6 +358,36 @@ local function FontInfo()
   end
 end
 
+-- /gb glowinfo — does Blizzard's alert manager even KNOW about the visible
+-- glow? If the manager reports no alerts while a glow is clearly visible,
+-- that glow belongs to another addon (ArcUI?) and our hook is aimed at the
+-- wrong system. Also reports whether our hook is installed + our glow states.
+local function GlowInfo()
+  local mgr = ActionButtonSpellAlertManager
+  msg(("spell-alert census (manager=%s, ours: enabled=%s hooked=%s):")
+    :format(mgr and "found" or "|cffc41e3aMISSING|r",
+      tostring(GB.Glows and GB.Glows.enabled), tostring(GB.Glows and GB.Glows.hooked)))
+  local count = 0
+  GB:ForEachButton(function(btn, bar, i)
+    local has, alertType
+    if mgr and mgr.HasAlert then has, alertType = mgr:HasAlert(btn) end
+    local alert = btn.SpellActivationAlert
+      or (btn.AssistedCombatRotationFrame and btn.AssistedCombatRotationFrame.SpellActivationAlert)
+    if has or alert then
+      count = count + 1
+      print(("  %s%d: HasAlert=%s type=%s blizzFrame=%s shown=%s alpha=%s altGlow=%s")
+        :format(bar.buttonPrefix, i, tostring(has), tostring(alertType),
+          alert and "yes" or "no",
+          alert and tostring(alert:IsShown()) or "-",
+          alert and ("%.2f"):format(alert:GetAlpha()) or "-",
+          (alert and alert.ProcAltGlow) and tostring(alert.ProcAltGlow:IsShown()) or "-"))
+    end
+  end)
+  if count == 0 then
+    print("  |cffff7729No buttons have any Blizzard alert state. A visible glow = another addon's.|r")
+  end
+end
+
 -- ---------------------------------------------------------------------------
 -- /gb slash router
 -- ---------------------------------------------------------------------------
@@ -379,6 +409,8 @@ SlashCmdList.GLOOMSBARS = function(input)
     GB.Skin:SetSweepOvershoot(tonumber(arg))
   elseif cmd == "fontinfo" then
     FontInfo()
+  elseif cmd == "glowinfo" then
+    GlowInfo()
   elseif cmd == "shape" then
     if arg ~= "" and GB.SHAPES[arg] then
       GB.db.shape = arg
