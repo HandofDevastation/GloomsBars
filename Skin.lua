@@ -240,13 +240,15 @@ function Skin:Enable()
     ApplyButton(btn)
     count = count + 1
   end)
-  GB.msg(("skin ON — %d buttons styled (round icons, slot art suppressed). Persists across /reload; /gb skin to turn off."):format(count))
+  GB.msg(("skin ON — %d buttons styled. Persists across /reload; /gb skin to turn off."):format(count))
+  if GB.Glows then GB.Glows:SetEnabled(true) end
 end
 
 function Skin:Disable()
   self.enabled = false
   if GB.db then GB.db.skinEnabled = false end
   GB:ForEachButton(function(btn) RestoreButton(btn) end)
+  if GB.Glows then GB.Glows:SetEnabled(false) end
   GB.msg("skin OFF — Blizzard defaults restored (/reload to also restore cooldown sweep shape).")
 end
 

@@ -131,9 +131,16 @@ before touching mask/skin code.
    quirk). Shipped: `circle`, `roundrect`. Roadmap: aspect-ratio letterbox entries
    (3:2 = shape art + texcoord math, still pure-skin), per-bar shape selection in the
    Config UI, size/gaps = the §B geometry fork (still optional/later).
-9. Next build steps: text styling (fonts stick per §3; colors need hooks), shaped
-   cast/channel overlay frames (`SpellCastAnimFrame` etc.), then the glow phase
-   (manager hook + shaped glow art — gold procs AND blue assist highlight).
+9. ✅ Built (QA pending): **THE GLOW PHASE — `Glows.lua`** (2026-07-18, same session).
+   Post-hooks `ActionButtonSpellAlertManager:ShowAlert/HideAlert`; alpha-0s
+   Blizzard's per-button alert frame (durable — manager only uses Show/Hide);
+   shows our shape-matched additive halo (`<shape>-glow.png`, art edge at 96/128,
+   region 128/96 × icon) with alpha-pulse animation; tinted gold (procs) or blue
+   (assist highlight / rotation, detected via `HasAlert` type + `ProcAltGlow`
+   shown). Enabled/disabled with the skin toggle. QA: the blue-glow button should
+   now show a shaped pulsing halo; get a real proc in combat for gold.
+10. Next build steps: shaped cast/channel overlay frames (`SpellCastAnimFrame`),
+    decoration layers (the north star), text controls, Config UI.
 10. ✅ QA'd (2026-07-18): `/gb shape roundrect` + /reload → all 8 bars rounded-rects.
     The shape registry is proven end-to-end.
 
@@ -161,7 +168,10 @@ Accumulate every ad-hoc control here:
 - Cooldown sweep overshoot (now `/gb sweep`)
 - 📌 State-glow styling: color / opacity / intensity per state (hover, checked,
   flash, assist) — Jason: current hover is too dim vs default
-- Text styling (fonts/sizes; hotkey color = needs hook, see API-NOTES §3)
+- Text styling (fonts/sizes; hotkey color = needs hook, see API-NOTES §3) —
+  incl. hotkey font picker (Jason finds GeneralSans bland; try Khand as default)
+- Glow styling: tint per alert kind (gold proc / blue assist), pulse speed/depth,
+  halo width, animation style (halo / shine / rotate — spec §Differentiator)
 - Later: per-bar enable, aspect-ratio, profiles, glow style options (glow phase)
 
 ## NEXT (continued)
@@ -201,15 +211,13 @@ Accumulate every ad-hoc control here:
 - **2026-07-18: Jason's client runs ArcUI** (+ StoneTweaks, VibeOverlay, BugSack). ArcUI
   restyles action bars — a QA confound and a coexistence question for the product itself
   (icon overdraw ruled out; keybind text styling etc. still ArcUI's).
-- **2026-07-18: Jason's HotKey text is styled by a third-party addon** (Lato @ 16
-  thick-outline, green, "s-R"-style modifier abbreviations — `/gb fontinfo`). The
-  font FILE is Platynator's (a **nameplate** addon — Jason's correction; it merely
-  ships/registers Lato, presumably via LibSharedMedia), so the actual styler is
-  another addon applying an LSM font to hotkeys — prime suspect: **EnhanceQoL's
-  Action Bars → Button text settings**; ArcUI possible. Our font swap on `.Count` and
-  `.Name` VERIFIED working in-game. Decision: coexist — whoever owns hotkeys keeps
-  them until our text phase ships full controls (font/size/color/position + consider
-  absorbing modifier abbreviations as a feature); then Jason disables that styling.
+- **2026-07-18: HotKey styler mystery SOLVED — it was Dominos' hotkey styler module**
+  (Jason had forgotten it was installed; the Lato font FILE it applied ships with
+  Platynator, a nameplate addon — LSM cross-pollination). **Jason removed it**; our
+  GeneralSans hotkey font now applies (all three text swaps verified working).
+  Jason's verdict: "General Sans is a pretty bland looking font" → hotkey font
+  choice is a Config-UI control; try **Khand** as the characterful default.
+  (EQOL's Action Bars section: everything off — it was never the styler.)
 - **2026-07-18: The `EQOL_ActionBarName` foreign member = EnhanceQoL** (UI-tweak suite).
   Its **"Hide action button borders" toggle was ON during all session-1 probes** — so the
   "default" baseline we observed had `NormalTexture` border art already suppressed by

@@ -60,6 +60,7 @@ local function shape(name)
     mask  = GB.MEDIA .. "masks\\" .. name .. ".png",
     swipe = GB.MEDIA .. "masks\\" .. name .. "-swipe.png",
     ring  = GB.MEDIA .. "art\\" .. name .. "-ring.png",
+    glow  = GB.MEDIA .. "art\\" .. name .. "-glow.png",   -- proc halo (edge at 96/128)
   }
 end
 GB.SHAPES = {
