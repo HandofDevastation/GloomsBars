@@ -67,6 +67,7 @@ GB.SHAPES = {
   circle = shape("circle"),
   roundrect = shape("roundrect"),
   square = shape("square"),
+  hexagon = shape("hexagon"),   -- pointy-top regular hex (honeycomb grids); fixed shape like circle
 }
 -- Per-corner rounding (Jason 2026-07-18): every corner is independently round or
 -- sharp, all rounded corners sharing one radius. The masks (from generate-art.py)
@@ -236,6 +237,11 @@ loader:SetScript("OnEvent", function(_, event, arg1)
     if sh == "roundrect" then GB.db.shape = "corner-1111-r2"
     elseif sh == "square" then GB.db.shape = "corner-0000-r0"
     elseif type(sh) == "string" and sh:match("^corner%-%d%d%d%d$") then GB.db.shape = sh .. "-r2" end
+    -- Per-corner MIXING removed (2026-07-19): a mixed pattern can't render cleanly
+    -- on a non-square icon. Collapse any mixed shape to all-rounded at its radius
+    -- (the pill); keep all-round and all-sharp (square) as they are.
+    local pat, r = tostring(GB.db.shape):match("^corner%-(%d%d%d%d)%-r(%d)$")
+    if pat and pat ~= "1111" and pat ~= "0000" then GB.db.shape = "corner-1111-r" .. r end
   elseif event == "PLAYER_LOGIN" then
     PreloadFonts()
   end

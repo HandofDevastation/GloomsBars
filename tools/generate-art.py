@@ -46,6 +46,20 @@ def sd_square(px, py, extent=EXTENT):
     return outside + inside - corner
 
 
+def sd_hexagon(px, py, extent=EXTENT):
+    # POINTY-TOP regular hexagon (a vertex at top & bottom) for honeycomb grids.
+    # Circumradius = extent so the top/bottom vertices reach ±extent (fills the
+    # padded canvas vertically); apothem = extent*cos(30°) is the flat left/right
+    # edges (so it's ~13% narrower than tall — a regular hexagon). A convex
+    # polygon's SDF is the max of its edge-normal half-plane distances; the three
+    # abs() pairs cover the six edges. Exact on the edges — fine for AA + glow.
+    a = extent * 0.8660254                          # apothem (center → flat edge)
+    d1 = abs(px) - a                                # left / right vertical flats
+    d2 = abs(0.5 * px + 0.8660254 * py) - a         # the two upper/lower-right slants
+    d3 = abs(0.5 * px - 0.8660254 * py) - a         # the two upper/lower-left slants
+    return max(d1, d2, d3)
+
+
 # Per-corner rounding (Jason's ask, 2026-07-18): each corner is independently
 # ROUND or SHARP, all rounded corners sharing one radius. This is the iq
 # rounded-box SDF with the corner radius chosen per quadrant. The straight
@@ -71,6 +85,7 @@ SHAPES = {
     "circle": sd_circle,
     "roundrect": sd_roundrect,
     "square": sd_square,
+    "hexagon": sd_hexagon,
 }
 
 # 16 per-corner on/off patterns × 4 radius levels → "corner-<TL><TR><BL><BR>-r<N>".
@@ -195,15 +210,21 @@ def gen_pills():
             write_png(f"Media/masks/pill-w-a{ai}-r{lvl}-swipe.png", render(wsw, swipe_alpha, S, S), S, S)
 
 
+def gen_shape(name, sdf):
+    write_png(f"Media/masks/{name}.png", render(sdf, mask_alpha))
+    write_png(f"Media/masks/{name}-swipe.png", render(sdf, swipe_alpha))
+    write_png(f"Media/art/{name}-ring.png", render(sdf, ring_alpha))
+    glow_sdf = lambda px, py, s=sdf: s(px, py, GLOW_EXTENT)
+    write_png(f"Media/art/{name}-glow.png", render(glow_sdf, glow_alpha))
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "pills":
         gen_pills()   # fast: only the aspect masks, not the ~384 corner PNGs
+    elif len(sys.argv) > 1 and sys.argv[1] in SHAPES:
+        gen_shape(sys.argv[1], SHAPES[sys.argv[1]])   # fast: one named shape (e.g. "hexagon")
     else:
         for name, sdf in SHAPES.items():
-            write_png(f"Media/masks/{name}.png", render(sdf, mask_alpha))
-            write_png(f"Media/masks/{name}-swipe.png", render(sdf, swipe_alpha))
-            write_png(f"Media/art/{name}-ring.png", render(sdf, ring_alpha))
-            glow_sdf = lambda px, py, s=sdf: s(px, py, GLOW_EXTENT)
-            write_png(f"Media/art/{name}-glow.png", render(glow_sdf, glow_alpha))
+            gen_shape(name, sdf)
         gen_pills()

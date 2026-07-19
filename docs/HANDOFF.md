@@ -1,16 +1,22 @@
 # Gloom's Bars — Session Handoff
-**Last updated: end of session 4 (2026-07-19). Current release: v0.2.0 (unreleased work committed to
-`main`, latest `023487e`). Everything through session 4 is COMMITTED — working tree clean. Git history
-holds the full narrative; this file is the current-state snapshot. ⇒ Read SESSION 4 first (it's where
-the overlay/cast work landed and where the ▶▶ NEXT list lives), then SESSION 3/2 for the pill + editor.**
+**Last updated: end of session 5 (2026-07-19). Base commit: `edb4ef0` (session 4). ALL session-5 work is
+UNCOMMITTED in the working tree — 4 modified files (`Core.lua` `Skin.lua` `Config.lua`
+`tools/generate-art.py`) + 4 new hexagon art PNGs (`Media/{masks,art}/hexagon*`). Offer Jason a commit.
+Git history holds the older narrative; this file is the current-state snapshot. ⇒ Read SESSION 5 first
+(hexagon + border + the construction rework, and where per-corner mixing was CUT), then SESSION 4/3/2.**
 
-## ▶ FIRST THING NEXT SESSION (Jason): fix the STRETCHED ROUNDED CORNERS.
-Non-square icons with a MIXED corner pattern (e.g. rounded top + sharp bottom) still OVALIZE — the
-aspect-correct masks only cover the ALL-rounded (`corner-1111` / `circle`) family, so any other corner
-pattern falls back to the plain square mask stretched onto the non-square icon. This is a SCOPE call
-(see NEXT #1): the full 16-pattern × aspect × radius matrix is large. Decide the approach with Jason
-(restrict mixed corners to square icons? generate a reduced matrix? per-corner 9-slice for the partial
-cases?) before generating art. Everything needed is in SESSION 3 (aspect-mask design) + API-NOTES §2.
+## ▶ FIRST THING NEXT SESSION: QA the CONTINUOUS-SHAPE TOGGLE (built, NOT yet verified in-game).
+Session 5 ended with the continuous-shape toggle BUILT but un-QA'd — Jason moved to the handoff before
+confirming it. Verify it FIRST (test in SESSION 5): Rounded shape + a below extension + a gradient, then
+toggle **Continuous OFF** → expect a rounded icon on a SQUARE plate (vs ON = one continuous pill). If it
+misbehaves, ask for the **BugSack** text. THEN continue with the ▶▶ NEXT list (the stub Config sections).
+
+## ✔ RESOLVED in session 5: the "stretched rounded corners" problem — by CUTTING per-corner mixing.
+Mixed corners (e.g. rounded-top/sharp-bottom on a NON-square icon) can't render cleanly: 9-slice masks
+have a ~44px short-side FLOOR (the fixed-texel corner can't fit a small button), and the preview never
+implemented slicing. DECISION with Jason: **per-corner mixing is REMOVED** — corners are now all-or-
+nothing (Circle / Rounded / Square). The PILL covers rounded-non-square; the **continuous-OFF plate**
+covers rounded-top/square-bottom via composition. **Do NOT re-attempt mixed-corner masks** (SESSION 5).
 
 > Update this file at the end of EVERY session: what was built, what was QA'd in-game,
 > what was learned, what's next. This is the anti-relitigation record — if it's marked
@@ -52,6 +58,19 @@ rendered output. Edit Mode owns geometry (the clickable areas). Full rationale: 
 geometry); bars 1–8 (pet/stance/extra later); standalone (no Masque); slash `/gb` (+
 `/gloomsbars`), SavedVariables `GloomsBarsDB`, namespace `GB` → `_G.GloomsBars`.
 
+**Settled decisions (2026-07-19, session 5 — do not reopen):**
+- **Per-corner MIXING is CUT.** Corners are all-or-nothing (Circle / Rounded / Square). Mixed
+  rounded/sharp corners on a non-square icon can't render cleanly — do not re-attempt.
+- **Hexagon is FIXED-ASPECT** (square only — one "Icon size", no width/height/lock/crop/extension).
+- **Positioning/spacing (honeycomb layout) is the out-of-combat GEOMETRY FORK — a real FUTURE phase,
+  NOT "never."** Clarified with Jason after I mis-framed it: (1) secure buttons can only be moved OUT
+  of combat, and once moved they PERSIST (nothing reverts) — that's a NON-ISSUE, same as most addon
+  config; don't keep flagging it. (2) The actual reason it's deferred/meaty is **taint** (moving
+  Blizzard's secure buttons can cause "action blocked" errors). (3) v1 is still pure-skin; the fork is
+  unbuilt and unscoped. The honeycomb can be built TODAY by hand in Edit Mode (two offset bars).
+- **Border = a colored shape-backing** (a shape copy behind the icon, oversized by thickness), works
+  for ALL shapes, reuses the masks. Lives in Decoration.
+
 ## ★★ NORTH STAR (Jason, 2026-07-18): USER-AUTHORED styles via a style editor
 Jason: "I wanted to build this via the UI myself — not a baked-in recipe. Define the
 height and width of the icons (via the UI), overlay a gradient and position it, decide
@@ -68,7 +87,9 @@ flexibility — it's the entire point."
   not protected). The CLICKABLE hit area is the secure button — Edit-Mode-sized unless the
   spec's §B out-of-combat geometry fork is taken later. The UI must communicate this.
 
-## CURRENT STATE — what's built and QA'd (all verified in-game 2026-07-18)
+## CURRENT STATE — what's built and QA'd (base state 2026-07-18; SESSION 5 adds hexagon/border/construction)
+> The bullets below are the session-1→4 skin foundation (all verified in-game). **SESSION 5 (above) adds:
+> Hexagon shape, Border decoration, bidirectional + continuous construction, and REMOVES per-corner mixing.**
 Files: `Core.lua` (namespace, tokens, `GB.SHAPES`, `GB.STYLES`, saved vars, `/gb` router,
 probes), `Skin.lua` (skin + decoration engine), `Glows.lua` (proc glow engine),
 `Media/masks|art/` (generated), `tools/generate-art.py` (SDF art generator).
@@ -254,25 +275,61 @@ All committed to `main` (latest `023487e`).
 - db added: `castFillColor`, `castFillAlpha`, `castDrainDir` (up/down/left/right), `castInterruptColor`,
   `castInterruptSpeed`. **These have NO Config UI yet** — Jason explicitly wants controls (NEXT #2).
 
-## ▶▶ NEXT (session 5) — in priority order
-1. **★ FIRST: fix STRETCHED ROUNDED CORNERS on mixed-corner non-square icons.** Aspect masks only cover
-   the all-rounded (`corner-1111`/`circle`) family; any MIXED pattern (rounded-top/sharp-bottom, etc.)
-   falls back to the plain square mask stretched → ovalized corners. The 16-pattern × 8-aspect × 6-radius
-   matrix is large → SCOPE DECISION with Jason FIRST (restrict mixed corners to square icons? generate a
-   reduced/coarser matrix? per-corner 9-slice for the partial cases — 9-slice WORKS on masks, API-NOTES §2,
-   just can't scale a full pill?). Aspect-mask design + `gen_pills` are in SESSION 3.
-2. **Wire the cast-fill Config controls Jason asked for**: fill **direction** (up/down/left/right),
-   **colour**, **opacity**, + the **interrupt colour** and **speed** — all db fields already exist and the
-   engine reads them live; just needs a Config section (reuse the toolkit: sliderRow / colorSwatch /
-   makeToggle; a 4-way direction picker = 4 flatButtons).
-3. Wire the other stub sections: **Text** (keybind — `ApplyHotkeyOverride` exists; route via
+## ★ SESSION 5 (2026-07-19 cont.) — HEXAGON + BORDER + CONSTRUCTION REWORK; per-corner mixing CUT (UNCOMMITTED)
+Everything below is in the WORKING TREE, un-committed (base `edb4ef0`). QA status noted per item.
+
+**Per-corner mixing REMOVED (QA'd — "looks better").** First tried a 9-slice fix for mixed corners: the
+`/gb slice` probe PROVED slicing gives clean round corners on big stretched panels, but on real buttons it
+hit a hard **~44px short-side FLOOR** (a sliced corner is a FIXED ~1:1 texel size, so it can't fit a small
+button — degrades to square) AND the preview never implemented slicing. So the whole slice experiment was
+**git-reverted to `edb4ef0`** (Skin/Core/generate-art/Media restored; `SHARP_R` back to 0.04). Then: removed
+the Corners 2×2 grid from Config; **Corner radius now applies to ALL corners** and is **shown only for
+Rounded** (hidden for Circle/Square; icon controls reflow up). Core loader **normalizes** any legacy mixed
+shape (`corner-1100-r3` …) → `corner-1111-r<n>` (all-round pill) on load.
+
+**Hexagon shape (QA'd — "looks fine").** Pointy-top regular hexagon SDF in `generate-art.py` (`sd_hexagon`;
+regen one shape via `python3 tools/generate-art.py hexagon` — new single-shape CLI arg). In `GB.SHAPES`.
+FIXED-ASPECT: the Hexagon preset forces a SQUARE icon and Config swaps width/height/lock/crop for a single
+**Icon size** slider (no radius). Engine guard: `aspectBase` now takes the pill path ONLY for `circle` /
+`corner-1111-r*` (parseShape defaults to "1111", which would otherwise send a non-square hexagon down the
+pill path) → a hexagon uses the plain mask.
+
+**Border (QA'd — "Looks great").** A colored copy of the shape drawn BEHIND the icon (`btn:CreateTexture`
+BACKGROUND, one sublevel under `.icon`), oversized by `thickness` px, masked to the shape at the larger size
+(`AnchorBorderMask`) → a rim peeks out around the whole construction. EVERY shape (reuses the mask; no new
+art). db `styleData.border = {enabled,color,thickness,alpha}`; Config **Border** group in Decoration
+(enable/color/thickness 1–12px/opacity). Live (thickness/size = re-anchor, color/opacity = SetVertexColor).
+Rendered in the PREVIEW too.
+
+**Construction rework — bidirectional extension (QA'd — "Looks good") + continuous toggle (BUILT, NOT QA'd).**
+Extension is now a SIGNED `construction.extendPct` (< 0 = ABOVE the icon, > 0 = BELOW; a CENTERED slider);
+legacy `extendBottomPct` read as +below and superseded on first edit. `ExtensionPct` / `ExtensionHeight`
+(magnitude) / `ExtensionAbove` drive direction across the mask, gradient plate, border, overlays, and keybind
+(all mirror above/below). **Continuous-shape toggle** (`construction.continuous`, default true): ON = icon +
+plate masked as one shape (pill); OFF = icon masked to its OWN shape + the plate is a plain SQUARE rectangle
+(rounded icon on a crisp square plate — the gradient's opaque near-edge squares the junction; the border, in
+OFF mode, frames the ICON only). Engine: `maskExt = continuous and ext or 0` feeds the icon + border masks;
+`maskKey` folds the continuous flag. Extension is DISALLOWED for hexagon (`ExtensionPct` → 0; slider + toggle
+greyed). Config: Construction section rebuilt; sections now refresh on open (`ToggleSection`) so the hexagon
+lockout reflects the live shape.
+
+📌 **Open follow-ups from session 5:** (a) CONTINUOUS toggle un-QA'd — verify FIRST (top of file). (b) In
+continuous-OFF the border frames only the ICON; wrapping the whole square-bottom construction needs a
+TWO-PIECE border (offered to Jason, deferred). (c) The PREVIEW still doesn't render the plate/extension
+(shape + border only), so a plated construction preview ≠ the bars.
+
+## ▶▶ NEXT (session 6) — in priority order
+0. **QA the continuous-shape toggle** (built, unverified — test at top of file).
+1. **Wire the cast-fill Config controls** Jason asked for: fill **direction** (up/down/left/right),
+   **colour**, **opacity**, + **interrupt colour** and **speed** — db fields exist, engine reads them live;
+   needs a Config section (toolkit: sliderRow / colorSwatch / makeToggle; 4-way picker = 4 flatButtons).
+2. Wire the other stub sections: **Text** (keybind — `ApplyHotkeyOverride` exists; route via
    `styleData.hotkey`), **Proc glow** (Glows.lua; tint/intensity/width → db), **Apply to bars**.
-4. Render the decoration **plate in the preview pane** (currently shape/zoom/states only; preview also
-   doesn't include the extension in its aspect, so a plated pill preview ≠ the bars).
-5. Deferred-feedback backlog below; **Bar-layout scope** decision.
-- Anytime: densify `PILL_RATIOS` if nearest-aspect snapping stretches caps at odd sizes; assist-frame
-  border still base art (low priority, Jason: don't iterate); proc-glow aspect art (soft halo currently
-  forgives the stretch, acceptable).
+3. Render the decoration **plate/extension in the preview pane** (currently shape/zoom/state/border only).
+4. If Jason wants it: the **two-piece border** for continuous-OFF (frame icon + square plate as one outline).
+5. Deferred-feedback backlog below; **Bar-layout / geometry-fork scope** decision (out-of-combat; taint).
+- Anytime: densify `PILL_RATIOS` if nearest-aspect snapping stretches caps; assist-frame border still base
+  art (low priority, Jason: don't iterate); proc-glow aspect art (soft halo forgives the stretch).
 
 ## Config UI — deferred feedback (Jason, 2026-07-18, in-game QA of the editor)
 Jason chose to defer these to keep wiring the sub-panels; revisit after breadth:

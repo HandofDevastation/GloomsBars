@@ -128,6 +128,7 @@ local function sliderRow(parent, yTop, labelText, minV, maxV, step, get, set, fm
   local row = {}
   function row:refresh() applying = true; local v = get() or minV; sl:SetValue(v); show(v); applying = false end
   function row:setEnabled(on) sl:SetEnabled(on); sl:SetAlpha(on and 1 or 0.35) end
+  function row:SetShown(on) lab:SetShown(on); val:SetShown(on); sl:SetShown(on) end
   row:refresh()
   return row
 end
@@ -168,6 +169,7 @@ local SECTION_HDR_H = 36
 local panel, bodyContainer
 local sections = {}
 local previewFrame, previewIcon, previewMask, previewGlow, previewRing, previewCD
+local previewBorder, previewBorderMask
 local previewChips, previewState = {}, "idle"
 
 local function relayout()
@@ -202,7 +204,7 @@ end
 function C:ToggleSection(s)
   local wasOpen = s.open
   for _, x in ipairs(sections) do x.open = false end
-  if not wasOpen then s.open = true end
+  if not wasOpen then s.open = true; if s.refresh then s.refresh() end end   -- reflect current state on open
   relayout()
 end
 
@@ -250,13 +252,15 @@ local function naturalIconSize()
   return (w and w > 0) and math.floor(w + 0.5) or 45
 end
 
--- Shape & icon — per-corner rounding + corner radius + icon size, wired to the
--- real engine. Circle is a distinct mode; otherwise each corner is independently
--- round or sharp, all rounded corners sharing one radius level. Shape + radius
--- apply live (fresh masks); zoom + size are live re-anchors.
+-- Shape & icon — shape preset + corner radius + icon size, wired to the real
+-- engine. Corners are all-or-nothing: Circle (its own mode), Rounded (all four
+-- corners rounded at the radius level), or Square (all sharp). Per-corner MIXING
+-- was removed 2026-07-19 — a mixed pattern can't render cleanly on a non-square
+-- icon (the pill covers rounded-non-square). Shape + radius apply live (fresh
+-- masks); zoom + size are live re-anchors. The Corner radius row is shown ONLY
+-- for Rounded (it's meaningless for Circle/Square), and the icon controls slide
+-- up to fill its place so there's never a floating gap.
 local function buildShapeSection(bf, s)
-  local CORNER_ORDER = { { "tl", 18, -94 }, { "tr", 66, -94 }, { "bl", 18, -120 }, { "br", 66, -120 } }
-  local IDX = { tl = 1, tr = 2, bl = 3, br = 4 }
   local RADIUS_LABELS = { [0] = "Subtle", [1] = "Soft", [2] = "Medium", [3] = "Round", [4] = "Bold", [5] = "Full" }
 
   local function parse()  -- db.shape → pattern {tl,tr,bl,br}, radius level, isCircle
@@ -267,54 +271,62 @@ local function buildShapeSection(bf, s)
     return { 1, 1, 1, 1 }, 2, false
   end
   local function isCircle() return (GB.db and GB.db.shape) == "circle" end
+  local function isHexagon() return (GB.db and GB.db.shape) == "hexagon" end
+  local function isSquare() local p, _, c = parse(); return (not c) and p[1] == 0 and p[2] == 0 and p[3] == 0 and p[4] == 0 end
+  -- Rounded = a corner-pattern shape with at least one round corner. Circle and
+  -- Hexagon are their own FIXED modes (parse() falls through to the all-round
+  -- default for them, so guard explicitly) — no corner radius applies.
+  local function isRounded()
+    if isCircle() or isHexagon() then return false end
+    local p, _, c = parse(); return (not c) and (p[1] == 1 or p[2] == 1 or p[3] == 1 or p[4] == 1)
+  end
   local function apply(pattern, level)
     local nm = ("corner-%d%d%d%d-r%d"):format(pattern[1], pattern[2], pattern[3], pattern[4], level)
     if GB.Skin then GB.Skin:SetShape(nm) else GB.db.shape = nm end
   end
 
-  -- Shape presets
+  -- Shape presets (four now — narrower to fit one row)
   local lbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); lbl:SetPoint("TOPLEFT", 18, -13); lbl:SetText("Shape")
   local presetBtns = {
     { label = "Circle",  set = function() if GB.Skin then GB.Skin:SetShape("circle") else GB.db.shape = "circle" end end,
-      on = function() return isCircle() end },
-    { label = "Rounded", set = function() local _, lv = parse(); apply({ 1, 1, 1, 1 }, lv) end,
-      on = function() local p, _, c = parse(); return (not c) and p[1] == 1 and p[2] == 1 and p[3] == 1 and p[4] == 1 end },
+      on = isCircle },
+    -- Keep the current level when already Rounded; otherwise default to a visible round.
+    { label = "Rounded", set = function() local _, lv = parse(); apply({ 1, 1, 1, 1 }, isRounded() and lv or 3) end,
+      on = isRounded },
     { label = "Square",  set = function() apply({ 0, 0, 0, 0 }, 0) end,
-      on = function() local p, _, c = parse(); return (not c) and p[1] == 0 and p[2] == 0 and p[3] == 0 and p[4] == 0 end },
+      on = isSquare },
+    -- Hexagon is fixed-aspect → force a SQUARE icon (no separate width/height).
+    { label = "Hexagon", set = function()
+        local sz = (GB.db and GB.db.iconW) or naturalIconSize()
+        GB.db.iconLockAspect, GB.db.iconAspect = true, 1
+        if GB.Skin then GB.Skin:SetIconSize(sz, sz); GB.Skin:SetShape("hexagon")
+        else GB.db.iconW, GB.db.iconH, GB.db.shape = sz, sz, "hexagon" end
+      end, on = isHexagon },
   }
   local x = 18
   for _, p in ipairs(presetBtns) do
-    local b = flatButton(bf, 74, 24, COLOR.heroic, p.label, 11)
-    b:SetPoint("TOPLEFT", x, -36); x = x + 78
+    local b = flatButton(bf, 70, 24, COLOR.heroic, p.label, 11)
+    b:SetPoint("TOPLEFT", x, -36); x = x + 74
     p.btn = b
     b:SetScript("OnClick", function() p.set(); s.refresh(); C:RefreshPreview() end)
   end
 
-  -- Per-corner grid (2x2 mirrors the icon; lit purple = rounded)
-  local clbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); clbl:SetPoint("TOPLEFT", 18, -74); clbl:SetText("Corners")
-  local chint = newText(bf, FONT.body, 11, MUTE, "LEFT"); chint:SetPoint("LEFT", clbl, "RIGHT", 8, 0); chint:SetText("lit = rounded")
-  local cornerBtns = {}
-  for _, o in ipairs(CORNER_ORDER) do
-    local key = o[1]
-    local b = flatButton(bf, 44, 22, COLOR.heroic, key:upper(), 11)
-    b:SetPoint("TOPLEFT", o[2], o[3])
-    b:SetScript("OnClick", function()
-      if isCircle() then return end
-      local pat, lv = parse()
-      pat[IDX[key]] = (pat[IDX[key]] == 1) and 0 or 1
-      apply(pat, lv); s.refresh(); C:RefreshPreview()
-    end)
-    cornerBtns[key] = b
-  end
-
-  -- Corner radius — discrete levels (baked masks, so it snaps); r5 = fully round
-  local radiusRow = sliderRow(bf, -152, "Corner radius", 0, 5, 1,
+  -- Corner radius — discrete levels (baked masks, so it snaps); r5 = fully round.
+  -- Shown only for Rounded (see s.refresh); at -74 (where its own label sits).
+  local radiusRow = sliderRow(bf, -74, "Corner radius", 0, 5, 1,
     function() local _, lv = parse(); return lv end,
-    function(v) if isCircle() then return end; local pat = parse(); apply(pat, v); C:RefreshPreview() end,
+    function(v) if not isRounded() then return end; local pat = parse(); apply(pat, v); C:RefreshPreview() end,
     function(v) return RADIUS_LABELS[v] or tostring(v) end)
 
+  -- The icon controls live in a group we slide up one row when the radius row is
+  -- hidden (Circle/Square), so nothing floats. Offsets below are relative to it.
+  local iconGroup = CreateFrame("Frame", nil, bf)
+  iconGroup:SetPoint("TOPLEFT", bf, "TOPLEFT", 0, -106)
+  iconGroup:SetPoint("TOPRIGHT", bf, "TOPRIGHT", 0, -106)
+  iconGroup:SetHeight(224)
+
   -- Icon zoom — live (SetTexCoord)
-  local zoomRow = sliderRow(bf, -196, "Icon zoom", 0, 0.30, 0.01,
+  local zoomRow = sliderRow(iconGroup, -12, "Icon zoom", 0, 0.30, 0.01,
     function() return GB.db and GB.db.zoom end,
     function(v) if GB.Skin then GB.Skin:SetZoom(v) end; C:PreviewZoom(v) end,
     function(v) return math.floor(v * 100 + 0.5) .. "%" end)
@@ -329,7 +341,7 @@ local function buildShapeSection(bf, s)
   -- force square). The ratio is captured when lock is enabled; dragging one axis
   -- scales the other to match.
   local function lockRatio() return (GB.db and GB.db.iconAspect) or 1 end
-  wRow = sliderRow(bf, -240, "Icon width", 16, 96, 1,
+  wRow = sliderRow(iconGroup, -56, "Icon width", 16, 96, 1,
     function() return (GB.db and GB.db.iconW) or naturalIconSize() end,
     function(v)
       GB.db.iconW = v
@@ -338,7 +350,7 @@ local function buildShapeSection(bf, s)
       applySize()
     end,
     function(v) return v .. "px" end)
-  hRow = sliderRow(bf, -284, "Icon height", 16, 96, 1,
+  hRow = sliderRow(iconGroup, -100, "Icon height", 16, 96, 1,
     function() return (GB.db and GB.db.iconH) or naturalIconSize() end,
     function(v)
       GB.db.iconH = v
@@ -348,8 +360,16 @@ local function buildShapeSection(bf, s)
     end,
     function(v) return v .. "px" end)
 
-  local lockLbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); lockLbl:SetPoint("TOPLEFT", 18, -322); lockLbl:SetText("Lock aspect ratio")
-  local lockTog = makeToggle(bf,
+  -- Icon SIZE — the single control for fixed-aspect shapes (Hexagon): one square
+  -- size, no separate width/height. Shown only for Hexagon (s.refresh), sharing
+  -- the width row's slot (-56) so the two never appear together.
+  local sizeRow = sliderRow(iconGroup, -56, "Icon size", 16, 96, 1,
+    function() return (GB.db and GB.db.iconW) or naturalIconSize() end,
+    function(v) GB.db.iconW, GB.db.iconH = v, v; applySize() end,
+    function(v) return v .. "px" end)
+
+  local lockLbl = newText(iconGroup, FONT.body, 12, TEXT, "LEFT"); lockLbl:SetPoint("TOPLEFT", 18, -138); lockLbl:SetText("Lock aspect ratio")
+  local lockTog = makeToggle(iconGroup,
     function() return GB.db and GB.db.iconLockAspect end,
     function(v)
       GB.db.iconLockAspect = v
@@ -360,39 +380,49 @@ local function buildShapeSection(bf, s)
         GB.db.iconAspect = (w > 0) and (h / w) or 1
       end
     end)
-  lockTog:SetPoint("TOPRIGHT", -18, -320)
+  lockTog:SetPoint("TOPRIGHT", -18, -136)
 
   -- Crop to fill vs stretch — how a non-square icon shows the (square) spell art.
-  local fillLbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); fillLbl:SetPoint("TOPLEFT", 18, -350); fillLbl:SetText("Crop to fill")
-  local fillTog = makeToggle(bf,
+  local fillLbl = newText(iconGroup, FONT.body, 12, TEXT, "LEFT"); fillLbl:SetPoint("TOPLEFT", 18, -166); fillLbl:SetText("Crop to fill")
+  local fillTog = makeToggle(iconGroup,
     function() return not (GB.db and GB.db.iconFill == "stretch") end,
     function(v)
       if GB.Skin then GB.Skin:SetIconFill(v and "fill" or "stretch") else GB.db.iconFill = v and "fill" or "stretch" end
       C:RefreshPreview()
     end)
-  fillTog:SetPoint("TOPRIGHT", -18, -348)
+  fillTog:SetPoint("TOPRIGHT", -18, -164)
 
-  local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -380); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  local hint = newText(iconGroup, FONT.body, 11, MUTE, "LEFT")
+  hint:SetPoint("TOPLEFT", 18, -196); hint:SetPoint("RIGHT", iconGroup, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
   hint:SetText("Size is the VISIBLE icon; the clickable hit area stays Edit Mode's. Unlock aspect for non-square; Crop to fill keeps art undistorted.")
-  bf:SetHeight(414)
+  bf:SetHeight(336)   -- initial (Rounded); s.refresh sets the real height per shape
 
   s.refresh = function()
-    local pat, _, circ = parse()
     for _, p in ipairs(presetBtns) do p.btn:SetActive(p.on()) end
-    for key, b in pairs(cornerBtns) do
-      b:SetActive((not circ) and pat[IDX[key]] == 1)
-      b:SetEnabled(not circ)
-    end
-    -- Radius only matters when at least one corner is rounded (greys for Square too).
-    local anyRound = pat[1] == 1 or pat[2] == 1 or pat[3] == 1 or pat[4] == 1
-    radiusRow:setEnabled((not circ) and anyRound)
-    radiusRow:refresh()
+    local showRadius = isRounded()   -- Corner radius: only for Rounded
+    local hex = isHexagon()          -- Hexagon: fixed-aspect → single square size
+    radiusRow:SetShown(showRadius)
+    -- Icon controls swap by shape: Hexagon shows one "Icon size" and hides width/
+    -- height/lock/crop (sizeRow shares the width slot); flexible shapes show the
+    -- full set. The hint + heights move so nothing floats; relayout() lets the
+    -- sections below follow the height change.
+    sizeRow:SetShown(hex)
+    wRow:SetShown(not hex); hRow:SetShown(not hex)
+    lockLbl:SetShown(not hex); lockTog:SetShown(not hex)
+    fillLbl:SetShown(not hex); fillTog:SetShown(not hex)
+    hint:SetPoint("TOPLEFT", 18, hex and -100 or -196)
+    hint:SetText(hex
+      and "Size is the VISIBLE icon (hexagons stay square, fixed shape); the clickable hit area stays Edit Mode's."
+      or "Size is the VISIBLE icon; the clickable hit area stays Edit Mode's. Unlock aspect for non-square; Crop to fill keeps art undistorted.")
+    local yIcon = showRadius and -106 or -62
+    iconGroup:SetPoint("TOPLEFT", bf, "TOPLEFT", 0, yIcon)
+    iconGroup:SetPoint("TOPRIGHT", bf, "TOPRIGHT", 0, yIcon)
+    bf:SetHeight(hex and 200 or (showRadius and 336 or 292))
+    if showRadius then radiusRow:refresh() end
     zoomRow:refresh()
-    wRow:refresh()
-    hRow:refresh()
-    lockTog:refresh()
-    fillTog:refresh()
+    if hex then sizeRow:refresh()
+    else wRow:refresh(); hRow:refresh(); lockTog:refresh(); fillTog:refresh() end
+    relayout()
   end
 end
 
@@ -415,23 +445,68 @@ local function ensureGradLayer()
   return l
 end
 
+-- The border decoration (a colored frame around ANY shape). Stored as its own
+-- styleData field; the engine draws a shape-copy behind the icon, oversized by
+-- `thickness`. Absent = no border.
+local function borderData() local st = GB.db and GB.db.styleData; return st and st.border end
+local function ensureBorder()
+  local st = GB.db and GB.db.styleData; if not st then return nil end
+  st.border = st.border or { enabled = true, color = { 0.58, 0.42, 1 }, thickness = 3, alpha = 1 }
+  return st.border
+end
+
 -- Construction — the extension zone below the icon (extra plate real estate). A
 -- lighter re-anchor (ReapplyDecor) applies it; no mask recreation needed.
 local function buildConstructionSection(bf, s)
-  local row = sliderRow(bf, -14, "Extend below icon", 0, 0.9, 0.05,
-    function() local st = GB.db and GB.db.styleData; return (st and st.construction and st.construction.extendBottomPct) or 0 end,
+  -- Centered slider: 0 = no plate, LEFT (negative) extends ABOVE the icon, RIGHT
+  -- (positive) BELOW — a signed % of icon height (construction.extendPct). The
+  -- hexagon is a fixed shape → no extension (slider disabled).
+  local function isHex() return (GB.db and GB.db.shape) == "hexagon" end
+  local function get()
+    if isHex() then return 0 end
+    local c = GB.db and GB.db.styleData and GB.db.styleData.construction
+    if not c then return 0 end
+    if c.extendPct ~= nil then return c.extendPct end
+    return c.extendBottomPct or 0   -- legacy below-only key
+  end
+  local row = sliderRow(bf, -14, "Extend plate", -0.9, 0.9, 0.05, get,
     function(v)
+      if isHex() then return end
       local st = GB.db.styleData; st.construction = st.construction or {}
-      st.construction.extendBottomPct = v
+      st.construction.extendPct = v
+      st.construction.extendBottomPct = nil   -- superseded by the signed key
       if GB.Skin then GB.Skin:ReapplyDecor() end
       C:RefreshPreview()
     end,
-    function(v) return math.floor(v * 100 + 0.5) .. "%" end)
+    function(v)
+      if math.abs(v) < 0.001 then return "None" end
+      return (v < 0 and "Above " or "Below ") .. math.floor(math.abs(v) * 100 + 0.5) .. "%"
+    end)
+  -- Continuous shape: ON = icon + plate wrapped as one shape; OFF = rounded icon
+  -- on a crisp square plate (squares off the junction).
+  local contLbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); contLbl:SetPoint("TOPLEFT", 18, -54); contLbl:SetText("Continuous shape")
+  local contTog = makeToggle(bf,
+    function() local c = GB.db and GB.db.styleData and GB.db.styleData.construction; return not (c and c.continuous == false) end,
+    function(v)
+      local st = GB.db.styleData; st.construction = st.construction or {}
+      st.construction.continuous = v
+      if GB.Skin then GB.Skin:ReapplyDecor() end
+      C:RefreshPreview()
+    end)
+  contTog:SetPoint("TOPRIGHT", -18, -52)
+
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -50); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("Extra plate space below the icon. Fill it with a gradient layer.")
-  bf:SetHeight(74)
-  s.refresh = function() row:refresh() end
+  hint:SetPoint("TOPLEFT", 18, -86); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  bf:SetHeight(112)
+  s.refresh = function()
+    local hex = isHex()
+    row:setEnabled(not hex)
+    row:refresh()
+    contTog:EnableMouse(not hex); contTog:SetAlpha(hex and 0.35 or 1); contTog:refresh()
+    hint:SetText(hex
+      and "The hexagon is a fixed shape — no plate extension."
+      or "Centered slider: LEFT = plate above, RIGHT = below. Continuous = one shape; off = rounded icon + square plate.")
+  end
 end
 
 -- Decoration — the gradient plate that fills the extension and fades up into the
@@ -454,11 +529,38 @@ local function buildDecorSection(bf, s)
     function(v) local l = ensureGradLayer(); l.bleedPct = v; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end,
     function(v) return math.floor(v * 100 + 0.5) .. "%" end)
 
+  -- Border — a colored frame around ANY shape (a shape-copy behind the icon,
+  -- peeking out by the thickness). On/off + color + thickness + opacity.
+  local blab = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); blab:SetPoint("TOPLEFT", 18, -118); blab:SetText("BORDER")
+  local ben = makeToggle(bf,
+    function() local b = borderData(); return b and b.enabled end,
+    function(v) local b = ensureBorder(); b.enabled = v; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end)
+  ben:SetPoint("TOPRIGHT", -18, -116)
+
+  local bclab = newText(bf, FONT.body, 12, TEXT, "LEFT"); bclab:SetPoint("TOPLEFT", 18, -148); bclab:SetText("Color")
+  local bcs = colorSwatch(bf,
+    function() local b = borderData(); return b and b.color end,
+    function(c) local b = ensureBorder(); b.color = c; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end)
+  bcs.swatch:SetPoint("TOPRIGHT", -18, -146)
+
+  local thickRow = sliderRow(bf, -180, "Thickness", 1, 12, 1,
+    function() local b = borderData(); return (b and b.thickness) or 3 end,
+    function(v) local b = ensureBorder(); b.thickness = v; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end,
+    function(v) return v .. "px" end)
+
+  local bopRow = sliderRow(bf, -224, "Opacity", 0, 1, 0.05,
+    function() local b = borderData(); return (b and b.alpha) or 1 end,
+    function(v) local b = ensureBorder(); b.alpha = v; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end,
+    function(v) return math.floor(v * 100 + 0.5) .. "%" end)
+
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -132); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("Fills the extension, fading up into the icon. Multiple layers + more kinds later.")
-  bf:SetHeight(160)
-  s.refresh = function() en:refresh(); cs:refresh(); bleedRow:refresh() end
+  hint:SetPoint("TOPLEFT", 18, -268); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Gradient fills the extension; Border frames any shape. More layer kinds later.")
+  bf:SetHeight(292)
+  s.refresh = function()
+    en:refresh(); cs:refresh(); bleedRow:refresh()
+    ben:refresh(); bcs:refresh(); thickRow:refresh(); bopRow:refresh()
+  end
 end
 
 -- State highlights — hover / selected / flash tints + intensity. Live-safe
@@ -536,6 +638,28 @@ function C:RefreshPreview()
   previewGlow:SetTexture(shp.glow)   -- proc glow not aspect-varied yet (matches the bars)
   previewRing:SetTexture(GB.Skin:AspectRing(pw, ph) or shp.ring)
   if previewCD.SetSwipeTexture then previewCD:SetSwipeTexture(GB.Skin:AspectSwipe(pw, ph) or shp.swipe) end
+  -- Border preview — the engine's shape-backing (a shape copy behind the icon,
+  -- peeking out by the thickness). Fresh mask per refresh (cheap; dodges the
+  -- live-mask re-render quirk).
+  local bd = GB.db and GB.db.styleData and GB.db.styleData.border
+  if bd and bd.enabled and (bd.thickness or 0) > 0 then
+    local t, col = bd.thickness, bd.color or { 0, 0, 0 }
+    previewBorder:ClearAllPoints()
+    previewBorder:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -t, t)
+    previewBorder:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", t, -t)
+    previewBorder:SetVertexColor(col[1], col[2], col[3], bd.alpha or 1)
+    if previewBorderMask then previewBorder:RemoveMaskTexture(previewBorderMask) end
+    previewBorderMask = previewFrame:CreateMaskTexture()
+    previewBorderMask:SetTexture(GB.Skin:AspectMask(pw + 2 * t, ph + 2 * t) or shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    local bgx, bgy = (pw + 2 * t) * (256 / 240 - 1) / 2, (ph + 2 * t) * (256 / 240 - 1) / 2
+    previewBorderMask:ClearAllPoints()
+    previewBorderMask:SetPoint("TOPLEFT", previewBorder, "TOPLEFT", -bgx, bgy)
+    previewBorderMask:SetPoint("BOTTOMRIGHT", previewBorder, "BOTTOMRIGHT", bgx, -bgy)
+    previewBorder:AddMaskTexture(previewBorderMask)
+    previewBorder:Show()
+  else
+    previewBorder:Hide()
+  end
 end
 
 function C:PreviewZoom(v)
@@ -592,6 +716,8 @@ local function buildPreviewPane(parent)
   previewCD:SetDrawEdge(false); previewCD:SetDrawBling(false); previewCD:Hide()
   previewRing = frame:CreateTexture(nil, "OVERLAY"); previewRing:SetPoint("TOPLEFT", -4, 4); previewRing:SetPoint("BOTTOMRIGHT", 4, -4)
   previewRing:SetBlendMode("ADD"); previewRing:Hide()
+  previewBorder = frame:CreateTexture(nil, "BACKGROUND", nil, -2)   -- behind the icon; peeks out as the border
+  previewBorder:SetTexture("Interface\\Buttons\\WHITE8X8"); previewBorder:Hide()
 
   local cap = newText(pane, FONT.body, 10, MUTE, "CENTER")
   cap:SetPoint("TOP", frame, "BOTTOM", 0, -16); cap:SetPoint("LEFT", 10, 0); cap:SetPoint("RIGHT", -10, 0)

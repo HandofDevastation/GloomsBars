@@ -132,21 +132,36 @@ end
 -- provably safe path). The HotKey override re-asserts via an UpdateHotkeys
 -- post-hook (Blizzard re-anchors it top-right on every update).
 -- ---------------------------------------------------------------------------
--- The construction = the icon plus an optional extension zone below it (extra
--- visible real estate — textures may draw beyond the secure button's bounds).
--- Returns the extension height in px for the current style.
+-- The construction = the icon plus an optional extension zone ABOVE or BELOW it
+-- (extra visible real estate — textures may draw beyond the secure button). The
+-- extension is a SIGNED percentage of icon height: construction.extendPct < 0 =
+-- ABOVE, > 0 = BELOW (a centered slider). Legacy extendBottomPct (below-only) is
+-- read as +below. The hexagon is a fixed shape → no extension.
+local function ExtensionPct()
+  if (GB.db and GB.db.shape) == "hexagon" then return 0 end
+  local c = GB:GetStyle().construction
+  if not c then return 0 end
+  if c.extendPct ~= nil then return c.extendPct end
+  return c.extendBottomPct or 0   -- legacy key (below)
+end
+-- Extension magnitude in px (for sizing / aspect); direction via ExtensionAbove.
 local function ExtensionHeight(icon)
-  local construction = GB:GetStyle().construction
-  return icon:GetHeight() * ((construction and construction.extendBottomPct) or 0)
+  return icon:GetHeight() * math.abs(ExtensionPct())
+end
+local function ExtensionAbove()
+  return ExtensionPct() < 0
 end
 
--- Anchor a mask over the whole construction (padding-compensated per axis).
+-- Anchor a mask over the whole construction (padding-compensated per axis). `ext`
+-- is the magnitude; the extension sits ABOVE or BELOW the icon per ExtensionAbove.
 local function AnchorConstructionMask(mask, icon, ext)
+  local above = ExtensionAbove()
+  local extT, extB = (above and ext or 0), (above and 0 or ext)
   local growX = icon:GetWidth() * GROW_RATIO
   local growY = (icon:GetHeight() + ext) * GROW_RATIO
   mask:ClearAllPoints()
-  mask:SetPoint("TOPLEFT", icon, "TOPLEFT", -growX, growY)
-  mask:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", growX, -(growY + ext))
+  mask:SetPoint("TOPLEFT", icon, "TOPLEFT", -growX, growY + extT)
+  mask:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", growX, -(growY + extB))
 end
 
 -- Anchor an OVERLAY (state ring, cooldown sweep, cast ring) over the whole
@@ -155,12 +170,28 @@ end
 -- `ratio` = padding grow (per axis), `extraPx` = extra overshoot.
 local function AnchorConstruction(tex, icon, ratio, extraPx)
   local ext = ExtensionHeight(icon)
+  local above = ExtensionAbove()
+  local extT, extB = (above and ext or 0), (above and 0 or ext)
   extraPx = extraPx or 0
   local growX = icon:GetWidth() * ratio + extraPx
   local growY = (icon:GetHeight() + ext) * ratio + extraPx
   tex:ClearAllPoints()
-  tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -growX, growY)
-  tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", growX, -(growY + ext))
+  tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -growX, growY + extT)
+  tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", growX, -(growY + extB))
+end
+
+-- Anchor a mask over the construction EXPANDED by `t` px on every side — for the
+-- border backing (a colored copy of the shape behind the icon that peeks out by
+-- `t`). Same padding compensation as AnchorConstructionMask, sized for the larger
+-- region so the shape silhouette lands on the border's outer edge.
+local function AnchorBorderMask(mask, icon, ext, t)
+  local above = ExtensionAbove()
+  local extT, extB = (above and ext or 0), (above and 0 or ext)
+  local gx = (icon:GetWidth() + 2 * t) * GROW_RATIO
+  local gy = (icon:GetHeight() + ext + 2 * t) * GROW_RATIO
+  mask:ClearAllPoints()
+  mask:SetPoint("TOPLEFT", icon, "TOPLEFT", -(t + gx), (t + gy) + extT)
+  mask:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", (t + gx), -(extB + t + gy))
 end
 
 -- ---------------------------------------------------------------------------
@@ -191,6 +222,11 @@ end
 -- shape, else nil (square + mixed-corner shapes have no aspect variants).
 local function aspectBase(w, h)
   if not (w and h) or w <= 0 or h <= 0 or math.abs(w - h) < 0.5 then return nil end
+  -- Only circle / all-rounded corner shapes have aspect pill masks. Every other
+  -- shape — square, mixed corners, AND fixed shapes like hexagon — must use the
+  -- plain mask (parseShape's default is "1111", so guard on the real shape name).
+  local sh = GB.db and GB.db.shape
+  if sh ~= "circle" and not tostring(sh):match("^corner%-1111%-r%d$") then return nil end
   local pattern, level = parseShape()
   if pattern ~= "1111" then return nil end
   local tall = h > w
@@ -439,7 +475,11 @@ local function ApplyHotkeyOverride(btn)
   local ext = ExtensionHeight(icon)
   hk:ClearAllPoints()
   if conf.zone == "extension" and ext > 0 then
-    hk:SetPoint("CENTER", icon, "BOTTOM", conf.offsetX or 0, -(ext / 2) + (conf.offsetY or 0))
+    if ExtensionAbove() then
+      hk:SetPoint("CENTER", icon, "TOP", conf.offsetX or 0, (ext / 2) + (conf.offsetY or 0))
+    else
+      hk:SetPoint("CENTER", icon, "BOTTOM", conf.offsetX or 0, -(ext / 2) + (conf.offsetY or 0))
+    end
   else
     hk:SetPoint("CENTER", icon, "CENTER", conf.offsetX or 0, conf.offsetY or 0)
   end
@@ -457,19 +497,63 @@ local function ApplyDecor(btn)
   local style = GB:GetStyle()
   rec.plates = rec.plates or {}
   local ext = ExtensionHeight(icon)
-  -- The ICON's own mask spans the whole construction, so icon + extension read
-  -- as one continuous shape (a single clean pill wrapping both — Jason's mock).
-  -- The aspect mask comes from the construction's aspect (maskPlan); a fresh
-  -- mask is built only when that plan changes (source swaps never re-render —
-  -- §2), otherwise a plain re-anchor re-clips live.
-  local maskSrc, maskKey = maskPlan(icon, ext)
+  local above = ExtensionAbove()
+  local extT, extB = (above and ext or 0), (above and 0 or ext)   -- extension split per direction
+  -- "Continuous shape" (default) masks the icon + extension as ONE shape — a pill
+  -- wrapping both (Jason's mock). Continuous OFF masks the icon to its OWN shape
+  -- (icon-only) and leaves the plate a square rectangle → a rounded icon on a
+  -- crisp square plate. So the MASKS (icon + border) span the construction only
+  -- when continuous; the plate positioning always uses the real extension.
+  local continuous = not (style.construction and style.construction.continuous == false)
+  local maskExt = continuous and ext or 0
+  local mExtT, mExtB = (above and maskExt or 0), (above and 0 or maskExt)
+  -- The aspect mask comes from the (masked) construction's aspect; a fresh mask is
+  -- built only when the plan changes (source swaps never re-render — §2), else a
+  -- plain re-anchor re-clips live. Fold `continuous` into the key so toggling it
+  -- rebuilds even when the aspect happens to match.
+  local maskSrc, maskKey = maskPlan(icon, maskExt)
+  maskKey = maskKey .. (continuous and "|c1" or "|c0")
   if rec.mask and rec.maskKey == maskKey then
-    AnchorConstructionMask(rec.mask, icon, ext)
+    AnchorConstructionMask(rec.mask, icon, maskExt)
   else
     if rec.mask then icon:RemoveMaskTexture(rec.mask) end
-    rec.mask = buildMask(btn, icon, ext, maskSrc)
+    rec.mask = buildMask(btn, icon, maskExt, maskSrc)
     icon:AddMaskTexture(rec.mask)
     rec.maskKey = maskKey
+  end
+  -- Border: a colored copy of the shape, oversized by `thickness` px and drawn
+  -- BEHIND the icon, so a rim of colour shows around the whole construction. Any
+  -- shape (reuses the shape mask). thickness/color/opacity from styleData.border.
+  local bd = style.border
+  if bd and bd.enabled and (bd.thickness or 0) > 0 then
+    if not rec.border then
+      local tex = btn:CreateTexture(nil, "BACKGROUND")   -- masks clip a FILE, not SetColorTexture (§4)
+      tex:SetTexture("Interface\\Buttons\\WHITE8X8")
+      rec.border = { tex = tex }
+    end
+    local b, t = rec.border, bd.thickness
+    local col = bd.color or { 0, 0, 0 }
+    local _, isub = icon:GetDrawLayer()
+    b.tex:SetDrawLayer("BACKGROUND", math.max(-8, (isub or 0) - 1))   -- just behind the icon
+    b.tex:SetVertexColor(col[1], col[2], col[3], bd.alpha or 1)
+    b.tex:ClearAllPoints()
+    b.tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -t, t + mExtT)      -- frames the masked region
+    b.tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", t, -(mExtB + t))
+    -- Same shape source as the icon; rebuild only on a shape/plan change (source
+    -- swaps never re-render, §2) — thickness/size are a live re-anchor.
+    if b.mask and b.maskKey == maskKey then
+      AnchorBorderMask(b.mask, icon, maskExt, t)
+    else
+      if b.mask then b.tex:RemoveMaskTexture(b.mask) end
+      b.mask = btn:CreateMaskTexture()
+      b.mask:SetTexture(maskSrc or GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+      AnchorBorderMask(b.mask, icon, maskExt, t)
+      b.tex:AddMaskTexture(b.mask)
+      b.maskKey = maskKey
+    end
+    b.tex:Show()
+  elseif rec.border then
+    rec.border.tex:Hide()
   end
   local function getPlate(idx)
     local plate = rec.plates[idx]
@@ -484,13 +568,16 @@ local function ApplyDecor(btn)
       plate = { tex = tex }
       rec.plates[idx] = plate
     end
-    -- The plate shares the icon's mask plan so it joins the pill; rebuild the
-    -- mask only when the plan changes, else re-anchor (re-clips live).
-    if plate.mask and plate.maskKey == maskKey then
-      AnchorConstructionMask(plate.mask, icon, ext)
+    -- Continuous: the plate shares the icon's mask so it joins the pill (rebuild
+    -- on plan change, else re-anchor). NOT continuous: no mask → a plain square
+    -- rectangle (the crisp plate that squares off the junction).
+    if not continuous then
+      if plate.mask then plate.tex:RemoveMaskTexture(plate.mask); plate.mask = nil; plate.maskKey = nil end
+    elseif plate.mask and plate.maskKey == maskKey then
+      AnchorConstructionMask(plate.mask, icon, maskExt)
     else
       if plate.mask then plate.tex:RemoveMaskTexture(plate.mask) end
-      plate.mask = buildMask(rec.decorFrame, icon, ext, maskSrc)
+      plate.mask = buildMask(rec.decorFrame, icon, maskExt, maskSrc)
       plate.tex:AddMaskTexture(plate.mask)
       plate.maskKey = maskKey
     end
@@ -503,21 +590,29 @@ local function ApplyDecor(btn)
       local c = layer.color or { 1, 1, 1 }
       local fromA, toA = layer.fromAlpha or 1, layer.toAlpha or 0
       if layer.zone == "extension" and ext > 0 then
-        -- Mock-matched (QA 2026-07-18): the extension is FULL opacity all the
-        -- way to the icon's bottom edge; the fade lives INSIDE the icon.
+        -- Mock-matched (QA 2026-07-18): the extension is FULL opacity to the
+        -- icon's edge; the fade lives INSIDE the icon. Mirrored for an ABOVE
+        -- extension (solid above the top edge, fade running down into the icon).
+        local iconEdge = above and "TOP" or "BOTTOM"
+        local outward = above and ext or -ext              -- solid extends away from the icon
+        local fromC = CreateColor(c[1], c[2], c[3], fromA)
+        local toC = CreateColor(c[1], c[2], c[3], toA)
         used = used + 1
         local solid = getPlate(used)
-        solid.tex:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, -ext)
-        solid.tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, -ext)
+        solid.tex:SetPoint(iconEdge .. "LEFT", icon, iconEdge .. "LEFT", 0, outward)
+        solid.tex:SetPoint(iconEdge .. "RIGHT", icon, iconEdge .. "RIGHT", 0, outward)
         solid.tex:SetHeight(ext)
-        solid.tex:SetGradient("VERTICAL", CreateColor(c[1], c[2], c[3], fromA), CreateColor(c[1], c[2], c[3], fromA))
+        solid.tex:SetGradient("VERTICAL", fromC, fromC)
         solid.tex:Show()
         used = used + 1
         local fade = getPlate(used)
-        fade.tex:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, 0)
-        fade.tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
+        fade.tex:SetPoint(iconEdge .. "LEFT", icon, iconEdge .. "LEFT", 0, 0)
+        fade.tex:SetPoint(iconEdge .. "RIGHT", icon, iconEdge .. "RIGHT", 0, 0)
         fade.tex:SetHeight(icon:GetHeight() * (layer.bleedPct or 0.4))
-        fade.tex:SetGradient("VERTICAL", CreateColor(c[1], c[2], c[3], fromA), CreateColor(c[1], c[2], c[3], toA))
+        -- VERTICAL gradient min = bottom, max = top → full colour sits at the
+        -- icon edge (bottom for a below plate, top for an above plate).
+        if above then fade.tex:SetGradient("VERTICAL", toC, fromC)
+        else fade.tex:SetGradient("VERTICAL", fromC, toC) end
         fade.tex:Show()
       else
         used = used + 1

@@ -45,14 +45,18 @@ Hard walls (from [docs/SPEC.md](docs/SPEC.md)):
   (style recipes — scaffolding; real styles will be user-authored data), saved vars,
   `GB.BARS`/`GB:ForEachButton`, `/gb` router + diagnostic probes.
 - `Skin.lua` — GB.Skin: skin engine (zoom/mask/art-suppression, cooldown sweeps, state
-  art, cast/channel shaping, re-assert hooks) + the decoration/construction engine.
+  art, cast/channel shaping, re-assert hooks) + the decoration/construction engine (gradient
+  plate, **border**, bidirectional + continuous extension — session 5).
 - `Glows.lua` — GB.Glows: shape-matched proc glow engine (hooks all three Blizzard glow
   mechanisms; THE differentiator).
 - `Media/masks/`, `Media/art/` — generated per-shape art; `tools/generate-art.py`
-  regenerates everything (SDF-based; edge-padding rule in API-NOTES §2). 16 corner
-  patterns × 6 radius levels (`corner-<TL><TR><BL><BR>-r<N>`) — slow to regen (~4 min) —
-  PLUS aspect-correct pill masks (`pill-<t|w>-a<ratio>-r<N>`, 96 files) for non-square
-  icons; regen those alone with `python3 tools/generate-art.py pills` (fast). Aspect-mask
+  regenerates everything (SDF-based; edge-padding rule in API-NOTES §2). Shapes: `circle`,
+  `roundrect`, `square`, `hexagon` (session 5), + 16 corner patterns × 6 radius levels
+  (`corner-<TL><TR><BL><BR>-r<N>`; **per-corner MIXING was cut in session 5 — only the
+  all-round `corner-1111-r*` family is used now**) — slow to regen (~4 min); regen ONE shape
+  with `python3 tools/generate-art.py <name>` — PLUS aspect-correct pill masks
+  (`pill-<t|w>-a<ratio>-r<N>`, 96 files) for non-square icons; regen those alone with
+  `python3 tools/generate-art.py pills` (fast). Aspect-mask
   rationale in API-NOTES §2. `Media/ui/caret.png` — the orange accordion caret for the Config UI.
 - `Config.lua` — **BUILT (session 2)**: the style editor. `/gb` opens it. Family-language
   window (preview pane + scrollable one-open accordion + footer). Toolkit + all wired
