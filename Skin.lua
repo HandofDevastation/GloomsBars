@@ -88,6 +88,27 @@ local function Suppress(btn)
   if btn.PushedTexture then btn.PushedTexture:SetAlpha(0) end
 end
 
+-- The cast/channel InnerGlowTexture can't be masked at runtime (see
+-- ApplyButton), so its square art is REPLACED with our shaped ring on every
+-- cast start — Blizzard re-sets its atlas per cast type inside
+-- PlaySpellCastAnim, so this re-asserts in a post-hook of that method,
+-- tinted lime for channels / gold for casts (matching Blizzard's two looks).
+local CAST_TINT = { cast = { 1, 0.85, 0.4 }, channel = { 0.6, 1, 0.4 } }
+local function StyleCastInnerGlow(btn, castType)
+  local icon = btn.icon or btn.Icon
+  local fill = btn.SpellCastAnimFrame and btn.SpellCastAnimFrame.Fill
+  local glow = fill and fill.InnerGlowTexture
+  if not (icon and glow) then return end
+  local grow = icon:GetWidth() * GROW_RATIO
+  glow:SetTexture(GB:GetShape().ring)
+  glow:ClearAllPoints()
+  glow:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
+  glow:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
+  local isChannel = ActionButtonCastType and castType == ActionButtonCastType.Channel
+  local tint = isChannel and CAST_TINT.channel or CAST_TINT.cast
+  glow:SetVertexColor(tint[1], tint[2], tint[3])
+end
+
 -- Make the round sweep circle coincide with the icon circle: anchor the
 -- cooldown widgets to the icon oversized by the art-padding ratio (same math
 -- as the icon mask). Blizzard insets the cooldown inside the icon (+1.7/-1
@@ -147,6 +168,11 @@ local function ApplyButton(btn)
     if btn.UpdateAssistedCombatRotationFrame then
       hooksecurefunc(btn, "UpdateAssistedCombatRotationFrame", function(b)
         if Skin.enabled then StyleAssistedFrame(b) end
+      end)
+    end
+    if btn.PlaySpellCastAnim then
+      hooksecurefunc(btn, "PlaySpellCastAnim", function(b, castType)
+        if Skin.enabled then StyleCastInnerGlow(b, castType) end
       end)
     end
   end
@@ -226,7 +252,9 @@ local function ApplyButton(btn)
         target:AddMaskTexture(m)
       end
       shapeClip(fill.CastFill, fill.FillMask)
-      shapeClip(fill.InnerGlowTexture)
+      -- InnerGlowTexture is NOT masked here: runtime mask attach silently
+      -- fails on never-rendered never-masked textures (API-NOTES §2). Its art
+      -- is replaced per-cast in the PlaySpellCastAnim hook instead.
     end
     rec.castStyled = true
   end

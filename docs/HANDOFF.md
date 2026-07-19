@@ -151,12 +151,15 @@ before touching mask/skin code.
     `square` added as third registry shape (generator corner≈0 variant).
 11. ✅ QA'd (2026-07-18): **square-shape glow** — proc halo traces the square. The
     differentiator is verified on two shapes; the engine is genuinely shape-generic.
-12. ✅ Built (QA pending): **shaped cast/channel fill** — `SpellCastAnimFrame.Fill`:
-    removed Blizzard's rounded-square `FillMask` from `CastFill`, fresh per-texture
-    shape masks on `CastFill` + `InnerGlowTexture` (Blizzard swaps their atlases per
-    cast type — channel=green — but never touches masks). QA: channel an ability —
-    does the draining fill match the icon shape? (`EndBurst` still unshaped — check
-    whether the cast-end flash reads square; fix later if noticed.)
+12. **Shaped cast/channel overlay** — two components (Jason's QA):
+    - ✅ QA'd (2026-07-18): the **drain** (`CastFill`) follows the shape (fresh mask
+      after removing Blizzard's `FillMask` — the already-masked case works).
+    - ❌→✅ Built (QA pending): the **inner glow** stayed rounded-square — runtime
+      mask attach silently failed (never-rendered never-masked; refined rule in
+      API-NOTES §2). Fix: art REPLACEMENT via `PlaySpellCastAnim` post-hook — our
+      `<shape>-ring` art, lime tint for channels / gold for casts, re-asserted every
+      cast. QA: channel again — inner glow shaped now?
+    - (`EndBurst` cast-end flash still unshaped — fix later if noticed.)
 13. Next build steps: decoration layers (the north star), text controls, Config UI.
 10. ✅ QA'd (2026-07-18): `/gb shape roundrect` + /reload → all 8 bars rounded-rects.
     The shape registry is proven end-to-end.
