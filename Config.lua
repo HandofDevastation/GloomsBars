@@ -325,11 +325,15 @@ local function buildShapeSection(bf, s)
     if GB.Skin then GB.Skin:SetIconSize(GB.db.iconW, GB.db.iconH) end
     C:RefreshPreview()
   end
+  -- Lock aspect ratio = keep the CURRENT width:height ratio while resizing (not
+  -- force square). The ratio is captured when lock is enabled; dragging one axis
+  -- scales the other to match.
+  local function lockRatio() return (GB.db and GB.db.iconAspect) or 1 end
   wRow = sliderRow(bf, -240, "Icon width", 16, 96, 1,
     function() return (GB.db and GB.db.iconW) or naturalIconSize() end,
     function(v)
       GB.db.iconW = v
-      if GB.db.iconLockAspect then GB.db.iconH = v; hRow:refresh()
+      if GB.db.iconLockAspect then GB.db.iconH = math.floor(v * lockRatio() + 0.5); hRow:refresh()
       elseif not GB.db.iconH then GB.db.iconH = naturalIconSize() end
       applySize()
     end,
@@ -338,7 +342,7 @@ local function buildShapeSection(bf, s)
     function() return (GB.db and GB.db.iconH) or naturalIconSize() end,
     function(v)
       GB.db.iconH = v
-      if GB.db.iconLockAspect then GB.db.iconW = v; wRow:refresh()
+      if GB.db.iconLockAspect then GB.db.iconW = math.floor(v / lockRatio() + 0.5); wRow:refresh()
       elseif not GB.db.iconW then GB.db.iconW = naturalIconSize() end
       applySize()
     end,
@@ -350,9 +354,10 @@ local function buildShapeSection(bf, s)
     function(v)
       GB.db.iconLockAspect = v
       if v then
-        local sz = (GB.db.iconW or naturalIconSize())
-        GB.db.iconW, GB.db.iconH = sz, sz
-        wRow:refresh(); hRow:refresh(); applySize()
+        -- Capture the current shape's ratio so locking PRESERVES it (no reset to square).
+        local w = GB.db.iconW or naturalIconSize()
+        local h = GB.db.iconH or naturalIconSize()
+        GB.db.iconAspect = (w > 0) and (h / w) or 1
       end
     end)
   lockTog:SetPoint("TOPRIGHT", -18, -320)
@@ -528,9 +533,9 @@ function C:RefreshPreview()
   previewIcon:AddMaskTexture(previewMask)
   -- Same cover-fit crop as the engine so the preview matches the bars (part a).
   previewIcon:SetTexCoord(GB.Skin:TexCoordFor(previewIcon:GetWidth(), previewIcon:GetHeight()))
-  previewGlow:SetTexture(shp.glow)
-  previewRing:SetTexture(shp.ring)
-  if previewCD.SetSwipeTexture then previewCD:SetSwipeTexture(shp.swipe) end
+  previewGlow:SetTexture(shp.glow)   -- proc glow not aspect-varied yet (matches the bars)
+  previewRing:SetTexture(GB.Skin:AspectRing(pw, ph) or shp.ring)
+  if previewCD.SetSwipeTexture then previewCD:SetSwipeTexture(GB.Skin:AspectSwipe(pw, ph) or shp.swipe) end
 end
 
 function C:PreviewZoom(v)

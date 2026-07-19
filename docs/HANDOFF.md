@@ -205,16 +205,49 @@ them aspect-aware is the natural next masking task (they'd want the same aspect-
 treatment). Also: nearest-aspect snapping (8 ratios) can slightly stretch caps at odd sizes → densify
 `PILL_RATIOS` if Jason notices.
 
-## ▶▶ NEXT (session 4) — in priority order
-1. **Overlays follow the pill/aspect** (state ring, cooldown sweep, proc glow, cast ring) — currently
-   square base art, visibly oval on non-square icons. Biggest visual gap now that pills exist.
-2. Wire the remaining stub sections: **Text** (keybind zone/anchor/nudge/font/size/color — the
-   engine's `ApplyHotkeyOverride` exists; route it through `styleData.hotkey`), **Proc glow**
-   (read Glows.lua first; tint/intensity/width → db), **Apply to bars** (per-bar enable).
-3. Render the decoration **plate in the preview pane** (currently shape/zoom/states only).
-4. Work the deferred-feedback backlog below (overlay shape/size + width controls, state-
-   highlight boldness, flyout border, CUSTOM color picker to replace Blizzard's).
-5. Resolve the **Bar-layout scope** decision with Jason (own geometry vs defer to Edit Mode).
+## ★ SESSION 4 (2026-07-19 cont.) — OVERLAYS MADE ASPECT-AWARE (QA'd) + polish; channel fill deferred→replace
+Overlay art now follows the pill (all QA'd in-game except where noted). UNCOMMITTED at time of writing
+→ committing this session's overlay pass.
+- **Aspect overlay art**: `gen_pills` now also emits per-aspect RING (non-square, `SetTexture` OK) and
+  a **SQUARE 256² pow2 pre-distorted SWIPE** — KEY finding: `SetSwipeTexture` REJECTS a non-square /
+  non-pow2 texture (→ `GetSwipeTexture()` nil → default rectangle), while `AddMaskTexture` and
+  `SetTexture` accept non-square. So the cooldown swipe uses a square pill-squished-by-aspect texture
+  that un-distorts when stretched to the (non-square) cd frame. (API-NOTES §2.)
+- **Engine**: `aspectBase`/`shapeArt`/`applyShapeArt` (overlay art by CONSTRUCTION aspect, cached by
+  `rec.artKey`); `AnchorConstruction(tex,icon,ratio,extraPx)` anchors overlays over icon+extension
+  per-axis; state ring uses `RING_FIT` grow (rim reaches the pill edge); cooldown sweep + cast inner
+  ring both aspect-aware. ✅ QA'd: hover ring, cooldown sweep, cast ring all follow the pill.
+- **Perf**: cast masks moved OFF the size-slider hot path into the `PlaySpellCastAnim` hook (was
+  ~192 CreateMaskTexture/tick → choppy). `applyShapeArt` cached. ✅ QA'd smooth.
+- **Lock aspect ratio** now PRESERVES the current ratio (`db.iconAspect`, captured on enable) instead
+  of forcing square. ✅ QA'd.
+- **Proc glow**: soft halo forgives the aspect stretch → reads fine on pills; NO aspect art needed.
+  Styling controls (intensity/color/width) = the future Proc-glow Config section.
+- **New diagnostics**: `/gb cdinfo`, `/gb castinfo`.
+
+⛔ **DEFERRED → NEXT BUILD: cast/channel DRAIN fill (`CastFill`).** Our pill mask IS on it (verified via
+`/gb castinfo`: masks=1), but Blizzard draws/animates the channel fill (`UI-HUD-ActionBar-Channel-Fill`)
+as a **fixed small square in the centre**, independent of our resized icon — a mask can only clip, not
+enlarge, so it stays square on a pill. **DECISION (Jason, 2026-07-19): replace Blizzard's cast/channel
+fill with our OWN pill-shaped fill.** Approach: suppress `CastFill` (alpha-0, re-assert in the hook),
+draw our own — cleanest MVP is a `Cooldown` widget with our pill swipe, `SetCooldown(start, duration)`
+(drain for channel / fill-up for cast), timing from `UnitCastingInfo`/`UnitChannelInfo`. ⚠ VERIFY those
+are readable in Midnight combat (they should be — cast bars use them; this is NOT the secret cooldown-
+remaining wall). This is the differentiator applied to casts.
+
+## ▶▶ NEXT (session 5) — in priority order
+1. **Custom pill-shaped cast/channel fill** (the deferred item above) — suppress Blizzard's, draw ours.
+2. **Mixed-corner shapes on non-square icons still ovalize** — aspect masks only cover the all-rounded
+   (`1111`) family; mixed patterns fall back to the stretched base mask. 16-pattern × aspect matrix is
+   large → SCOPE DECISION with Jason (restrict mixed-corners to square icons? 9-slice fallback for
+   mixed? generate a reduced matrix?).
+3. Wire the remaining stub sections: **Text** (keybind — `ApplyHotkeyOverride` exists; route via
+   `styleData.hotkey`), **Proc glow** (Glows.lua; tint/intensity/width → db), **Apply to bars**.
+4. Render the decoration **plate in the preview pane** (currently shape/zoom/states only; preview also
+   doesn't include the extension in its aspect, so a plated pill preview ≠ the bars).
+5. Deferred-feedback backlog below; **Bar-layout scope** decision.
+- Anytime: densify `PILL_RATIOS` if nearest-aspect snapping stretches caps at odd sizes; assist-frame
+  border still base art (low priority, Jason: don't iterate).
 
 ## Config UI — deferred feedback (Jason, 2026-07-18, in-game QA of the editor)
 Jason chose to defer these to keep wiring the sub-panels; revisit after breadth:

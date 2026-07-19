@@ -164,19 +164,35 @@ def sd_roundrect_wh(px, py, hw, hh, r):
 
 
 def gen_pills():
+    # Each aspect/radius/orientation gets the icon MASK, the cooldown SWIPE (0.8
+    # fill), and the state RING (rim glow) so overlays match the pill instead of
+    # ovalizing. (The proc GLOW halo needs more canvas headroom than the 128 short
+    # axis allows — generated separately when that overlay is wired.)
+    S, pad = 256, 1 - 2 * PILL_PAD_RATIO
     for ai, ratio in enumerate(PILL_RATIOS):
         longd = round(PILL_SHORT * ratio)
-        long_half = longd / 2.0 * (1 - 2 * PILL_PAD_RATIO)   # per-axis padding → uniform 240/256
+        long_half = longd / 2.0 * pad                         # per-axis padding → uniform 240/256
         for lvl, frac in enumerate(RADII):
-            r = frac * PILL_SHORT_HALF              # r5 → 60 → semicircle caps
-            # Tall: short axis = width (128), long axis = height.
-            tall = lambda px, py, r=r, lh=long_half: sd_roundrect_wh(px, py, PILL_SHORT_HALF, lh, min(r, lh))
-            write_png(f"Media/masks/pill-t-a{ai}-r{lvl}.png",
-                      render(tall, mask_alpha, PILL_SHORT, longd), PILL_SHORT, longd)
-            # Wide: short axis = height (128), long axis = width (transpose).
-            wide = lambda px, py, r=r, lh=long_half: sd_roundrect_wh(px, py, lh, PILL_SHORT_HALF, min(r, lh))
-            write_png(f"Media/masks/pill-w-a{ai}-r{lvl}.png",
-                      render(wide, mask_alpha, longd, PILL_SHORT), longd, PILL_SHORT)
+            r = frac * PILL_SHORT_HALF                        # r5 → 60 → semicircle caps
+            # Non-square MASK + RING — AddMaskTexture / SetTexture accept non-square.
+            for orient, W, H, hw, hh in (
+                ("t", PILL_SHORT, longd, PILL_SHORT_HALF, long_half),   # tall: short = width
+                ("w", longd, PILL_SHORT, long_half, PILL_SHORT_HALF),   # wide: short = height (transpose)
+            ):
+                rr = min(r, hw, hh)
+                sdf = lambda px, py, hw=hw, hh=hh, rr=rr: sd_roundrect_wh(px, py, hw, hh, rr)
+                base = f"pill-{orient}-a{ai}-r{lvl}"
+                write_png(f"Media/masks/{base}.png",    render(sdf, mask_alpha, W, H), W, H)
+                write_png(f"Media/art/{base}-ring.png", render(sdf, ring_alpha, W, H), W, H)
+            # SQUARE (256², power-of-2) pre-distorted SWIPE — SetSwipeTexture rejects
+            # a non-square / non-pow2 texture (→ nil → default rectangle), so bake the
+            # pill squished by the aspect into a square; stretched to the non-square
+            # cooldown frame it un-distorts into a clean pill sweep.
+            fhw, fr = 0.5 * pad, frac * 0.5 * pad
+            tsw = lambda px, py, ratio=ratio, fhw=fhw, fr=fr: sd_roundrect_wh(px / S, (py / S) * ratio, fhw, (ratio / 2.0) * pad, min(fr, fhw))
+            write_png(f"Media/masks/pill-t-a{ai}-r{lvl}-swipe.png", render(tsw, swipe_alpha, S, S), S, S)
+            wsw = lambda px, py, ratio=ratio, fhw=fhw, fr=fr: sd_roundrect_wh((px / S) * ratio, py / S, (ratio / 2.0) * pad, fhw, min(fr, fhw))
+            write_png(f"Media/masks/pill-w-a{ai}-r{lvl}-swipe.png", render(wsw, swipe_alpha, S, S), S, S)
 
 
 if __name__ == "__main__":

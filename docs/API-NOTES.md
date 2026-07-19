@@ -59,6 +59,19 @@ Bar 1 buttons parented via `MainActionBarButtonContainer#` (`ActionBar.lua:14`),
 - Icons have baked-in square border art → **zoom-crop (`SetTexCoord ~0.08–0.92`) before masking** so a shaped mask's edge lands on artwork, not border pixels.
 - Cooldown swipe + Blizzard's countdown number render normally on a styled (masked/zoomed) icon; swipe *shape* on round icons not yet assessed (too much border clutter in the test — revisit after the skin suppresses art cleanly).
 - **Texture 9-slicing WORKS on a MaskTexture in Midnight** (VERIFIED 2026-07-19, `/gb pill` probe): `SetTextureSliceMargins(l,t,r,b)` + `SetTextureSliceMode(Enum.UITextureSliceMode.Stretched)` on a mask keeps its corner cells fixed while the edges stretch. Corner cells render ~**1:1 texel→px**, region-size-independent (a 38-texel margin → ~40px corners regardless of the stretched size). **But it is NOT usable for a size-scaling pill** and is not in production: the visible corner radius is locked to the source's baked arc (a clean corner needs `margin ≈ 8 + arc`), and a pill needs `corner radius = shortDim/2`, which varies with icon size and can't be baked. On small icons no baked arc even fits (margin caps at shortDim/2 < 8+arc → the arc is cut → square corners). Kept only as the `/gb pill` diagnostic.
+- **`SetSwipeTexture` / `SetTexture` texture strictness** (VERIFIED 2026-07-19, `/gb cdinfo`): a
+  `Cooldown:SetSwipeTexture(path)` with a **non-square / non-power-of-2** PNG silently fails
+  (`GetSwipeTexture()` returns nil → Blizzard's default square swipe renders). `AddMaskTexture` and
+  `Texture:SetTexture` accept non-square/non-pow2 fine (the pill masks + rings do). ⇒ overlay art
+  driven through `SetSwipeTexture` must be **square + power-of-2** (256²); we bake the pill
+  pre-distorted (squished by the aspect) so it un-distorts when stretched to the non-square frame.
+- **Cast/channel anim structure** (VERIFIED 2026-07-19, `/gb castinfo` during a channel):
+  `btn.SpellCastAnimFrame.Fill` has `.CastFill` (the drain, atlas `UI-HUD-ActionBar-Channel-Fill`) +
+  `.InnerGlowTexture` + Blizzard's `.FillMask` (`UI-HUD-ActionBar-IconFrame-Mask`); `.EndBurst` has
+  `.GlowRing` + `.EndMask`. **`CastFill` is drawn at a fixed small centred size independent of a
+  resized icon** — masking it to a pill can't enlarge it (stays square on a non-square icon), so the
+  fill must be REPLACED (suppress + draw our own driven by `UnitCastingInfo`/`UnitChannelInfo`), not
+  masked. ⚠ cast/channel timing readability in Midnight combat: assumed yes (cast bars use it), verify.
 - **Aspect-correct masks = the "clean pill" solution** (VERIFIED 2026-07-19, in production): a single square mask stretched onto a non-square icon ovalizes its corners; instead ship rounded masks **pre-generated at a range of aspect ratios with genuinely CIRCULAR corners** (`generate-art.py` `gen_pills` → `pill-<t|w>-a<ratioIdx>-r<level>`, 8 ratios × 6 radii × 2 orientations = 96 masks; short axis 128 texels, 240/256 padding per axis, corner radius `RADII[level]*60` so r5 = semicircle caps = pill). The engine picks the nearest aspect + orientation (`Skin:AspectMask`) and stretches it to the icon — a near-uniform stretch keeps the corners round. Only the all-rounded family (`circle` / `corner-1111-r*`) has aspect masks; square + mixed-corner shapes keep the plain per-corner mask. Fast regen: `python3 tools/generate-art.py pills` (aspect masks only, skips the ~4-min corner pass).
 
 ## §3 Hook points — SOURCE-VERIFIED (wow-ui-source `live` branch @ **12.0.7 build 68453**, cloned 2026-07-18; in-game verification pending where noted)

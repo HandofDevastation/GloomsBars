@@ -146,6 +146,20 @@ local function AnchorConstructionMask(mask, icon, ext)
   mask:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", growX, -(growY + ext))
 end
 
+-- Anchor an OVERLAY (state ring, cooldown sweep, cast ring) over the whole
+-- construction (icon + extension below) so it follows the full pill, not just
+-- the icon — on a plate the icon is ~square while the construction is the pill.
+-- `ratio` = padding grow (per axis), `extraPx` = extra overshoot.
+local function AnchorConstruction(tex, icon, ratio, extraPx)
+  local ext = ExtensionHeight(icon)
+  extraPx = extraPx or 0
+  local growX = icon:GetWidth() * ratio + extraPx
+  local growY = (icon:GetHeight() + ext) * ratio + extraPx
+  tex:ClearAllPoints()
+  tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -growX, growY)
+  tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", growX, -(growY + ext))
+end
+
 -- ---------------------------------------------------------------------------
 -- Aspect-correct masks — the "clean pill" fix. One square mask PNG stretched
 -- onto a non-square icon OVALIZES its rounded corners. Instead we ship rounded
@@ -170,7 +184,9 @@ end
 -- the shape is NON-square and ALL-rounded (circle / corner-1111), else nil
 -- (square + mixed-corner shapes keep the plain mask). Picks the nearest baked
 -- aspect ratio + orientation.
-local function aspectMask(w, h)
+-- Nearest baked aspect base id ("pill-t-a4-r5") for a NON-square, ALL-rounded
+-- shape, else nil (square + mixed-corner shapes have no aspect variants).
+local function aspectBase(w, h)
   if not (w and h) or w <= 0 or h <= 0 or math.abs(w - h) < 0.5 then return nil end
   local pattern, level = parseShape()
   if pattern ~= "1111" then return nil end
@@ -181,9 +197,51 @@ local function aspectMask(w, h)
     local e = math.abs(rr - ratio)
     if e < be then be, bi = e, i end
   end
-  return GB.MEDIA .. "masks\\" .. ("pill-%s-a%d-r%d"):format(tall and "t" or "w", bi - 1, level) .. ".png"
+  return ("pill-%s-a%d-r%d"):format(tall and "t" or "w", bi - 1, level)
+end
+local function aspectMask(w, h)
+  local base = aspectBase(w, h)
+  return base and (GB.MEDIA .. "masks\\" .. base .. ".png")
 end
 function Skin:AspectMask(w, h) return aspectMask(w, h) end
+
+-- Overlay art (state ring + cooldown swipe) matched to the icon's shape+aspect:
+-- the aspect variant for a non-square all-rounded icon, else the base shape art.
+-- (Proc glow is not aspect-varied yet — Glows.lua still uses the base halo.)
+local function shapeArt(icon)
+  -- Match the CONSTRUCTION (icon + extension), like the icon mask, so overlays
+  -- follow the full pill and not the (often ~square) icon on a plated button.
+  local base = aspectBase(icon:GetWidth(), icon:GetHeight() + ExtensionHeight(icon))
+  if base then
+    return { ring = GB.MEDIA .. "art\\" .. base .. "-ring.png",
+             swipe = GB.MEDIA .. "masks\\" .. base .. "-swipe.png" }
+  end
+  return GB:GetShape()
+end
+function Skin:ShapeArt(icon) return shapeArt(icon) end
+function Skin:AspectRing(w, h) local b = aspectBase(w, h); return b and (GB.MEDIA .. "art\\" .. b .. "-ring.png") end
+function Skin:AspectSwipe(w, h) local b = aspectBase(w, h); return b and (GB.MEDIA .. "masks\\" .. b .. "-swipe.png") end
+
+-- (Re)set the SetTexture-based overlay art (state rings + cooldown swipe) to
+-- match the current shape + aspect. Textures re-set live with no mask quirk;
+-- vertex colours / blend modes / anchors are configured once in ApplyButton.
+local function applyShapeArt(btn, icon)
+  local art = shapeArt(icon)
+  -- Skip the SetTexture churn when the art is unchanged (e.g. dragging the size
+  -- slider within one aspect bucket) — keeps the sliders smooth.
+  local rec = records[btn]
+  local key = tostring(art.ring) .. "|" .. tostring(art.swipe)
+  if rec then
+    if rec.artKey == key then return end
+    rec.artKey = key
+  end
+  if btn.GetHighlightTexture then local hl = btn:GetHighlightTexture(); if hl then hl:SetTexture(art.ring) end end
+  if btn.GetCheckedTexture then local ct = btn:GetCheckedTexture(); if ct then ct:SetTexture(art.ring) end end
+  if btn.Flash then btn.Flash:SetTexture(art.ring) end
+  for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
+    if cd and cd.SetSwipeTexture then cd:SetSwipeTexture(art.swipe) end
+  end
+end
 
 -- (maskPath, cacheKey) for the construction around `icon` (+ext). src is the
 -- aspect mask when the shape/aspect calls for one, else nil (plain shape mask).
@@ -200,6 +258,34 @@ local function buildMask(parent, icon, ext, src)
   m:SetTexture(src or GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
   AnchorConstructionMask(m, icon, ext or 0)
   return m
+end
+
+-- Shape the sliding cast/channel fill + end burst to the pill (aspect mask over
+-- the construction), replacing Blizzard's rounded-square FillMask/EndMask — else
+-- the drain clips to a square in the middle of a pill. Rebuilt on shape/size
+-- change; Blizzard re-sets these textures' atlases per cast type but never their
+-- masks (API-NOTES §3), so our mask persists across casts.
+local function applyCastMasks(btn, rec, icon)
+  local cast = btn.SpellCastAnimFrame
+  if not cast then return end
+  local ext = ExtensionHeight(icon)
+  local src = aspectMask(icon:GetWidth(), icon:GetHeight() + ext)   -- nil → base shape mask
+  local function shapeClip(parent, target, blizzMask, slotKey)
+    if not (parent and target) then return end
+    local slot = rec[slotKey] or {}
+    rec[slotKey] = slot
+    -- Remove Blizzard's mask once; swap our own on every rebuild.
+    if blizzMask and not slot.blizzRemoved then
+      target:RemoveMaskTexture(blizzMask); slot.blizzRemoved = true
+    end
+    if slot.mask then target:RemoveMaskTexture(slot.mask) end
+    slot.mask = buildMask(parent, icon, ext, src)
+    target:AddMaskTexture(slot.mask)
+  end
+  local fill = cast.Fill
+  if fill then shapeClip(fill, fill.CastFill, fill.FillMask, "castFill") end
+  local burst = cast.EndBurst
+  if burst then shapeClip(burst, burst.GlowRing, burst.EndMask, "castBurst") end
 end
 
 local function ApplyHotkeyOverride(btn)
@@ -343,11 +429,8 @@ local function StyleCastInnerGlow(btn, castType)
   local fill = btn.SpellCastAnimFrame and btn.SpellCastAnimFrame.Fill
   local glow = fill and fill.InnerGlowTexture
   if not (icon and glow) then return end
-  local grow = icon:GetWidth() * (RING_FIT - 1) / 2
-  glow:SetTexture(GB:GetShape().ring)
-  glow:ClearAllPoints()
-  glow:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
-  glow:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
+  glow:SetTexture(shapeArt(icon).ring)   -- construction-aspect ring
+  AnchorConstruction(glow, icon, (RING_FIT - 1) / 2)
   local isChannel = ActionButtonCastType and castType == ActionButtonCastType.Channel
   local tint = isChannel and CAST_TINT.channel or CAST_TINT.cast
   glow:SetVertexColor(tint[1], tint[2], tint[3])
@@ -365,13 +448,9 @@ local function AlignCooldowns(btn)
   -- icon's anti-aliased rim leaks full brightness at the edge (QA-observed).
   -- A sub-pixel dark fringe on the outside is invisible; a bright rim isn't.
   -- Live-tunable via /gb sweep <px> for pixel-perfect QA.
-  local grow = icon:GetWidth() * GROW_RATIO + (GB.db and GB.db.sweepOvershoot or 0.75)
+  local os = (GB.db and GB.db.sweepOvershoot or 0.75)
   for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
-    if cd then
-      cd:ClearAllPoints()
-      cd:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
-      cd:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
-    end
+    if cd then AnchorConstruction(cd, icon, GROW_RATIO, os) end
   end
 end
 
@@ -435,20 +514,15 @@ end
 function Skin:SetShape(name)
   if name then GB.db.shape = name end
   if not self.enabled then return end
-  local shp = GB:GetShape()
   GB:ForEachButton(function(btn)
     local rec = records[btn]
     local icon = btn.icon or btn.Icon
     if not (rec and rec.active and icon) then return end
-    -- Icon + plate masks are rebuilt by ApplyDecor below — it picks the 9-slice
-    -- plan for the new shape (and detects the change via the slice cache key).
-    -- Here we only re-set the SetTexture-based shaped art, which re-sets live.
-    for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
-      if cd and cd.SetSwipeTexture then cd:SetSwipeTexture(shp.swipe) end
-    end
-    if btn.GetHighlightTexture then local hl = btn:GetHighlightTexture(); if hl then hl:SetTexture(shp.ring) end end
-    if btn.GetCheckedTexture then local ct = btn:GetCheckedTexture(); if ct then ct:SetTexture(shp.ring) end end
-    if btn.Flash then btn.Flash:SetTexture(shp.ring) end
+    -- Icon + plate masks are rebuilt by ApplyDecor below — it picks the aspect
+    -- mask for the new shape (and detects the change via the mask cache key).
+    -- Here we only re-set the SetTexture-based overlay art, which re-sets live.
+    -- (Cast/channel fill is re-shaped lazily in the PlaySpellCastAnim hook.)
+    applyShapeArt(btn, icon)
     ApplyDecor(btn)
   end)
 end
@@ -492,13 +566,8 @@ function Skin:SetIconSize(w, h)
     if not (rec and rec.active and icon) then return end
     applyIconSize(btn)
     applyTexCoord(icon)   -- cover-fit crop follows the new aspect (no art stretch)
-    local grow = icon:GetWidth() * GROW_RATIO
-    local function fit(tex)
-      if not tex then return end
-      tex:ClearAllPoints()
-      tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
-      tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
-    end
+    applyShapeArt(btn, icon)   -- swap overlay art to the new aspect (ring/swipe)
+    local function fit(tex) if tex then AnchorConstruction(tex, icon, (RING_FIT - 1) / 2) end end
     if btn.GetHighlightTexture then fit(btn:GetHighlightTexture()) end
     if btn.GetCheckedTexture then fit(btn:GetCheckedTexture()) end
     fit(btn.Flash)
@@ -537,7 +606,13 @@ local function ApplyButton(btn)
     end
     if btn.PlaySpellCastAnim then
       hooksecurefunc(btn, "PlaySpellCastAnim", function(b, castType)
-        if Skin.enabled then StyleCastInnerGlow(b, castType) end
+        if Skin.enabled and records[b] then
+          -- Shape the cast/channel fill here (not at login/size-change): the
+          -- Fill/EndBurst frames are live at cast time, and this keeps mask
+          -- creation off the size-slider hot path.
+          applyCastMasks(b, records[b], b.icon or b.Icon)
+          StyleCastInnerGlow(b, castType)
+        end
       end)
     end
     if btn.UpdateHotkeys then
@@ -558,27 +633,25 @@ local function ApplyButton(btn)
   -- (Disable() says so). Anchored to the icon oversized by the padding ratio
   -- so the ring rim coincides with the icon circle.
   if not rec.stateArt then
-    local grow = icon:GetWidth() * GROW_RATIO
-    local function fit(tex)
-      tex:ClearAllPoints()
-      tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
-      tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
-    end
+    local ring = shapeArt(icon).ring
+    -- Ring rim sits inset from the shape edge → oversize by RING_FIT (not just
+    -- the mask's GROW_RATIO) so the rim reaches the icon/pill edge.
+    local function fit(tex) AnchorConstruction(tex, icon, (RING_FIT - 1) / 2) end
     if btn.SetHighlightTexture and btn.GetHighlightTexture then
-      btn:SetHighlightTexture(GB:GetShape().ring, "ADD")
+      btn:SetHighlightTexture(ring, "ADD")
       local hl = btn:GetHighlightTexture()
       hl:SetVertexColor(unpack(stateColor("highlight"))); hl:SetAlpha(stateIntensity())
       fit(hl)
     end
     if btn.SetCheckedTexture and btn.GetCheckedTexture then
-      btn:SetCheckedTexture(GB:GetShape().ring)
+      btn:SetCheckedTexture(ring)
       local ct = btn:GetCheckedTexture()
       ct:SetBlendMode("ADD")
       ct:SetVertexColor(unpack(stateColor("checked"))); ct:SetAlpha(stateIntensity())
       fit(ct)
     end
     if btn.Flash then
-      btn.Flash:SetTexture(GB:GetShape().ring)
+      btn.Flash:SetTexture(ring)
       btn.Flash:SetVertexColor(unpack(stateColor("flash"))); btn.Flash:SetAlpha(stateIntensity())
       fit(btn.Flash)
     end
@@ -589,9 +662,10 @@ local function ApplyButton(btn)
   -- Clear + SetSwipeColor around cast anims — API-NOTES §3), so one-time
   -- setup persists. chargeCooldown is edge-only by default — left untouched.
   if not rec.cooldownStyled then
+    local swipe = shapeArt(icon).swipe
     for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
       if cd and cd.SetSwipeTexture then
-        cd:SetSwipeTexture(GB:GetShape().swipe)
+        cd:SetSwipeTexture(swipe)
         -- The rotating edge line + finish bling are drawn to the SQUARE frame
         -- bounds and poke past a round sweep — off for the clean look.
         if cd.SetDrawEdge then cd:SetDrawEdge(false) end
@@ -604,35 +678,11 @@ local function ApplyButton(btn)
     StyleText(btn)
     rec.textStyled = true
   end
-  -- Shaped cast/channel fill: Blizzard clips the sliding CastFill with its
-  -- rounded-square FillMask and leaves InnerGlowTexture unmasked (square).
-  -- Replace with fresh per-texture shape masks (the proven-safe path — never
-  -- multi-attach one mask, never mutate Blizzard's). Blizzard re-sets these
-  -- textures' ATLASES per cast type (cast vs channel) but never their masks,
-  -- so one-time setup persists (API-NOTES §3).
-  if not rec.castStyled then
-    local cast = btn.SpellCastAnimFrame
-    local grow = icon:GetWidth() * GROW_RATIO
-    -- Only for ALREADY-MASKED textures (the case where runtime mask swap
-    -- provably renders — API-NOTES §2): remove Blizzard's rounded-square
-    -- mask, attach a fresh shaped one.
-    local function shapeClip(parent, target, blizzMask)
-      if not (parent and target and blizzMask) then return end
-      target:RemoveMaskTexture(blizzMask)
-      local m = parent:CreateMaskTexture()
-      m:SetTexture(GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-      m:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
-      m:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
-      target:AddMaskTexture(m)
-    end
-    local fill = cast and cast.Fill
-    if fill then shapeClip(fill, fill.CastFill, fill.FillMask) end
-    local burst = cast and cast.EndBurst
-    if burst then shapeClip(burst, burst.GlowRing, burst.EndMask) end
-    -- Fill.InnerGlowTexture is never-rendered never-masked (runtime attach
-    -- silently fails) → art replaced per-cast in the PlaySpellCastAnim hook.
-    rec.castStyled = true
-  end
+  -- Shaped cast/channel fill: the sliding CastFill + EndBurst are clipped to the
+  -- pill by applyCastMasks, applied lazily in the PlaySpellCastAnim hook (the
+  -- Fill frames are created at cast time, and it keeps mask creation off the
+  -- size-slider hot path). Fill.InnerGlowTexture (never-masked) is art-replaced
+  -- there too (StyleCastInnerGlow).
   StyleAssistedFrame(btn)
   AlignCooldowns(btn)
   Suppress(btn)

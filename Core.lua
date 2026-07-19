@@ -201,7 +201,8 @@ local DB_DEFAULTS = {
   zoom = 0.08,             -- icon zoom-crop (SetTexCoord inset); live via Skin:SetZoom
   -- iconW / iconH absent = "auto" (icon matches the Edit-Mode button size); set
   -- explicitly by the Config UI to resize the VISIBLE icon (hit area unchanged).
-  iconLockAspect = true,   -- keep width and height equal while sizing
+  iconLockAspect = true,   -- keep the width:height RATIO while sizing (not force square)
+  iconAspect = 1,          -- the locked height/width ratio (captured when lock is enabled)
   iconFill = "fill",       -- "fill" (cover: keep art aspect, crop) or "stretch"
   sweepOvershoot = 0.75,   -- px the cooldown sweep extends past the icon circle
   -- State-highlight tints (hover/selected/flash) + intensity — Config-editable.
@@ -527,6 +528,53 @@ local function TogglePillProbe()
   end
 end
 
+-- /gb cdinfo — diagnose the cooldown swipe on a pill (session 4): is the aspect
+-- swipe texture actually applied, and what shape is the cd frame? Explains the
+-- "black rectangle, not clipped to the pill" symptom.
+local function CooldownInfo()
+  local b = _G["ActionButton1"]
+  local icon = b and (b.icon or b.Icon)
+  local cd = b and b.cooldown
+  if not (icon and cd) then msg("ActionButton1 cooldown not found.") return end
+  msg("ActionButton1 cooldown wiring:")
+  print(("  db.shape=%s  iconW=%s iconH=%s"):format(
+    tostring(GB.db and GB.db.shape), tostring(GB.db and GB.db.iconW), tostring(GB.db and GB.db.iconH)))
+  print(("  icon size: %.1f x %.1f    cd frame size: %.1f x %.1f")
+    :format(icon:GetWidth(), icon:GetHeight(), cd:GetWidth(), cd:GetHeight()))
+  local tex = cd.GetSwipeTexture and cd:GetSwipeTexture()
+  print("  swipe texture: " .. tostring(tex))
+  if GB.Skin and GB.Skin.ShapeArt then
+    print("  engine wants swipe: " .. tostring(GB.Skin:ShapeArt(icon).swipe))
+  end
+end
+
+-- /gb castinfo — dump ActionButton1's SpellCastAnimFrame textures + their mask
+-- counts, to find the "second, square" channel-drain overlay we're not shaping
+-- (session 4). Cast/channel a spell on slot 1 once so the frame exists, then run.
+local function CastInfo()
+  local b = _G["ActionButton1"]
+  local caf = b and b.SpellCastAnimFrame
+  if not caf then msg("No .SpellCastAnimFrame yet — cast/channel a spell on slot 1 once, then rerun /gb castinfo.") return end
+  msg("ActionButton1.SpellCastAnimFrame structure:")
+  local function dump(frame, label)
+    if not frame then print("  " .. label .. ": (nil)") return end
+    print(("  %s [%s] shown=%s"):format(label, frame:GetObjectType(), tostring(frame:IsShown())))
+    for _, r in ipairs({ frame:GetRegions() }) do
+      local t = r.GetObjectType and r:GetObjectType()
+      if t == "Texture" then
+        local nm = r.GetNumMaskTextures and r:GetNumMaskTextures() or "?"
+        print(("      TEX %s | atlas=%s | shown=%s | masks=%s")
+          :format(tostring(r:GetDebugName()), tostring(r.GetAtlas and r:GetAtlas()), tostring(r:IsShown()), tostring(nm)))
+      elseif t == "MaskTexture" then
+        print(("      MASK %s | atlas=%s"):format(tostring(r:GetDebugName()), tostring(r.GetAtlas and r:GetAtlas())))
+      end
+    end
+  end
+  dump(caf, "SpellCastAnimFrame")
+  dump(caf.Fill, ".Fill")
+  dump(caf.EndBurst, ".EndBurst")
+end
+
 -- ---------------------------------------------------------------------------
 -- /gb slash router
 -- ---------------------------------------------------------------------------
@@ -546,6 +594,10 @@ SlashCmdList.GLOOMSBARS = function(input)
     ToggleRoundProbe()
   elseif cmd == "pill" then
     TogglePillProbe()
+  elseif cmd == "cdinfo" then
+    CooldownInfo()
+  elseif cmd == "castinfo" then
+    CastInfo()
   elseif cmd == "skin" then
     GB.Skin:Toggle()
   elseif cmd == "sweep" then
