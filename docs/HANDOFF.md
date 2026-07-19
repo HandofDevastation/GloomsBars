@@ -1,5 +1,8 @@
 # Gloom's Bars — Session Handoff
-**Last updated: end of session 1 (2026-07-18). Current release: v0.2.0. Git history holds the full narrative; this file is the current-state snapshot.**
+**Last updated: end of session 2 (2026-07-18). Current release: v0.2.0 (unchanged — session 2's
+Config-UI work is UNCOMMITTED in the working tree; offer to commit at session start). Git history
+holds the full narrative; this file is the current-state snapshot. ⇒ Read the SESSION 2 section
+below first — the whole style editor was built this session.**
 
 > Update this file at the end of EVERY session: what was built, what was QA'd in-game,
 > what was learned, what's next. This is the anti-relitigation record — if it's marked
@@ -123,17 +126,86 @@ probes), `Skin.lua` (skin + decoration engine), `Glows.lua` (proc glow engine),
 - From siblings: secret-values model (GloomsAuras API-NOTES), release pipeline (Build
   Barn), bundled-font pre-warm (GloomsAuras Core.lua).
 
-## ▶▶ NEXT: THE STYLE EDITOR (Config UI) — the product
-1. Ask Jason for editor-UI mockups (Figma) before building layout.
-2. Recipes → SavedVariables (user documents); `GB.STYLES` shrinks to starter templates.
-3. Editor controls: construction/extension size, gradient layers (color/position/fade
-   stops — think in solid+fade primitives), keybind placement + font/size/color, shape,
-   visible-icon sizing, glow styling (tint/intensity/pulse/width), state-glow styling,
-   sweep overshoot, per-bar enables.
-4. Toolkit port from GloomsAuras `Config.lua` (design tokens + fonts already in Core.lua).
-5. Config UI backlog (every dev slash-knob becomes a control): skin toggle, shape picker
-   (later per-bar), sweep overshoot, state-glow color/opacity/intensity, text controls
-   (hotkey font picker — try Khand), glow styling, profiles.
+## ★ SESSION 2 (2026-07-18 cont.) — THE STYLE EDITOR IS BUILT (`Config.lua`, new file)
+`/gb` now OPENS the Config UI (the old dev slash-subcommands still exist under it). Built in
+the GloomsAuras family language (flat SQUARED navy chrome, purple Khand headers, orange
+carets, sliding toggles, warm orange bottom-glow). Layout: LEFT preview pane · vertical
+divider · RIGHT **scrollable** one-open accordion · footer (master Enable toggle + Profile
+placeholder). Toolkit ported from GloomsAuras/Config.lua (skinPlate, flatButton, makeToggle,
+sliderRow, colorSwatch). Bundled `Media/ui/caret.png` = the orange accordion caret.
+
+**ARCHITECTURE SHIFT (done): a style is DATA in SavedVariables.**
+- `GB:GetStyle()` returns `GB.db.styleData` (the active user document); `GB.STYLES` are now
+  just starter templates. First run deep-copies `styleData` from the old `GB.db.style` key so
+  existing looks carry over (see Core loader).
+- Shape scheme: `GB.db.shape` = `"circle"` OR `"corner-<TL><TR><BL><BR>-r<N>"` — 16 per-corner
+  on/off patterns × 6 radius levels (r0..r5; r5 = fully round / circle-on-a-square). Legacy
+  keys (roundrect / square / unsuffixed `corner-XXXX`) auto-migrate in the Core loader.
+- New db fields: `zoom`, `iconW`/`iconH` (absent = auto = Edit-Mode size), `iconLockAspect`,
+  `stateColors{hover,selected,flash}`, `stateIntensity`, `styleData`.
+
+**Live-apply engine methods (all in Skin.lua, all QA'd working in-game):**
+- `Skin:SetShape(name)` — recreates icon + plate masks FRESH (the mask-re-render quirk),
+  re-sets swipe + state-ring art. `Skin:SetZoom(v)` — SetTexCoord. `Skin:SetStateColor/
+  SetStateIntensity` — SetVertexColor/SetAlpha on hover/checked/flash art. `Skin:SetIconSize
+  (w,h)` — re-anchors the visible icon + every overlay. Construction/decoration edits →
+  `Skin:ReapplyDecor` (re-anchor).
+- ★ KEY LEARNING: **re-anchoring a live mask (SetPoint) DOES re-clip live** — only the TEXTURE
+  swap (SetAtlas/SetTexture) hits the no-re-render quirk. So extension + icon-size changes
+  apply live via re-anchor; only SHAPE changes need fresh masks. (Resolved the "verify pending"
+  note in API-NOTES §2.)
+- ★ GOTCHA (cost a QA round): a `local function` called by an earlier `Skin:` setter must be
+  DEFINED ABOVE that setter — a Lua local isn't in scope for definitions above it (bit
+  `applyIconSize`, which SetIconSize called → nil).
+
+**Sections WIRED + QA'd in-game:**
+- **Shape & icon — COMPLETE:** presets (Circle / Rounded / Square), 4-corner on/off grid,
+  Corner radius (6 levels, live), Icon zoom (live), Icon width/height + Lock-aspect (live).
+- **State highlights:** hover/selected/flash color swatches + intensity (live).
+- **Construction:** extend-below slider (live). **Decoration layers:** one gradient layer —
+  on/off, color, fade start (live; edits `styleData`). The PLATE is now UI-authored.
+
+**Preview pane:** a real engine-styled sample button (your slot-1 icon, masked to the current
+shape/zoom) + state chips (Idle/Proc/Cooldown/Hover/Selected/Flash) from the same art;
+reflects shape/zoom/state/aspect. Does NOT yet render the decoration plate (follow-up).
+
+**STILL STUB sections:** Text · Proc glow (needs Glows.lua wiring) · Bar layout (the GEOMETRY
+fork — rows/gap; Edit-Mode-owned; scope decision still OPEN with Jason) · Apply to bars
+(per-bar enables — needs engine per-bar support).
+
+**Art gen:** `tools/generate-art.py` now emits 16 patterns × 6 radius levels (`make_corners_sdf`
++ `RADII`) → ~384 corner PNGs. **Generation is SLOW (~4 min, pure Python) — run it in the
+background.**
+
+## ▶▶ NEXT (session 3) — in priority order
+1. **Icon-sizing polish (Jason's last live feedback):**
+   (a) the size sliders STRETCH the icon ART (square spell art → distorted rectangle) — it
+   should keep the art's aspect and CROP-TO-FILL the shape (SetTexCoord cover-fit), ideally
+   with a toggle for stretch-vs-fill. (b) A non-square rounded icon OVALIZES (mask stretch)
+   instead of a clean PILL → needs aspect-correct masks (9-slice a rounded-rect mask, or
+   per-aspect generation) — this is THE deferred masking item and unlocks the pill.
+2. Wire the remaining stub sections: **Text** (keybind zone/anchor/nudge/font/size/color — the
+   engine's `ApplyHotkeyOverride` exists; route it through `styleData.hotkey`), **Proc glow**
+   (read Glows.lua first; tint/intensity/width → db), **Apply to bars** (per-bar enable).
+3. Render the decoration **plate in the preview pane** (currently shape/zoom/states only).
+4. Work the deferred-feedback backlog below (overlay shape/size + width controls, state-
+   highlight boldness, flyout border, CUSTOM color picker to replace Blizzard's).
+5. Resolve the **Bar-layout scope** decision with Jason (own geometry vs defer to Edit Mode).
+
+## Config UI — deferred feedback (Jason, 2026-07-18, in-game QA of the editor)
+Jason chose to defer these to keep wiring the sub-panels; revisit after breadth:
+- **Overlays (hover/checked/flash ring, proc glow, cooldown sweep) don't match the
+  icon's SIZE or SHAPE.** The state ring anchors to the ICON, not the full plate
+  construction (icon+extension), so on a plate it mismatches; and there are no
+  size/width controls yet (the mock had them). Needs: anchor overlays to the
+  construction, + per-overlay size/width sliders.
+- **State highlights too subtle** — the ring art is a soft rim; reads as a color
+  overlay, not a bold highlight. Needs bolder art (fuller radial) or a spread/opacity
+  control that can exceed the base art's intensity (current intensity slider only dims).
+- **Flyout buttons (pet/stance/etc.) keep a square Blizzard background border** at the
+  default size — `Suppress()` misses the flyout background art. Identify + suppress it.
+- **Color picker is the Blizzard default ColorPickerFrame** — clashes with the family
+  look. Build a custom family-styled picker (swatch grid + sliders/wheel).
 
 ## Smaller anytime-items
 - Aspect-correct mask art for stretched constructions (corner distortion on tall shapes).

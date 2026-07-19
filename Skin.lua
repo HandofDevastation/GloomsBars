@@ -20,7 +20,8 @@ local GB = _G.GloomsBars
 local Skin = { enabled = false }
 GB.Skin = Skin
 
-local ZOOM = 0.08
+local ZOOM = 0.08   -- default icon zoom-crop; GB.db.zoom overrides it (live via Skin:SetZoom)
+local function zoomVal() return (GB.db and GB.db.zoom) or ZOOM end
 -- The circle art is padded to 240/256 of its canvas (edge-bleed rule,
 -- API-NOTES §2); oversize the mask region so the circle spans the icon.
 local GROW_RATIO = (256 / 240 - 1) / 2
@@ -38,6 +39,15 @@ local STATE_TINT = {
   flash     = { 1, 0.25, 0.25 },   -- red attack flash
   assist    = { 0.35, 0.75, 1 },   -- assisted-rotation suggestion (Blizzard-ish blue)
 }
+-- Hover/checked/flash tints + intensity are user-editable (Config UI → State
+-- highlights). db.stateColors keys map to the engine's texture roles; fall back
+-- to the defaults above.
+local STATE_KEY = { highlight = "hover", checked = "selected", flash = "flash" }
+local function stateColor(role)
+  local sc = GB.db and GB.db.stateColors
+  return (sc and sc[STATE_KEY[role]]) or STATE_TINT[role]
+end
+local function stateIntensity() return (GB.db and GB.db.stateIntensity) or 1 end
 
 -- Reskin the assisted-rotation helper (the persistent blue square): its
 -- ActiveFrame.Border is a 128px square-ish atlas → our ring, tinted; the
@@ -174,7 +184,7 @@ local function ApplyDecor(btn)
   end
   local used = 0
   for i, layer in ipairs(style.layers or {}) do
-    if layer.kind == "gradient" then
+    if layer.enabled ~= false and layer.kind == "gradient" then
       local c = layer.color or { 1, 1, 1 }
       local fromA, toA = layer.fromAlpha or 1, layer.toAlpha or 0
       if layer.zone == "extension" and ext > 0 then
@@ -269,6 +279,19 @@ local function AlignCooldowns(btn)
   end
 end
 
+-- Resize the VISIBLE icon to db.iconW/iconH (centered on the button). The secure
+-- button's hit area is untouched (textures aren't protected). "auto" (nil) leaves
+-- Blizzard's anchoring. Defined before the setters that call it (SetIconSize).
+local function applyIconSize(btn)
+  local icon = btn.icon or btn.Icon
+  if not icon then return end
+  local w, h = GB.db and GB.db.iconW, GB.db and GB.db.iconH
+  if not (w and h) then return end
+  icon:ClearAllPoints()
+  icon:SetPoint("CENTER", btn, "CENTER", 0, 0)
+  icon:SetSize(w, h)
+end
+
 function Skin:SetSweepOvershoot(px)
   if px then
     GB.db.sweepOvershoot = px
@@ -281,11 +304,122 @@ function Skin:SetSweepOvershoot(px)
   end
 end
 
+-- Icon zoom-crop is a plain SetTexCoord (no mask re-render, no Blizzard re-set —
+-- API-NOTES §3), so it's safe to change LIVE: just re-apply the texcoord to every
+-- skinned icon. Driven by the Config UI's zoom slider.
+function Skin:SetZoom(v)
+  v = math.max(0, math.min(0.45, tonumber(v) or ZOOM))
+  if GB.db then GB.db.zoom = v end
+  if self.enabled then
+    GB:ForEachButton(function(btn)
+      local rec = records[btn]
+      local icon = btn.icon or btn.Icon
+      if rec and rec.active and icon then icon:SetTexCoord(v, 1 - v, v, 1 - v) end
+    end)
+  end
+end
+
+-- Live shape change. Editing a live mask's texture never re-renders (API-NOTES
+-- §2), so swap the shape by creating FRESH masks — for the icon AND every
+-- decoration plate — and re-setting the SetTexture-based shaped art (swipe,
+-- state rings). The old mask objects are orphaned (can't be destroyed); the
+-- churn is bounded per session and cleared on /reload.
+function Skin:SetShape(name)
+  if name then GB.db.shape = name end
+  if not self.enabled then return end
+  local shp = GB:GetShape()
+  GB:ForEachButton(function(btn)
+    local rec = records[btn]
+    local icon = btn.icon or btn.Icon
+    if not (rec and rec.active and icon) then return end
+    -- Fresh icon mask
+    if rec.mask then icon:RemoveMaskTexture(rec.mask) end
+    local ext = ExtensionHeight(icon)
+    local m = btn:CreateMaskTexture()
+    m:SetTexture(shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    AnchorConstructionMask(m, icon, ext)
+    rec.mask = m
+    icon:AddMaskTexture(m)
+    -- Fresh plate masks (decoration layers)
+    if rec.plates then
+      for _, plate in ipairs(rec.plates) do
+        if plate.mask then plate.tex:RemoveMaskTexture(plate.mask) end
+        local pm = rec.decorFrame:CreateMaskTexture()
+        pm:SetTexture(shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+        plate.mask = pm
+        plate.tex:AddMaskTexture(pm)
+      end
+    end
+    -- SetTexture-based shaped art re-sets live (no mask quirk)
+    for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
+      if cd and cd.SetSwipeTexture then cd:SetSwipeTexture(shp.swipe) end
+    end
+    if btn.GetHighlightTexture then local hl = btn:GetHighlightTexture(); if hl then hl:SetTexture(shp.ring) end end
+    if btn.GetCheckedTexture then local ct = btn:GetCheckedTexture(); if ct then ct:SetTexture(shp.ring) end end
+    if btn.Flash then btn.Flash:SetTexture(shp.ring) end
+    ApplyDecor(btn)
+  end)
+end
+
+-- Live state-highlight tint. `which` = hover | selected | flash → the matching
+-- highlight/checked/flash texture on every button. Pure SetVertexColor, safe live.
+function Skin:SetStateColor(which, c)
+  GB.db.stateColors = GB.db.stateColors or {}
+  GB.db.stateColors[which] = c
+  if not (self.enabled and c) then return end
+  GB:ForEachButton(function(btn)
+    local tex
+    if which == "hover" and btn.GetHighlightTexture then tex = btn:GetHighlightTexture()
+    elseif which == "selected" and btn.GetCheckedTexture then tex = btn:GetCheckedTexture()
+    elseif which == "flash" then tex = btn.Flash end
+    if tex then tex:SetVertexColor(c[1], c[2], c[3]) end
+  end)
+end
+
+function Skin:SetStateIntensity(v)
+  GB.db.stateIntensity = v
+  if not self.enabled then return end
+  GB:ForEachButton(function(btn)
+    local hl = btn.GetHighlightTexture and btn:GetHighlightTexture()
+    local ct = btn.GetCheckedTexture and btn:GetCheckedTexture()
+    if hl then hl:SetAlpha(v) end
+    if ct then ct:SetAlpha(v) end
+    if btn.Flash then btn.Flash:SetAlpha(v) end
+  end)
+end
+
+-- Live icon resize: re-anchor the visible icon, then everything that follows it
+-- (state art, cooldowns, and mask + plates + hotkey via ApplyDecor). All plain
+-- re-anchors — the secure hit area is never touched.
+function Skin:SetIconSize(w, h)
+  GB.db.iconW, GB.db.iconH = w, h
+  if not self.enabled then return end
+  GB:ForEachButton(function(btn)
+    local rec = records[btn]
+    local icon = btn.icon or btn.Icon
+    if not (rec and rec.active and icon) then return end
+    applyIconSize(btn)
+    local grow = icon:GetWidth() * GROW_RATIO
+    local function fit(tex)
+      if not tex then return end
+      tex:ClearAllPoints()
+      tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
+      tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
+    end
+    if btn.GetHighlightTexture then fit(btn:GetHighlightTexture()) end
+    if btn.GetCheckedTexture then fit(btn:GetCheckedTexture()) end
+    fit(btn.Flash)
+    AlignCooldowns(btn)
+    ApplyDecor(btn)
+  end)
+end
+
 local function ApplyButton(btn)
   local icon = btn.icon or btn.Icon
   if not icon then return end
   local rec = records[btn]
   if rec and rec.active then return end
+  applyIconSize(btn)
   if not rec then
     rec = {}
     records[btn] = rec
@@ -298,6 +432,7 @@ local function ApplyButton(btn)
     if btn.UpdateButtonArt then
       hooksecurefunc(btn, "UpdateButtonArt", function(b)
         if Skin.enabled then
+          applyIconSize(b)
           Suppress(b)
           AlignCooldowns(b)
         end
@@ -325,7 +460,8 @@ local function ApplyButton(btn)
     icon:RemoveMaskTexture(btn.IconMask)
     rec.iconMaskRemoved = true
   end
-  icon:SetTexCoord(ZOOM, 1 - ZOOM, ZOOM, 1 - ZOOM)
+  local z = zoomVal()
+  icon:SetTexCoord(z, 1 - z, z, 1 - z)
   icon:AddMaskTexture(rec.mask)
   -- Round state art. One-time: originals aren't recoverable without /reload
   -- (Disable() says so). Anchored to the icon oversized by the padding ratio
@@ -340,19 +476,19 @@ local function ApplyButton(btn)
     if btn.SetHighlightTexture and btn.GetHighlightTexture then
       btn:SetHighlightTexture(GB:GetShape().ring, "ADD")
       local hl = btn:GetHighlightTexture()
-      hl:SetVertexColor(unpack(STATE_TINT.highlight))
+      hl:SetVertexColor(unpack(stateColor("highlight"))); hl:SetAlpha(stateIntensity())
       fit(hl)
     end
     if btn.SetCheckedTexture and btn.GetCheckedTexture then
       btn:SetCheckedTexture(GB:GetShape().ring)
       local ct = btn:GetCheckedTexture()
       ct:SetBlendMode("ADD")
-      ct:SetVertexColor(unpack(STATE_TINT.checked))
+      ct:SetVertexColor(unpack(stateColor("checked"))); ct:SetAlpha(stateIntensity())
       fit(ct)
     end
     if btn.Flash then
       btn.Flash:SetTexture(GB:GetShape().ring)
-      btn.Flash:SetVertexColor(unpack(STATE_TINT.flash))
+      btn.Flash:SetVertexColor(unpack(stateColor("flash"))); btn.Flash:SetAlpha(stateIntensity())
       fit(btn.Flash)
     end
     rec.stateArt = true

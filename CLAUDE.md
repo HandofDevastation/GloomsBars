@@ -49,8 +49,12 @@ Hard walls (from [docs/SPEC.md](docs/SPEC.md)):
 - `Glows.lua` — GB.Glows: shape-matched proc glow engine (hooks all three Blizzard glow
   mechanisms; THE differentiator).
 - `Media/masks/`, `Media/art/` — generated per-shape art; `tools/generate-art.py`
-  regenerates everything (SDF-based; edge-padding rule in API-NOTES §2).
-- (Next phase) `Config.lua` — the style editor.
+  regenerates everything (SDF-based; edge-padding rule in API-NOTES §2). Now 16 corner
+  patterns × 6 radius levels (`corner-<TL><TR><BL><BR>-r<N>`) — slow to regen (~4 min).
+  `Media/ui/caret.png` — the orange accordion caret for the Config UI.
+- `Config.lua` — **BUILT (session 2)**: the style editor. `/gb` opens it. Family-language
+  window (preview pane + scrollable one-open accordion + footer). Toolkit + all wired
+  sections + the style-as-SavedVariables model. See docs/HANDOFF.md SESSION 2 for state.
 
 ## Testing workflow
 The repo root **is** the addon folder, symlinked into the client at

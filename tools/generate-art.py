@@ -46,11 +46,41 @@ def sd_square(px, py, extent=EXTENT):
     return outside + inside - corner
 
 
+# Per-corner rounding (Jason's ask, 2026-07-18): each corner is independently
+# ROUND or SHARP, all rounded corners sharing one radius. This is the iq
+# rounded-box SDF with the corner radius chosen per quadrant. The straight
+# edges sit at ±extent regardless of corner radius, so corners with different
+# radii still join on a continuous silhouette (no seam). tl/tr/bl/br are bools.
+ROUND_R = 0.25   # rounded-corner radius, as a fraction of extent
+SHARP_R = 0.04   # "sharp" is a ~1px token arc so it anti-aliases like `square`
+
+def make_corners_sdf(tl, tr, bl, br, round_r=ROUND_R):
+    def sdf(px, py, extent=EXTENT):
+        rt = lambda on: extent * (round_r if on else SHARP_R)
+        if px >= 0:
+            r = rt(tr) if py < 0 else rt(br)
+        else:
+            r = rt(tl) if py < 0 else rt(bl)
+        qx = abs(px) - extent + r
+        qy = abs(py) - extent + r
+        return math.hypot(max(qx, 0.0), max(qy, 0.0)) + min(max(qx, qy), 0.0) - r
+    return sdf
+
+
 SHAPES = {
     "circle": sd_circle,
     "roundrect": sd_roundrect,
     "square": sd_square,
 }
+
+# 16 per-corner on/off patterns × 4 radius levels → "corner-<TL><TR><BL><BR>-r<N>".
+# The Config UI's four corner toggles pick the pattern; the radius slider picks
+# the level. corner-1111-r* == roundrect at that radius, corner-0000-r0 == square.
+RADII = [0.12, 0.25, 0.42, 0.62, 0.82, 1.0]   # radius levels r0..r5; r5 == fully round (a square becomes a circle)
+for _lvl, _rr in enumerate(RADII):
+    for _bits in range(16):
+        _tl, _tr, _bl, _br = (_bits >> 3) & 1, (_bits >> 2) & 1, (_bits >> 1) & 1, _bits & 1
+        SHAPES["corner-%d%d%d%d-r%d" % (_tl, _tr, _bl, _br, _lvl)] = make_corners_sdf(_tl, _tr, _bl, _br, _rr)
 
 
 # --- alpha profiles ---------------------------------------------------------

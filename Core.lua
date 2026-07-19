@@ -68,6 +68,22 @@ GB.SHAPES = {
   roundrect = shape("roundrect"),
   square = shape("square"),
 }
+-- Per-corner rounding (Jason 2026-07-18): every corner is independently round or
+-- sharp, all rounded corners sharing one radius. The masks (from generate-art.py)
+-- span the full 16 on/off patterns × 4 radius levels: "corner-<TL><TR><BL><BR>-r
+-- <N>". The Config UI's four corner toggles pick the pattern, the radius slider
+-- picks the level. corner-1111-r* == roundrect at that radius, corner-0000-r0 ==
+-- square. Masks verified to carry the right silhouette.
+for level = 0, 5 do
+  for bits = 0, 15 do
+    local tl = math.floor(bits / 8) % 2
+    local tr = math.floor(bits / 4) % 2
+    local bl = math.floor(bits / 2) % 2
+    local br = bits % 2
+    local name = ("corner-%d%d%d%d-r%d"):format(tl, tr, bl, br, level)
+    GB.SHAPES[name] = shape(name)
+  end
+end
 
 function GB:GetShape()
   return GB.SHAPES[(GB.db and GB.db.shape) or "circle"] or GB.SHAPES.circle
@@ -102,7 +118,18 @@ GB.STYLES = {
   },
 }
 
+-- A style is DATA. GB.STYLES are code starter-templates; the ACTIVE style is a
+-- user document in SavedVariables (GB.db.styleData), edited by the Config UI.
+local function deepcopy(t)
+  if type(t) ~= "table" then return t end
+  local c = {}
+  for k, v in pairs(t) do c[k] = deepcopy(v) end
+  return c
+end
+GB.deepcopy = deepcopy
+
 function GB:GetStyle()
+  if GB.db and GB.db.styleData then return GB.db.styleData end
   return GB.STYLES[(GB.db and GB.db.style) or "none"] or GB.STYLES.none
 end
 local FONT_DIR = GB.MEDIA .. "fonts\\"
@@ -171,7 +198,14 @@ local DB_DEFAULTS = {
   schema = 1,
   shape = "circle",        -- key into GB.SHAPES
   style = "none",          -- key into GB.STYLES
+  zoom = 0.08,             -- icon zoom-crop (SetTexCoord inset); live via Skin:SetZoom
+  -- iconW / iconH absent = "auto" (icon matches the Edit-Mode button size); set
+  -- explicitly by the Config UI to resize the VISIBLE icon (hit area unchanged).
+  iconLockAspect = true,   -- keep width and height equal while sizing
   sweepOvershoot = 0.75,   -- px the cooldown sweep extends past the icon circle
+  -- State-highlight tints (hover/selected/flash) + intensity — Config-editable.
+  stateColors = { hover = { 1, 0.82, 0.35 }, selected = { 0.45, 0.75, 1 }, flash = { 1, 0.25, 0.25 } },
+  stateIntensity = 1,
 }
 
 local loader = CreateFrame("Frame")
@@ -184,6 +218,16 @@ loader:SetScript("OnEvent", function(_, event, arg1)
       if GloomsBarsDB[k] == nil then GloomsBarsDB[k] = v end
     end
     GB.db = GloomsBarsDB
+    -- Promote the active style to an editable saved document on first run (from
+    -- the previously-selected starter template, so existing looks carry over).
+    if GB.db.styleData == nil then
+      GB.db.styleData = deepcopy(GB.STYLES[GB.db.style] or GB.STYLES.none)
+    end
+    -- Migrate legacy shape keys to the radius-suffixed scheme (r2 ≈ old 0.25).
+    local sh = GB.db.shape
+    if sh == "roundrect" then GB.db.shape = "corner-1111-r2"
+    elseif sh == "square" then GB.db.shape = "corner-0000-r0"
+    elseif type(sh) == "string" and sh:match("^corner%-%d%d%d%d$") then GB.db.shape = sh .. "-r2" end
   elseif event == "PLAYER_LOGIN" then
     PreloadFonts()
   end
@@ -430,7 +474,9 @@ SLASH_GLOOMSBARS1 = "/gb"
 SLASH_GLOOMSBARS2 = "/gloomsbars"
 SlashCmdList.GLOOMSBARS = function(input)
   local cmd, arg = (input or ""):lower():match("^%s*(%S*)%s*(%S*)")
-  if cmd == "debug" then
+  if cmd == "" or cmd == "config" or cmd == "ui" then
+    if GB.Config then GB.Config:Toggle() else msg("style editor not loaded.") end
+  elseif cmd == "debug" then
     DebugReport()
   elseif cmd == "mask" then
     ToggleMaskProbe()
