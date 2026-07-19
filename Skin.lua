@@ -94,12 +94,17 @@ end
 -- PlaySpellCastAnim, so this re-asserts in a post-hook of that method,
 -- tinted lime for channels / gold for casts (matching Blizzard's two looks).
 local CAST_TINT = { cast = { 1, 0.85, 0.4 }, channel = { 0.6, 1, 0.4 } }
+-- The ring art's bright rim peaks at 112/128 of its canvas (8px inside the
+-- shape edge at 120) — fitted edge-to-edge it reads undersized, same symptom
+-- as the cooldown sweep (QA 2026-07-18). Scale the region so the RIM lands on
+-- the icon edge; the soft outer falloff then slightly overlaps it (good, ADD).
+local RING_FIT = (256 / 240) * (120 / 112)
 local function StyleCastInnerGlow(btn, castType)
   local icon = btn.icon or btn.Icon
   local fill = btn.SpellCastAnimFrame and btn.SpellCastAnimFrame.Fill
   local glow = fill and fill.InnerGlowTexture
   if not (icon and glow) then return end
-  local grow = icon:GetWidth() * GROW_RATIO
+  local grow = icon:GetWidth() * (RING_FIT - 1) / 2
   glow:SetTexture(GB:GetShape().ring)
   glow:ClearAllPoints()
   glow:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
@@ -239,23 +244,26 @@ local function ApplyButton(btn)
   -- textures' ATLASES per cast type (cast vs channel) but never their masks,
   -- so one-time setup persists (API-NOTES §3).
   if not rec.castStyled then
-    local fill = btn.SpellCastAnimFrame and btn.SpellCastAnimFrame.Fill
-    if fill then
-      local grow = icon:GetWidth() * GROW_RATIO
-      local function shapeClip(target, blizzMask)
-        if not target then return end
-        if blizzMask then target:RemoveMaskTexture(blizzMask) end
-        local m = fill:CreateMaskTexture()
-        m:SetTexture(GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-        m:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
-        m:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
-        target:AddMaskTexture(m)
-      end
-      shapeClip(fill.CastFill, fill.FillMask)
-      -- InnerGlowTexture is NOT masked here: runtime mask attach silently
-      -- fails on never-rendered never-masked textures (API-NOTES §2). Its art
-      -- is replaced per-cast in the PlaySpellCastAnim hook instead.
+    local cast = btn.SpellCastAnimFrame
+    local grow = icon:GetWidth() * GROW_RATIO
+    -- Only for ALREADY-MASKED textures (the case where runtime mask swap
+    -- provably renders — API-NOTES §2): remove Blizzard's rounded-square
+    -- mask, attach a fresh shaped one.
+    local function shapeClip(parent, target, blizzMask)
+      if not (parent and target and blizzMask) then return end
+      target:RemoveMaskTexture(blizzMask)
+      local m = parent:CreateMaskTexture()
+      m:SetTexture(GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+      m:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
+      m:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
+      target:AddMaskTexture(m)
     end
+    local fill = cast and cast.Fill
+    if fill then shapeClip(fill, fill.CastFill, fill.FillMask) end
+    local burst = cast and cast.EndBurst
+    if burst then shapeClip(burst, burst.GlowRing, burst.EndMask) end
+    -- Fill.InnerGlowTexture is never-rendered never-masked (runtime attach
+    -- silently fails) → art replaced per-cast in the PlaySpellCastAnim hook.
     rec.castStyled = true
   end
   StyleAssistedFrame(btn)

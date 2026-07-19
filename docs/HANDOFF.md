@@ -159,7 +159,9 @@ before touching mask/skin code.
       API-NOTES §2). Fix: art REPLACEMENT via `PlaySpellCastAnim` post-hook — our
       `<shape>-ring` art, lime tint for channels / gold for casts, re-asserted every
       cast. QA: channel again — inner glow shaped now?
-    - (`EndBurst` cast-end flash still unshaped — fix later if noticed.)
+    - ✅ Built (QA pending): **`EndBurst` cast-end flash** (Jason confirmed square) —
+      already-masked case: Blizzard's `EndMask` removed from the expanding
+      `GlowRing`, fresh shaped mask attached; template-only setup, no hooks needed.
 13. Next build steps: decoration layers (the north star), text controls, Config UI.
 10. ✅ QA'd (2026-07-18): `/gb shape roundrect` + /reload → all 8 bars rounded-rects.
     The shape registry is proven end-to-end.
