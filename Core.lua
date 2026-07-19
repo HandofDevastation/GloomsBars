@@ -337,6 +337,26 @@ local function ToggleRoundProbe()
   msg("round probe ON — ActionButton1: circle mask + slot art hidden. Q1: clean round icon on a bare background? Q2: does any square art come back when you hover/press it?")
 end
 
+-- /gb fontinfo — what font is ACTUALLY on ActionButton1's text right now?
+-- Distinguishes "our SetFont didn't take" from "took but got overridden by
+-- another addon" (ArcUI styles keybind text — green color is theirs, not
+-- Blizzard's) from "took but looks similar at 12px".
+local function FontInfo()
+  local b = _G["ActionButton1"]
+  if not b then msg("ActionButton1 not found.") return end
+  msg("ActionButton1 text fonts:")
+  for _, key in ipairs({ "HotKey", "Count", "Name" }) do
+    local fs = b[key]
+    if fs and fs.GetFont then
+      local face, size, flags = fs:GetFont()
+      local r, g, bl = fs:GetTextColor()
+      print(("  .%s: %s @ %.1f [%s] color %.2f,%.2f,%.2f text=%q shown=%s"):format(
+        key, tostring(face), size or 0, tostring(flags),
+        r or 0, g or 0, bl or 0, tostring(fs:GetText()), tostring(fs:IsShown())))
+    end
+  end
+end
+
 -- ---------------------------------------------------------------------------
 -- /gb slash router
 -- ---------------------------------------------------------------------------
@@ -356,6 +376,8 @@ SlashCmdList.GLOOMSBARS = function(input)
     GB.Skin:Toggle()
   elseif cmd == "sweep" then
     GB.Skin:SetSweepOvershoot(tonumber(arg))
+  elseif cmd == "fontinfo" then
+    FontInfo()
   elseif cmd == "shape" then
     if arg ~= "" and GB.SHAPES[arg] then
       GB.db.shape = arg

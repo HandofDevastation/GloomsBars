@@ -137,6 +137,19 @@ before touching mask/skin code.
 10. ✅ QA'd (2026-07-18): `/gb shape roundrect` + /reload → all 8 bars rounded-rects.
     The shape registry is proven end-to-end.
 
+## ★ DESIGN NORTH STAR (Jason, 2026-07-18) — heavily customized button looks
+Jason's mockup: a rounded-rect icon with an **orange gradient plate covering the
+bottom ~40%** (opaque at bottom, fading upward into the icon) and the **keybind in
+bold white centered ON the plate**. "This is just one example — I want a TON of
+flexibility in this; it's the entire point."
+
+Architecture direction: **decoration layers / style recipes.** A button style =
+shape + zoom + N decoration layers (gradient plates via native `SetGradient`,
+borders, badges — each an OUR-owned texture clipped by its own fresh mask) + text
+elements with full position/font/size/color control (re-anchor `.HotKey` etc.).
+All pure-skin-safe. The Config UI ultimately edits recipes, not fixed toggles.
+Do NOT build one-off hardcoded looks that fight this direction.
+
 ## Config UI backlog (Phase 6 — every dev slash-knob becomes a real control)
 Jason's explicit expectation (2026-07-18): slash commands are DEV SCAFFOLDING only;
 the product gets a full options panel in the GloomsAuras design language (tokens +
