@@ -110,16 +110,18 @@ before touching mask/skin code.
    default; live-tunable `/gb sweep <px>`, persisted)** — overshoot cures the bright
    AA rim; needed because the sweep isn't clipped by the icon mask.
 6. ❌ Masking the state textures FAILED in QA (hover stayed square — API-NOTES §2)
-   → replaced approach: **round state ART** (`Media/art/ring-glow.png`, white ring
-   tinted per state: gold hover / blue checked / red flash) via SetHighlightTexture/
-   SetCheckedTexture/Flash:SetTexture. QA pending: hover = round gold ring?
-7. Identified: the persistent blue glow on Hatchet Toss = **assisted-rotation
-   helper** (`AssistedCombatRotationFrame.ActiveFrame`, 128px Border atlas
-   `UI-HUD-RotationHelper-Active` + rotating masked FX). Untouched for now
-   (useful gameplay info); shape it in the overlay-frames/art pass.
+   → ✅ QA'd replacement (2026-07-18): **round state ART** (`Media/art/ring-glow.png`,
+   tinted: gold hover / blue checked / red flash). Hover confirmed round in-game.
+   **📌 PINNED (Jason): state glows are dimmer than default — color/opacity/intensity
+   must become user controls in the Config UI phase.**
+7. ✅ Built (QA pending): **assisted-rotation reskin** — the persistent blue square =
+   `AssistedCombatRotationFrame.ActiveFrame` (`UI-HUD-RotationHelper-Active` Border +
+   rotating FX). Border → our ring (assist-blue), FX alpha 0; lazy creation hooked
+   via per-button `UpdateAssistedCombatRotationFrame`. QA: round blue ring on the
+   suggested ability?
 8. Next build steps: text styling (fonts stick per §3; colors need hooks), shaped
-   cast/channel overlay frames (`SpellCastAnimFrame` etc.), assisted-rotation
-   reskin, then the glow phase (manager hook + shaped glow art).
+   cast/channel overlay frames (`SpellCastAnimFrame` etc.), then the glow phase
+   (manager hook + shaped glow art).
 5. Sometime: test WoWUp install-from-URL **on another machine** (NOT Jason's dev
    machine — WoWUp would clobber the dev symlink).
 2. Then Phase 2 (skin engine v0): read the client's `Blizzard_ActionBar*` /

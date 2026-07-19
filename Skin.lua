@@ -36,7 +36,30 @@ local STATE_TINT = {
   highlight = { 1, 0.82, 0.35 },   -- gold hover
   checked   = { 0.45, 0.75, 1 },   -- blue active/auto-repeat
   flash     = { 1, 0.25, 0.25 },   -- red attack flash
+  assist    = { 0.35, 0.75, 1 },   -- assisted-rotation suggestion (Blizzard-ish blue)
 }
+
+-- Reskin the assisted-rotation helper (the persistent blue square): its
+-- ActiveFrame.Border is a 128px square-ish atlas → our ring, tinted; the
+-- rotating square FX is silenced. The frame is created LAZILY by
+-- UpdateAssistedCombatRotationFrame → also hooked so late-created frames get
+-- styled before they're seen. /reload restores.
+local function StyleAssistedFrame(btn)
+  local active = btn.AssistedCombatRotationFrame and btn.AssistedCombatRotationFrame.ActiveFrame
+  if not active or active.gbStyled then return end
+  local icon = btn.icon or btn.Icon
+  if not icon then return end
+  local grow = icon:GetWidth() * GROW_RATIO
+  if active.Border then
+    active.Border:SetTexture(GB.ART.ring)
+    active.Border:SetVertexColor(unpack(STATE_TINT.assist))
+    active.Border:ClearAllPoints()
+    active.Border:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
+    active.Border:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
+  end
+  if active.Glow then active.Glow:SetAlpha(0) end
+  active.gbStyled = true
+end
 
 local function Suppress(btn)
   if btn.SlotBackground then btn.SlotBackground:Hide() end
@@ -101,6 +124,11 @@ local function ApplyButton(btn)
         end
       end)
     end
+    if btn.UpdateAssistedCombatRotationFrame then
+      hooksecurefunc(btn, "UpdateAssistedCombatRotationFrame", function(b)
+        if Skin.enabled then StyleAssistedFrame(b) end
+      end)
+    end
   end
   if btn.IconMask then
     icon:RemoveMaskTexture(btn.IconMask)
@@ -154,6 +182,7 @@ local function ApplyButton(btn)
     end
     rec.cooldownStyled = true
   end
+  StyleAssistedFrame(btn)
   AlignCooldowns(btn)
   Suppress(btn)
   rec.active = true
