@@ -577,6 +577,21 @@ local function CastInfo()
   dump(caf, "SpellCastAnimFrame")
   dump(caf.Fill, ".Fill")
   dump(caf.EndBurst, ".EndBurst")
+  dump(caf.InterruptDisplay, "caf.InterruptDisplay")
+  if b.InterruptDisplay then dump(b.InterruptDisplay, "btn.InterruptDisplay") end
+  -- The cancel/interrupt red is a separate element — hunt any red-tinted texture.
+  for _, sub in ipairs({ caf, caf.Fill, caf.InterruptDisplay, b.InterruptDisplay }) do
+    if sub and sub.GetRegions then
+      for _, r in ipairs({ sub:GetRegions() }) do
+        if r.GetVertexColor then
+          local rr, g, bl = r:GetVertexColor()
+          if rr and rr > 0.6 and (g or 0) < 0.4 and (bl or 0) < 0.4 then
+            print(("  |cffff7729RED tex: %s (atlas=%s)|r"):format(tostring(r:GetDebugName()), tostring(r.GetAtlas and r:GetAtlas())))
+          end
+        end
+      end
+    end
+  end
 end
 
 -- /gb borderinfo — find the green equipped-item border we're failing to suppress

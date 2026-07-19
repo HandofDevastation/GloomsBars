@@ -280,7 +280,7 @@ end
 -- state here rather than trust the hook's castType/timing: UnitCastingInfo →
 -- cast (fills up), else UnitChannelInfo → channel (drains); neither → the cast
 -- ended/was interrupted → hide. `dir` = the edge the fill grows from.
-local function CastFillOnUpdate(f)
+local function CastFillOnUpdate(f, elapsed)
   if f.blizzFill then f.blizzFill:SetAlpha(0) end
   local s, e, channel
   local _, _, _, cs, ce = UnitCastingInfo("player")
@@ -289,7 +289,16 @@ local function CastFillOnUpdate(f)
     local _, _, _, hs, he = UnitChannelInfo("player")
     if hs then s, e, channel = hs, he, true end
   end
-  if not (s and e and e > s) then f:Hide(); return end
+  if not (s and e and e > s) then
+    -- Cast ended/interrupted: hide our tint but keep suppressing Blizzard's fill
+    -- for a brief grace so its red interrupt flash (a re-shown CastFill) is eaten.
+    f.tex:Hide()
+    f.grace = (f.grace or 0.45) - (elapsed or 0)
+    if f.grace <= 0 then f:Hide() end
+    return
+  end
+  f.grace = nil
+  f.tex:Show()
   local p = (GetTime() - s / 1000) / ((e - s) / 1000)
   if p < 0 then p = 0 elseif p > 1 then p = 1 end
   local frac = channel and (1 - p) or p       -- cast fills up; channel drains
@@ -341,6 +350,7 @@ local function styleCast(btn, rec, icon, castType)
   f.tex:SetVertexColor(col[1], col[2], col[3], a)
   f.dir = (GB.db and GB.db.castDrainDir) or "up"
   f.blizzFill = cast.Fill and cast.Fill.CastFill   -- OnUpdate force-suppresses this each frame
+  f.grace = nil
   f:Show()                                    -- OnUpdate polls the live cast/channel + hides at the end
 end
 
@@ -670,11 +680,6 @@ local function ApplyButton(btn)
         end
       end)
     end
-    if btn.HideSpellCastAnim then
-      hooksecurefunc(btn, "HideSpellCastAnim", function(b)
-        if records[b] and records[b].castFillFrame then records[b].castFillFrame:Hide() end
-      end)
-    end
     if btn.UpdateHotkeys then
       hooksecurefunc(btn, "UpdateHotkeys", function(b)
         if Skin.enabled and records[b] and records[b].hkOverridden then
@@ -814,4 +819,16 @@ loader:SetScript("OnEvent", function()
   if GB.db and GB.db.skinEnabled then
     Skin:Enable()
   end
+end)
+
+-- Re-assert suppression on equip / action-placement / world-enter: Blizzard
+-- re-shows the equipped-item green .Border (and slot art) on these, undoing our
+-- one-time Suppress (verified /gb borderinfo: .Border back at alpha 0.5). These
+-- events are infrequent, and Suppress is cheap (mostly no-op Hide/SetAlpha).
+local reassert = CreateFrame("Frame")
+reassert:RegisterEvent("PLAYER_ENTERING_WORLD")
+reassert:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
+reassert:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+reassert:SetScript("OnEvent", function()
+  if Skin.enabled then GB:ForEachButton(function(b) Suppress(b) end) end
 end)
