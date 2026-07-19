@@ -131,15 +131,20 @@ before touching mask/skin code.
    quirk). Shipped: `circle`, `roundrect`. Roadmap: aspect-ratio letterbox entries
    (3:2 = shape art + texcoord math, still pure-skin), per-bar shape selection in the
    Config UI, size/gaps = the §B geometry fork (still optional/later).
-9. ✅ Built (QA pending): **THE GLOW PHASE — `Glows.lua`** (2026-07-18, same session).
-   Post-hooks `ActionButtonSpellAlertManager:ShowAlert/HideAlert`; alpha-0s
-   Blizzard's per-button alert frame (durable — manager only uses Show/Hide);
-   shows our shape-matched additive halo (`<shape>-glow.png`, art edge at 96/128,
-   region 128/96 × icon) with alpha-pulse animation; tinted gold (procs) or blue
-   (assist highlight / rotation, detected via `HasAlert` type + `ProcAltGlow`
-   shown). Enabled/disabled with the skin toggle. QA: the blue-glow button should
-   now show a shaped pulsing halo; get a real proc in combat for gold.
-10. Next build steps: shaped cast/channel overlay frames (`SpellCastAnimFrame`),
+9. ✅ Built: **THE GLOW PHASE — `Glows.lua`**. One shaped additive halo per button
+   (`<shape>-glow.png`, art edge 96/128, region 128/96 × icon, alpha-pulse anim),
+   fed by hooks on ALL THREE Blizzard glow mechanisms (API-NOTES §3): spell alerts
+   (gold), the assisted highlight (blue — see below), and the rotation-variant
+   alerts. Blizzard frames silenced via durable alpha-0. Rides the skin toggle.
+   **The blue-glow saga's final answer:** it was `AssistedCombatHighlightFrame` —
+   a THIRD mechanism (66×66 `rotationhelper_ants_flipbook`, anim only plays IN
+   combat — hence "no pulse"; Jason's decisive test: the game's highlight-assist
+   setting kills it). ⚠ Jason's prioritization (2026-07-18): the assist highlight
+   is LOW PRIORITY — the hook exists but do NOT iterate/QA it further; if it
+   works, bonus.
+10. ❌ **QA pending — THE core differentiator case: a real gold proc in combat**
+    (shaped pulsing gold halo instead of Blizzard's square flipbook).
+11. Next build steps: shaped cast/channel overlay frames (`SpellCastAnimFrame`),
     decoration layers (the north star), text controls, Config UI.
 10. ✅ QA'd (2026-07-18): `/gb shape roundrect` + /reload → all 8 bars rounded-rects.
     The shape registry is proven end-to-end.
