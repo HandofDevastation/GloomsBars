@@ -155,17 +155,31 @@ before touching mask/skin code.
     drain (`CastFill`, mask swap), inner glow (art replacement via
     `PlaySpellCastAnim` hook, lime/gold, `RING_FIT` sizing so the rim lands on the
     icon edge), and `EndBurst` end flash (mask swap). All three follow the shape.
-13. ✅ Built (QA pending): **DECORATION ENGINE v0 (the north star)** — `GB.STYLES`
-    recipes (data) interpreted by Skin.lua: pooled gradient plates (native
-    `SetGradient`, fresh per-plate shape masks — safe path), HotKey override
-    (position on a layer / font / size / color, re-asserted via per-button
-    `UpdateHotkeys` hook, text container raised above plates). `/gb style <name>`
-    switches LIVE, persisted. Shipped recipes: `none`, `plate` (Jason's mockup:
-    orange bottom gradient + centered white bold keybind). QA: `/gb style plate` —
-    does it look like the mockup? Note best-effort revert (`/gb style none`);
-    /reload = exact.
-14. Next build steps: more layer kinds (borders, badges, top plates), per-style
-    Count/Name overrides, text controls, then the Config UI over the recipes.
+13. ✅ **DECORATION ENGINE — QA'd against the mock (2026-07-18, Jason: "pretty
+    cool")**: construction zones (visible button extends below the icon), solid
+    extension fill + fade layer spanning the icon's bottom half (Figma-matched
+    numbers), keybind centered in the extension, one continuous shape mask over
+    the construction, live `/gb style` switching. Iteration lessons recorded:
+    masks don't clip `SetColorTexture` (use WHITE8X8 file); "one gradient" often
+    decomposes into solid+fade primitives — editor should think in primitives.
+14. ▶▶ **NEXT MAJOR BUILD: THE STYLE EDITOR (Config UI)** — the product, per the
+    corrected north star. Requirements gathered so far:
+    - Recipes move to SavedVariables (user-authored documents); `GB.STYLES` in
+      code shrinks to starter templates.
+    - Editor controls: extension size, gradient layers (color/position/fade
+      stops), keybind placement + font/size/color (Khand experiment), shape,
+      visible-icon sizing (textures only — clickable area stays Edit-Mode-sized),
+      glow styling (tint/intensity/pulse — Jason: current glows too subtle),
+      state-glow colors/opacity, sweep overshoot.
+    - Built in the GloomsAuras design language (toolkit port from
+      `/Users/jasonstone/GloomsAuras/Config.lua`): sliding switches, no Blizzard
+      widgets, pixel-perfect to Jason's Figma mocks. Jason's Figma numbers
+      translate 1:1 into recipe values — ask him for editor-UI mockups; the
+      figma-desktop MCP tools may allow reading values directly from his file.
+15. Smaller anytime-items: aspect-correct mask art for stretched constructions
+    (corner distortion), Count/Name per-style overrides, more layer kinds
+    (border, badge, top plate), pet/stance/extra bars, WoWup install test on a
+    second machine.
 10. ✅ QA'd (2026-07-18): `/gb shape roundrect` + /reload → all 8 bars rounded-rects.
     The shape registry is proven end-to-end.
 
