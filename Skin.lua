@@ -120,6 +120,9 @@ local function Suppress(btn)
   if btn.SlotArt then btn.SlotArt:Hide() end
   if btn.NormalTexture then btn.NormalTexture:SetAlpha(0) end
   if btn.PushedTexture then btn.PushedTexture:SetAlpha(0) end
+  -- Equipped-item green border (rounded-square, mismatched on a pill) — suppress
+  -- via alpha-0 (Blizzard toggles it Show/Hide, so alpha sticks). API-NOTES §1.
+  if btn.Border then btn.Border:SetAlpha(0) end
 end
 
 -- ---------------------------------------------------------------------------
@@ -260,32 +263,85 @@ local function buildMask(parent, icon, ext, src)
   return m
 end
 
--- Shape the sliding cast/channel fill + end burst to the pill (aspect mask over
--- the construction), replacing Blizzard's rounded-square FillMask/EndMask — else
--- the drain clips to a square in the middle of a pill. Rebuilt on shape/size
--- change; Blizzard re-sets these textures' atlases per cast type but never their
--- masks (API-NOTES §3), so our mask persists across casts.
-local function applyCastMasks(btn, rec, icon)
+-- Cast/channel visuals. Blizzard draws the drain fill (CastFill) at a FIXED
+-- square size independent of our resized icon — a mask can only clip, never
+-- enlarge, so it stays square on a pill (verified /gb castinfo). So we SUPPRESS
+-- it and draw our OWN pill-shaped LINEAR fill (a tint masked to the pill, whose
+-- extent animates over the cast/channel), driven by the cast/channel timing
+-- (UnitCastingInfo/UnitChannelInfo — readable, NOT the secret cooldown wall).
+-- Linear (not radial) so it reads distinct from the cooldown sweep AND supports
+-- a drain DIRECTION control. Colour/opacity/direction come from db (Config UI
+-- controls to follow). Called from the PlaySpellCastAnim hook (frame live at
+-- cast time), which also keeps mask creation off the size-slider hot path.
+
+-- OnUpdate (runs AFTER the animation system each frame): keep Blizzard's fill
+-- suppressed (its cast anim re-drives the alpha, so a one-time SetAlpha(0) won't
+-- stick), then size our fill to the LIVE cast/channel progress. We read the
+-- state here rather than trust the hook's castType/timing: UnitCastingInfo →
+-- cast (fills up), else UnitChannelInfo → channel (drains); neither → the cast
+-- ended/was interrupted → hide. `dir` = the edge the fill grows from.
+local function CastFillOnUpdate(f)
+  if f.blizzFill then f.blizzFill:SetAlpha(0) end
+  local s, e, channel
+  local _, _, _, cs, ce = UnitCastingInfo("player")
+  if cs then s, e, channel = cs, ce, false
+  else
+    local _, _, _, hs, he = UnitChannelInfo("player")
+    if hs then s, e, channel = hs, he, true end
+  end
+  if not (s and e and e > s) then f:Hide(); return end
+  local p = (GetTime() - s / 1000) / ((e - s) / 1000)
+  if p < 0 then p = 0 elseif p > 1 then p = 1 end
+  local frac = channel and (1 - p) or p       -- cast fills up; channel drains
+  local tex, W, H = f.tex, f:GetWidth(), f:GetHeight()
+  tex:ClearAllPoints()
+  local dir = f.dir or "up"
+  if dir == "up" then
+    tex:SetPoint("BOTTOMLEFT", f); tex:SetPoint("BOTTOMRIGHT", f); tex:SetHeight(math.max(0.01, H * frac))
+  elseif dir == "down" then
+    tex:SetPoint("TOPLEFT", f); tex:SetPoint("TOPRIGHT", f); tex:SetHeight(math.max(0.01, H * frac))
+  elseif dir == "left" then
+    tex:SetPoint("TOPRIGHT", f); tex:SetPoint("BOTTOMRIGHT", f); tex:SetWidth(math.max(0.01, W * frac))
+  else -- "right"
+    tex:SetPoint("TOPLEFT", f); tex:SetPoint("BOTTOMLEFT", f); tex:SetWidth(math.max(0.01, W * frac))
+  end
+end
+
+local function styleCast(btn, rec, icon, castType)
   local cast = btn.SpellCastAnimFrame
   if not cast then return end
   local ext = ExtensionHeight(icon)
   local src = aspectMask(icon:GetWidth(), icon:GetHeight() + ext)   -- nil → base shape mask
-  local function shapeClip(parent, target, blizzMask, slotKey)
-    if not (parent and target) then return end
-    local slot = rec[slotKey] or {}
-    rec[slotKey] = slot
-    -- Remove Blizzard's mask once; swap our own on every rebuild.
-    if blizzMask and not slot.blizzRemoved then
-      target:RemoveMaskTexture(blizzMask); slot.blizzRemoved = true
-    end
-    if slot.mask then target:RemoveMaskTexture(slot.mask) end
-    slot.mask = buildMask(parent, icon, ext, src)
-    target:AddMaskTexture(slot.mask)
-  end
-  local fill = cast.Fill
-  if fill then shapeClip(fill, fill.CastFill, fill.FillMask, "castFill") end
+  -- 2. Shape the end-burst completion flash to the pill.
   local burst = cast.EndBurst
-  if burst then shapeClip(burst, burst.GlowRing, burst.EndMask, "castBurst") end
+  if burst and burst.GlowRing then
+    local slot = rec.castBurst or {}; rec.castBurst = slot
+    if burst.EndMask and not slot.blizzRemoved then burst.GlowRing:RemoveMaskTexture(burst.EndMask); slot.blizzRemoved = true end
+    if slot.mask then burst.GlowRing:RemoveMaskTexture(slot.mask) end
+    slot.mask = buildMask(burst, icon, ext, src)
+    burst.GlowRing:AddMaskTexture(slot.mask)
+  end
+  -- 3. Our own pill-shaped linear fill.
+  if not rec.castFillFrame then
+    local f = CreateFrame("Frame", nil, btn)
+    f.tex = f:CreateTexture(nil, "OVERLAY")   -- WHITE8X8 = maskable (masks don't clip SetColorTexture)
+    f.tex:SetTexture("Interface\\Buttons\\WHITE8X8")
+    f:SetScript("OnUpdate", CastFillOnUpdate)
+    f:Hide()
+    rec.castFillFrame = f
+  end
+  local f = rec.castFillFrame
+  f:SetFrameLevel(btn:GetFrameLevel() + 3)    -- above icon, below text (TextOverlayContainer = +4)
+  AnchorConstruction(f, icon, GROW_RATIO)     -- frame spans the pill construction
+  if f.mask then f.tex:RemoveMaskTexture(f.mask) end
+  f.mask = buildMask(f, icon, ext, src)       -- fresh aspect pill mask, clips the tint to the shape
+  f.tex:AddMaskTexture(f.mask)
+  local col = (GB.db and GB.db.castFillColor) or { 1, 0.85, 0.4 }
+  local a = (GB.db and GB.db.castFillAlpha) or 0.55
+  f.tex:SetVertexColor(col[1], col[2], col[3], a)
+  f.dir = (GB.db and GB.db.castDrainDir) or "up"
+  f.blizzFill = cast.Fill and cast.Fill.CastFill   -- OnUpdate force-suppresses this each frame
+  f:Show()                                    -- OnUpdate polls the live cast/channel + hides at the end
 end
 
 local function ApplyHotkeyOverride(btn)
@@ -607,12 +663,16 @@ local function ApplyButton(btn)
     if btn.PlaySpellCastAnim then
       hooksecurefunc(btn, "PlaySpellCastAnim", function(b, castType)
         if Skin.enabled and records[b] then
-          -- Shape the cast/channel fill here (not at login/size-change): the
-          -- Fill/EndBurst frames are live at cast time, and this keeps mask
-          -- creation off the size-slider hot path.
-          applyCastMasks(b, records[b], b.icon or b.Icon)
+          -- Suppress Blizzard's fill + drive our own here (frame live at cast
+          -- time; keeps mask creation off the size-slider hot path).
+          styleCast(b, records[b], b.icon or b.Icon, castType)
           StyleCastInnerGlow(b, castType)
         end
+      end)
+    end
+    if btn.HideSpellCastAnim then
+      hooksecurefunc(btn, "HideSpellCastAnim", function(b)
+        if records[b] and records[b].castFillFrame then records[b].castFillFrame:Hide() end
       end)
     end
     if btn.UpdateHotkeys then
@@ -678,11 +738,10 @@ local function ApplyButton(btn)
     StyleText(btn)
     rec.textStyled = true
   end
-  -- Shaped cast/channel fill: the sliding CastFill + EndBurst are clipped to the
-  -- pill by applyCastMasks, applied lazily in the PlaySpellCastAnim hook (the
-  -- Fill frames are created at cast time, and it keeps mask creation off the
-  -- size-slider hot path). Fill.InnerGlowTexture (never-masked) is art-replaced
-  -- there too (StyleCastInnerGlow).
+  -- Cast/channel visuals (suppress Blizzard's square fill + draw our own pill
+  -- fill, shape the end burst, replace the inner-glow art) are all applied in the
+  -- PlaySpellCastAnim hook — the Fill frames are live at cast time, and it keeps
+  -- mask/fill work off the size-slider hot path. See styleCast / StyleCastInnerGlow.
   StyleAssistedFrame(btn)
   AlignCooldowns(btn)
   Suppress(btn)
@@ -702,9 +761,14 @@ local function RestoreButton(btn)
   if rec.texCoord then icon:SetTexCoord(unpack(rec.texCoord)) end
   if btn.NormalTexture then btn.NormalTexture:SetAlpha(1) end
   if btn.PushedTexture then btn.PushedTexture:SetAlpha(1) end
+  if btn.Border then btn.Border:SetAlpha(1) end
   if rec.plates then
     for _, plate in ipairs(rec.plates) do plate.tex:Hide() end
   end
+  -- Custom cast fill: hide ours + un-suppress Blizzard's (a /reload is exact).
+  if rec.castFillFrame then rec.castFillFrame:Hide() end
+  local caf = btn.SpellCastAnimFrame
+  if caf and caf.Fill and caf.Fill.CastFill then caf.Fill.CastFill:SetAlpha(1) end
   if rec.hkOverridden then
     rec.hkOverridden = nil
     btn.HotKey:SetJustifyH("RIGHT")

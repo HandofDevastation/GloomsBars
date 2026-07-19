@@ -208,6 +208,10 @@ local DB_DEFAULTS = {
   -- State-highlight tints (hover/selected/flash) + intensity — Config-editable.
   stateColors = { hover = { 1, 0.82, 0.35 }, selected = { 0.45, 0.75, 1 }, flash = { 1, 0.25, 0.25 } },
   stateIntensity = 1,
+  -- Custom cast/channel fill (replaces Blizzard's square drain — pill-shaped).
+  castFillColor = { 1, 0.85, 0.4 },   -- tint
+  castFillAlpha = 0.55,               -- opacity
+  castDrainDir = "up",                -- "up" | "down" | "left" | "right" (edge the fill grows from)
 }
 
 local loader = CreateFrame("Frame")
@@ -575,6 +579,25 @@ local function CastInfo()
   dump(caf.EndBurst, ".EndBurst")
 end
 
+-- /gb borderinfo — find the green equipped-item border we're failing to suppress
+-- (session 4). Reports every button whose .Border is shown + its alpha/colour, so
+-- we know if the green is .Border (and whether our SetAlpha(0) stuck) or another
+-- element. Run with the trinket on a bar.
+local function BorderInfo()
+  msg("Equipped-border (.Border) census across the 8 bars:")
+  local n = 0
+  GB:ForEachButton(function(btn, bar, i)
+    local b = btn.Border
+    if b and b.IsShown and b:IsShown() then
+      n = n + 1
+      local r, g, bl, a = b:GetVertexColor()
+      print(("  %s%d: .Border SHOWN alpha=%.2f vertex=%.2f,%.2f,%.2f,%.2f atlas=%s")
+        :format(bar.buttonPrefix, i, b:GetAlpha(), r or 0, g or 0, bl or 0, a or 0, tostring(b.GetAtlas and b:GetAtlas())))
+    end
+  end)
+  if n == 0 then print("  |cffff7729No .Border is shown — the green border is a DIFFERENT element.|r") end
+end
+
 -- ---------------------------------------------------------------------------
 -- /gb slash router
 -- ---------------------------------------------------------------------------
@@ -598,6 +621,8 @@ SlashCmdList.GLOOMSBARS = function(input)
     CooldownInfo()
   elseif cmd == "castinfo" then
     CastInfo()
+  elseif cmd == "borderinfo" then
+    BorderInfo()
   elseif cmd == "skin" then
     GB.Skin:Toggle()
   elseif cmd == "sweep" then
