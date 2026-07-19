@@ -61,6 +61,26 @@ local function StyleAssistedFrame(btn)
   active.gbStyled = true
 end
 
+-- Bundled fonts on the button text. Face swaps stick (Blizzard never re-sets
+-- fonts, only the HotKey COLOR for the range indicator — which we keep,
+-- API-NOTES §3). Sizes/flags stay Blizzard's for now; Config UI later.
+local TEXT_FONT = {
+  HotKey = "label",   -- GeneralSans-Semibold
+  Count  = "bodyM",   -- GeneralSans-Medium
+  Name   = "body",    -- GeneralSans-Regular (macro names)
+}
+local function StyleText(btn)
+  for key, fontKey in pairs(TEXT_FONT) do
+    local fs = btn[key]
+    if fs and fs.GetFont then
+      local _, size, flags = fs:GetFont()
+      if size then
+        fs:SetFont(GB.FONT[fontKey], size, flags)
+      end
+    end
+  end
+end
+
 local function Suppress(btn)
   if btn.SlotBackground then btn.SlotBackground:Hide() end
   if btn.SlotArt then btn.SlotArt:Hide() end
@@ -181,6 +201,10 @@ local function ApplyButton(btn)
       end
     end
     rec.cooldownStyled = true
+  end
+  if not rec.textStyled then
+    StyleText(btn)
+    rec.textStyled = true
   end
   StyleAssistedFrame(btn)
   AlignCooldowns(btn)

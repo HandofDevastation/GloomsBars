@@ -134,7 +134,25 @@ before touching mask/skin code.
 9. Next build steps: text styling (fonts stick per §3; colors need hooks), shaped
    cast/channel overlay frames (`SpellCastAnimFrame` etc.), then the glow phase
    (manager hook + shaped glow art — gold procs AND blue assist highlight).
-10. Sometime: test WoWUp install-from-URL **on another machine** (NOT Jason's dev
+10. ✅ QA'd (2026-07-18): `/gb shape roundrect` + /reload → all 8 bars rounded-rects.
+    The shape registry is proven end-to-end.
+
+## Config UI backlog (Phase 6 — every dev slash-knob becomes a real control)
+Jason's explicit expectation (2026-07-18): slash commands are DEV SCAFFOLDING only;
+the product gets a full options panel in the GloomsAuras design language (tokens +
+fonts already in Core.lua; sliding switches, no native Blizzard widgets,
+pixel-perfect; Jason's GloomsAuras Figma mockups = styling reference).
+Accumulate every ad-hoc control here:
+- Skin enable/disable (now `/gb skin`)
+- Icon shape picker (now `/gb shape`; later per-bar)
+- Cooldown sweep overshoot (now `/gb sweep`)
+- 📌 State-glow styling: color / opacity / intensity per state (hover, checked,
+  flash, assist) — Jason: current hover is too dim vs default
+- Text styling (fonts/sizes; hotkey color = needs hook, see API-NOTES §3)
+- Later: per-bar enable, aspect-ratio, profiles, glow style options (glow phase)
+
+## NEXT (continued)
+11. Sometime: test WoWUp install-from-URL **on another machine** (NOT Jason's dev
    machine — WoWUp would clobber the dev symlink).
 2. Then Phase 2 (skin engine v0): read the client's `Blizzard_ActionBar*` /
    `ActionButtonTemplate` source for hook points (gate 5) — we now know the exact
