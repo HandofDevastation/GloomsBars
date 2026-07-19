@@ -71,7 +71,24 @@ Bar 1 buttons parented via `MainActionBarButtonContainer#` (`ActionBar.lua:14`),
   `.GlowRing` + `.EndMask`. **`CastFill` is drawn at a fixed small centred size independent of a
   resized icon** — masking it to a pill can't enlarge it (stays square on a non-square icon), so the
   fill must be REPLACED (suppress + draw our own driven by `UnitCastingInfo`/`UnitChannelInfo`), not
-  masked. ⚠ cast/channel timing readability in Midnight combat: assumed yes (cast bars use it), verify.
+  masked.
+- **Cast/channel timing IS readable in Midnight combat** (VERIFIED 2026-07-19 in-game): `UnitCastingInfo`
+  /`UnitChannelInfo` (`_,_,_,startMs,endMs`) return live values; polled in an OnUpdate they drive our own
+  pill fill. NOT the secret cooldown wall. `CastFill` is suppressed by forcing `SetAlpha(0)` EVERY FRAME
+  (its cast anim re-drives the alpha, so a one-shot fails).
+- **The cancel/interrupt red square = `btn.InterruptDisplay`** (VERIFIED 2026-07-19, `/gb hunt`): child
+  frames `.Base`/`.Highlight` (atlases `UI-HUD-ActionBar-Interrupt` / `-Interrupt-Highlight`) — NOT direct
+  regions, so a regions-only dump shows it empty. Suppress via per-frame `SetAlpha(0)`.
+- **Replaying Blizzard's completion burst (`cast.EndBurst`) on cancel** (VERIFIED 2026-07-19): (1) Blizzard
+  HIDES the parent `SpellCastAnimFrame` on cancel AND keeps fading it — must `:Show()`+`:SetAlpha(1)` the
+  parent EVERY FRAME until done. (2) `EndBurst:GetAnimationGroups()` returns 1 (anonymous) group; `:Stop()`
+  then `:Play()` replays it; hook its `OnFinished` to stop re-asserting + hide the parent (a fixed timer
+  cuts a slowed burst off). (3) Speed = scale the group's child animations' `SetDuration` (`base/speed`),
+  reset to base each cast so real completions are unchanged. (4) Reset `GlowRing:SetVertexColor(1,1,1)` each
+  cast (a prior cancel tinted it red).
+- **Equipped-item green `.Border`** (`UI-HUD-ActionBar-IconFrame-Border`) is re-shown by Blizzard on
+  equip/action/world-enter — `SetAlpha(0)` needs re-asserting on `PLAYER_ENTERING_WORLD` /
+  `PLAYER_EQUIPMENT_CHANGED` / `ACTIONBAR_SLOT_CHANGED` (verified `/gb borderinfo`).
 - **Aspect-correct masks = the "clean pill" solution** (VERIFIED 2026-07-19, in production): a single square mask stretched onto a non-square icon ovalizes its corners; instead ship rounded masks **pre-generated at a range of aspect ratios with genuinely CIRCULAR corners** (`generate-art.py` `gen_pills` → `pill-<t|w>-a<ratioIdx>-r<level>`, 8 ratios × 6 radii × 2 orientations = 96 masks; short axis 128 texels, 240/256 padding per axis, corner radius `RADII[level]*60` so r5 = semicircle caps = pill). The engine picks the nearest aspect + orientation (`Skin:AspectMask`) and stretches it to the icon — a near-uniform stretch keeps the corners round. Only the all-rounded family (`circle` / `corner-1111-r*`) has aspect masks; square + mixed-corner shapes keep the plain per-corner mask. Fast regen: `python3 tools/generate-art.py pills` (aspect masks only, skips the ~4-min corner pass).
 
 ## §3 Hook points — SOURCE-VERIFIED (wow-ui-source `live` branch @ **12.0.7 build 68453**, cloned 2026-07-18; in-game verification pending where noted)

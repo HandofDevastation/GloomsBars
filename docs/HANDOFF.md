@@ -1,8 +1,16 @@
 # Gloom's Bars — Session Handoff
-**Last updated: end of session 3 (2026-07-19). Current release: v0.2.0. Session 2's Config-UI work
-IS committed (`f878fc1`); session 3's icon-sizing work (crop-to-fill + the aspect-correct pill) is
-UNCOMMITTED in the working tree — offer to commit at session start. Git history holds the full
-narrative; this file is the current-state snapshot. ⇒ Read SESSION 3 then SESSION 2 below.**
+**Last updated: end of session 4 (2026-07-19). Current release: v0.2.0 (unreleased work committed to
+`main`, latest `023487e`). Everything through session 4 is COMMITTED — working tree clean. Git history
+holds the full narrative; this file is the current-state snapshot. ⇒ Read SESSION 4 first (it's where
+the overlay/cast work landed and where the ▶▶ NEXT list lives), then SESSION 3/2 for the pill + editor.**
+
+## ▶ FIRST THING NEXT SESSION (Jason): fix the STRETCHED ROUNDED CORNERS.
+Non-square icons with a MIXED corner pattern (e.g. rounded top + sharp bottom) still OVALIZE — the
+aspect-correct masks only cover the ALL-rounded (`corner-1111` / `circle`) family, so any other corner
+pattern falls back to the plain square mask stretched onto the non-square icon. This is a SCOPE call
+(see NEXT #1): the full 16-pattern × aspect × radius matrix is large. Decide the approach with Jason
+(restrict mixed corners to square icons? generate a reduced matrix? per-corner 9-slice for the partial
+cases?) before generating art. Everything needed is in SESSION 3 (aspect-mask design) + API-NOTES §2.
 
 > Update this file at the end of EVERY session: what was built, what was QA'd in-game,
 > what was learned, what's next. This is the anti-relitigation record — if it's marked
@@ -205,9 +213,9 @@ them aspect-aware is the natural next masking task (they'd want the same aspect-
 treatment). Also: nearest-aspect snapping (8 ratios) can slightly stretch caps at odd sizes → densify
 `PILL_RATIOS` if Jason notices.
 
-## ★ SESSION 4 (2026-07-19 cont.) — OVERLAYS MADE ASPECT-AWARE (QA'd) + polish; channel fill deferred→replace
-Overlay art now follows the pill (all QA'd in-game except where noted). UNCOMMITTED at time of writing
-→ committing this session's overlay pass.
+## ★ SESSION 4 (2026-07-19 cont.) — OVERLAYS ASPECT-AWARE + CUSTOM CAST/CHANNEL/INTERRUPT (all QA'd, COMMITTED)
+Overlay art follows the pill AND Blizzard's cast visuals are replaced with our own pill-shaped ones.
+All committed to `main` (latest `023487e`).
 - **Aspect overlay art**: `gen_pills` now also emits per-aspect RING (non-square, `SetTexture` OK) and
   a **SQUARE 256² pow2 pre-distorted SWIPE** — KEY finding: `SetSwipeTexture` REJECTS a non-square /
   non-pow2 texture (→ `GetSwipeTexture()` nil → default rectangle), while `AddMaskTexture` and
@@ -223,39 +231,54 @@ Overlay art now follows the pill (all QA'd in-game except where noted). UNCOMMIT
   of forcing square. ✅ QA'd.
 - **Proc glow**: soft halo forgives the aspect stretch → reads fine on pills; NO aspect art needed.
   Styling controls (intensity/color/width) = the future Proc-glow Config section.
-- **New diagnostics**: `/gb cdinfo`, `/gb castinfo`.
+- **New diagnostics**: `/gb cdinfo`, `/gb castinfo` (+EndBurst anim dump), `/gb borderinfo`, `/gb hunt`
+  (arms a scan on the next cast interrupt to name red overlay elements across all buttons).
 
-⛔ **DEFERRED → NEXT BUILD: cast/channel DRAIN fill (`CastFill`).** Our pill mask IS on it (verified via
-`/gb castinfo`: masks=1), but Blizzard draws/animates the channel fill (`UI-HUD-ActionBar-Channel-Fill`)
-as a **fixed small square in the centre**, independent of our resized icon — a mask can only clip, not
-enlarge, so it stays square on a pill. **DECISION (Jason, 2026-07-19): replace Blizzard's cast/channel
-fill with our OWN pill-shaped fill.** Approach: suppress `CastFill` (alpha-0, re-assert in the hook),
-draw our own — cleanest MVP is a `Cooldown` widget with our pill swipe, `SetCooldown(start, duration)`
-(drain for channel / fill-up for cast), timing from `UnitCastingInfo`/`UnitChannelInfo`. ⚠ VERIFY those
-are readable in Midnight combat (they should be — cast bars use them; this is NOT the secret cooldown-
-remaining wall). This is the differentiator applied to casts.
+✅ **DONE — CUSTOM CAST/CHANNEL/INTERRUPT overlays** (`styleCast` + `CastFillOnUpdate` in Skin.lua, all QA'd):
+- **Cast/channel FILL**: Blizzard draws `Fill.CastFill` at a FIXED centred square (masking can't enlarge
+  it → stays square on a pill), so we SUPPRESS it (alpha-0 forced EACH FRAME in the OnUpdate — its cast
+  anim re-drives alpha, so one-shot fails) and draw our OWN linear tint masked to the pill, sized to LIVE
+  progress read in the OnUpdate (`UnitCastingInfo` → cast fills up / `UnitChannelInfo` → channel drains /
+  neither → hide). Direction/colour/opacity from db (`castDrainDir`/`castFillColor`/`castFillAlpha`).
+- **CANCEL/INTERRUPT**: Blizzard's red square = `btn.InterruptDisplay` (child frames `.Base`/`.Highlight`,
+  atlas `UI-HUD-ActionBar-Interrupt`; found via `/gb hunt`). We suppress it (alpha-0 each frame) and
+  instead REPLAY Blizzard's REAL completion burst — `cast.EndBurst` — tinted red. Key gotchas (all solved):
+  Blizzard HIDES the parent `SpellCastAnimFrame` on cancel AND keeps fading it, so we `f.bursting`-force
+  `cast:Show()`+`SetAlpha(1)` EVERY FRAME until the burst anim's `OnFinished` fires (not a fixed timer, or
+  slowing it cuts it off); tint reset to white each cast so real completions stay gold; speed tunable via
+  `setEndBurstSpeed` (scales the anim group's child `SetDuration`, restored to 1× each cast) → `db.
+  castInterruptSpeed` (default 0.6×). Interrupt detected by the cast ending before ~85% progress.
+- **Cast/channel timing IS readable** (`UnitCastingInfo`/`UnitChannelInfo`) — confirmed working in-game,
+  NOT the secret cooldown wall. **`SetSwipeTexture` rejects non-square/non-pow2 textures** (API-NOTES §2).
+- **Reads-from-events note**: we poll `Unit*Info` in an OnUpdate + hook `PlaySpellCastAnim`; no secret reads.
+- db added: `castFillColor`, `castFillAlpha`, `castDrainDir` (up/down/left/right), `castInterruptColor`,
+  `castInterruptSpeed`. **These have NO Config UI yet** — Jason explicitly wants controls (NEXT #2).
 
 ## ▶▶ NEXT (session 5) — in priority order
-1. **Custom pill-shaped cast/channel fill** (the deferred item above) — suppress Blizzard's, draw ours.
-2. **Mixed-corner shapes on non-square icons still ovalize** — aspect masks only cover the all-rounded
-   (`1111`) family; mixed patterns fall back to the stretched base mask. 16-pattern × aspect matrix is
-   large → SCOPE DECISION with Jason (restrict mixed-corners to square icons? 9-slice fallback for
-   mixed? generate a reduced matrix?).
-3. Wire the remaining stub sections: **Text** (keybind — `ApplyHotkeyOverride` exists; route via
+1. **★ FIRST: fix STRETCHED ROUNDED CORNERS on mixed-corner non-square icons.** Aspect masks only cover
+   the all-rounded (`corner-1111`/`circle`) family; any MIXED pattern (rounded-top/sharp-bottom, etc.)
+   falls back to the plain square mask stretched → ovalized corners. The 16-pattern × 8-aspect × 6-radius
+   matrix is large → SCOPE DECISION with Jason FIRST (restrict mixed corners to square icons? generate a
+   reduced/coarser matrix? per-corner 9-slice for the partial cases — 9-slice WORKS on masks, API-NOTES §2,
+   just can't scale a full pill?). Aspect-mask design + `gen_pills` are in SESSION 3.
+2. **Wire the cast-fill Config controls Jason asked for**: fill **direction** (up/down/left/right),
+   **colour**, **opacity**, + the **interrupt colour** and **speed** — all db fields already exist and the
+   engine reads them live; just needs a Config section (reuse the toolkit: sliderRow / colorSwatch /
+   makeToggle; a 4-way direction picker = 4 flatButtons).
+3. Wire the other stub sections: **Text** (keybind — `ApplyHotkeyOverride` exists; route via
    `styleData.hotkey`), **Proc glow** (Glows.lua; tint/intensity/width → db), **Apply to bars**.
 4. Render the decoration **plate in the preview pane** (currently shape/zoom/states only; preview also
    doesn't include the extension in its aspect, so a plated pill preview ≠ the bars).
 5. Deferred-feedback backlog below; **Bar-layout scope** decision.
 - Anytime: densify `PILL_RATIOS` if nearest-aspect snapping stretches caps at odd sizes; assist-frame
-  border still base art (low priority, Jason: don't iterate).
+  border still base art (low priority, Jason: don't iterate); proc-glow aspect art (soft halo currently
+  forgives the stretch, acceptable).
 
 ## Config UI — deferred feedback (Jason, 2026-07-18, in-game QA of the editor)
 Jason chose to defer these to keep wiring the sub-panels; revisit after breadth:
-- **Overlays (hover/checked/flash ring, proc glow, cooldown sweep) don't match the
-  icon's SIZE or SHAPE.** The state ring anchors to the ICON, not the full plate
-  construction (icon+extension), so on a plate it mismatches; and there are no
-  size/width controls yet (the mock had them). Needs: anchor overlays to the
-  construction, + per-overlay size/width sliders.
+- ✅ **DONE (session 4): overlays now match the pill SHAPE + span the construction** (hover/checked/flash
+  ring, cooldown sweep, cast fill/ring/interrupt). Still-open: per-overlay **size/width sliders** (the mock
+  had them) are not built; state highlights still soft (below).
 - **State highlights too subtle** — the ring art is a soft rim; reads as a color
   overlay, not a bold highlight. Needs bolder art (fuller radial) or a spread/opacity
   control that can exceed the base art's intensity (current intensity slider only dims).
