@@ -82,15 +82,18 @@ end
 -- ---------------------------------------------------------------------------
 GB.STYLES = {
   none = {},
-  -- Jason's mockup (2026-07-18): orange gradient plate over the icon's bottom,
-  -- keybind bold white centered ON the plate.
+  -- Jason's mockup (2026-07-18): the button is TALLER than the icon — extra
+  -- real estate below it (the "extension"), an orange gradient filling the
+  -- extension and fading up into the icon, keybind centered in the extension.
+  -- The whole construction (icon + extension) is wrapped in one shape.
   plate = {
+    construction = { extendBottomPct = 0.40 },   -- extension height, % of icon height
     layers = {
-      { kind = "gradient", side = "BOTTOM", sizePct = 0.42,
+      { kind = "gradient", zone = "extension", bleedPct = 0.45,
         color = { 1, 0.47, 0.16 }, fromAlpha = 1, toAlpha = 0 },
     },
     hotkey = {
-      layer = 1, offsetY = 0,
+      zone = "extension",
       font = "label", size = 13, flags = "OUTLINE",
       color = { 1, 1, 1 },
     },

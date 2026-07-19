@@ -95,6 +95,23 @@ end
 -- provably safe path). The HotKey override re-asserts via an UpdateHotkeys
 -- post-hook (Blizzard re-anchors it top-right on every update).
 -- ---------------------------------------------------------------------------
+-- The construction = the icon plus an optional extension zone below it (extra
+-- visible real estate — textures may draw beyond the secure button's bounds).
+-- Returns the extension height in px for the current style.
+local function ExtensionHeight(icon)
+  local construction = GB:GetStyle().construction
+  return icon:GetHeight() * ((construction and construction.extendBottomPct) or 0)
+end
+
+-- Anchor a mask over the whole construction (padding-compensated per axis).
+local function AnchorConstructionMask(mask, icon, ext)
+  local growX = icon:GetWidth() * GROW_RATIO
+  local growY = (icon:GetHeight() + ext) * GROW_RATIO
+  mask:ClearAllPoints()
+  mask:SetPoint("TOPLEFT", icon, "TOPLEFT", -growX, growY)
+  mask:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", growX, -(growY + ext))
+end
+
 local function ApplyHotkeyOverride(btn)
   local rec = records[btn]
   local hk = btn.HotKey
@@ -110,9 +127,13 @@ local function ApplyHotkeyOverride(btn)
     end
     return
   end
-  local target = (conf.layer and rec.plates and rec.plates[conf.layer] and rec.plates[conf.layer].tex) or icon
+  local ext = ExtensionHeight(icon)
   hk:ClearAllPoints()
-  hk:SetPoint("CENTER", target, "CENTER", conf.offsetX or 0, conf.offsetY or 0)
+  if conf.zone == "extension" and ext > 0 then
+    hk:SetPoint("CENTER", icon, "BOTTOM", conf.offsetX or 0, -(ext / 2) + (conf.offsetY or 0))
+  else
+    hk:SetPoint("CENTER", icon, "CENTER", conf.offsetX or 0, conf.offsetY or 0)
+  end
   hk:SetSize(icon:GetWidth(), (conf.size or 13) + 4)
   hk:SetJustifyH("CENTER")
   hk:SetFont(GB.FONT[conf.font or "label"], conf.size or 13, conf.flags or "OUTLINE")
@@ -126,7 +147,11 @@ local function ApplyDecor(btn)
   if not (rec and icon) then return end
   local style = GB:GetStyle()
   rec.plates = rec.plates or {}
-  local grow = icon:GetWidth() * GROW_RATIO
+  local ext = ExtensionHeight(icon)
+  -- The ICON's own mask must span the construction too, so icon + extension
+  -- read as one continuous shape. (Anchor edits on a live mask: verified-by-QA
+  -- pending; /reload applies pre-render and is always exact.)
+  AnchorConstructionMask(rec.mask, icon, ext)
   local used = 0
   for i, layer in ipairs(style.layers or {}) do
     if layer.kind == "gradient" then
@@ -137,33 +162,33 @@ local function ApplyDecor(btn)
         rec.decorFrame:SetAllPoints(icon)
         rec.decorFrame:SetFrameLevel(btn:GetFrameLevel() + 2)
         local tex = rec.decorFrame:CreateTexture(nil, "ARTWORK")
+        -- A white texture FILE, not SetColorTexture: masks don't clip
+        -- solid-color textures (QA 2026-07-18 — square plate corners).
+        tex:SetTexture("Interface\\Buttons\\WHITE8X8")
         local mask = rec.decorFrame:CreateMaskTexture()
         mask:SetTexture(GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-        mask:SetPoint("TOPLEFT", icon, "TOPLEFT", -grow, grow)
-        mask:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", grow, -grow)
         tex:AddMaskTexture(mask)
         plate = { tex = tex, mask = mask }
         rec.plates[used] = plate
       end
+      AnchorConstructionMask(plate.mask, icon, ext)
       local tex = plate.tex
-      -- A white texture FILE, not SetColorTexture: masks don't clip
-      -- solid-color textures (QA 2026-07-18 — square plate corners).
-      tex:SetTexture("Interface\\Buttons\\WHITE8X8")
       tex:ClearAllPoints()
       local c = layer.color or { 1, 1, 1 }
       local fromA, toA = layer.fromAlpha or 1, layer.toAlpha or 0
-      if layer.side == "TOP" then
-        tex:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0)
-        tex:SetPoint("TOPRIGHT", icon, "TOPRIGHT", 0, 0)
-        tex:SetHeight(icon:GetHeight() * (layer.sizePct or 0.4))
-        tex:SetGradient("VERTICAL", CreateColor(c[1], c[2], c[3], toA), CreateColor(c[1], c[2], c[3], fromA))
-      else -- BOTTOM
+      if layer.zone == "extension" and ext > 0 then
+        -- Fill the extension below the icon, bleeding up into the icon's
+        -- bottom edge so the gradient fades across the boundary (mockup).
+        tex:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, -ext)
+        tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, -ext)
+        tex:SetHeight(ext + icon:GetHeight() * (layer.bleedPct or 0.4))
+      else
         tex:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, 0)
         tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
         tex:SetHeight(icon:GetHeight() * (layer.sizePct or 0.4))
-        -- VERTICAL gradient: min color = bottom, max color = top.
-        tex:SetGradient("VERTICAL", CreateColor(c[1], c[2], c[3], fromA), CreateColor(c[1], c[2], c[3], toA))
       end
+      -- VERTICAL gradient: min color = bottom, max color = top.
+      tex:SetGradient("VERTICAL", CreateColor(c[1], c[2], c[3], fromA), CreateColor(c[1], c[2], c[3], toA))
       tex:Show()
     end
   end
