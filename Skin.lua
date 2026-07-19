@@ -280,8 +280,60 @@ end
 -- state here rather than trust the hook's castType/timing: UnitCastingInfo →
 -- cast (fills up), else UnitChannelInfo → channel (drains); neither → the cast
 -- ended/was interrupted → hide. `dir` = the edge the fill grows from.
+-- Replay Blizzard's own completion burst (cast.EndBurst — the exact animation a
+-- successful cast plays, which we already mask to the pill), tinted red. Blizzard
+-- fires it on success but NOT on cancel, so we trigger it ourselves.
+-- Scale the EndBurst anim group's child durations (base / speed; <1 = slower).
+-- Reset to base (speed 1) at each cast start so a REAL completion stays normal.
+local function setEndBurstSpeed(eb, speed)
+  if not (eb and eb.GetAnimationGroups) then return end
+  speed = speed or 1
+  for _, ag in ipairs({ eb:GetAnimationGroups() }) do
+    if ag.GetAnimations then
+      for _, an in ipairs({ ag:GetAnimations() }) do
+        if an.GetDuration and an.SetDuration then
+          if not an.gbBaseDur then an.gbBaseDur = an:GetDuration() end
+          an:SetDuration(an.gbBaseDur / speed)
+        end
+      end
+    end
+  end
+end
+
+local function PlayEndBurstRed(f)
+  local cast = f.cast
+  local eb = cast and cast.EndBurst
+  if not eb then return end
+  local c = (GB.db and GB.db.castInterruptColor) or { 1, 0.25, 0.25 }
+  setEndBurstSpeed(eb, (GB.db and GB.db.castInterruptSpeed) or 0.6)   -- slower than Blizzard's default
+  f.bursting = true      -- OnUpdate keeps the cast frame shown while this is set
+  cast:Show(); cast:SetAlpha(1); eb:Show()
+  if eb.GlowRing then eb.GlowRing:SetVertexColor(c[1], c[2], c[3]); eb.GlowRing:Show() end
+  if eb.GetAnimationGroups then
+    for _, ag in ipairs({ eb:GetAnimationGroups() }) do
+      -- Stop re-asserting + hide the cast frame when the burst ANIMATION finishes
+      -- (not on a fixed timer), so slowing it down doesn't cut it off. Hook once.
+      if not ag.gbHooked then
+        ag.gbHooked = true
+        ag:HookScript("OnFinished", function()
+          f.bursting = false
+          if not (UnitCastingInfo("player") or UnitChannelInfo("player")) then cast:Hide() end
+        end)
+      end
+      ag:Stop(); ag:Play()
+    end
+  end
+end
+
 local function CastFillOnUpdate(f, elapsed)
   if f.blizzFill then f.blizzFill:SetAlpha(0) end
+  -- InterruptDisplay (the red rounded-square cancel flash, atlas UI-HUD-ActionBar-
+  -- Interrupt) plays right at cast-cancel — inside the grace below — so keep it
+  -- suppressed each frame too. Its anim re-drives alpha, hence per-frame.
+  if f.interrupt then f.interrupt:SetAlpha(0) end
+  -- While our red burst plays, Blizzard keeps trying to fade/hide its cast frame
+  -- (cancel handling) — force it visible each frame so the burst plays through.
+  if f.bursting and f.cast then f.cast:Show(); f.cast:SetAlpha(1) end
   local s, e, channel
   local _, _, _, cs, ce = UnitCastingInfo("player")
   if cs then s, e, channel = cs, ce, false
@@ -290,19 +342,28 @@ local function CastFillOnUpdate(f, elapsed)
     if hs then s, e, channel = hs, he, true end
   end
   if not (s and e and e > s) then
-    -- Cast ended/interrupted: hide our tint but keep suppressing Blizzard's fill
-    -- for a brief grace so its red interrupt flash (a re-shown CastFill) is eaten.
+    -- Cast ended BEFORE completing (interrupted/cancelled)? Replay Blizzard's real
+    -- completion burst, red. A clean finish (lastP ≈ 1) does nothing here — its own
+    -- (gold) EndBurst already played.
+    if f.lastP and f.lastP < 0.85 and not f.flashed then
+      f.flashed = true
+      PlayEndBurstRed(f)
+    end
     f.tex:Hide()
-    f.grace = (f.grace or 0.45) - (elapsed or 0)
-    if f.grace <= 0 then f:Hide() end
+    -- Keep suppressing Blizzard's fill + interrupt square for a grace window (the
+    -- cast frame itself is hidden by the EndBurst OnFinished, so the burst plays
+    -- through fully regardless of its speed).
+    f.grace = (f.grace or 1.5) - (elapsed or 0)
+    if f.grace <= 0 then f.lastP, f.flashed = nil, nil; f:Hide() end
     return
   end
-  f.grace = nil
-  f.tex:Show()
+  f.grace, f.flashed = nil, nil
   local p = (GetTime() - s / 1000) / ((e - s) / 1000)
   if p < 0 then p = 0 elseif p > 1 then p = 1 end
+  f.lastP = p
   local frac = channel and (1 - p) or p       -- cast fills up; channel drains
   local tex, W, H = f.tex, f:GetWidth(), f:GetHeight()
+  tex:Show()
   tex:ClearAllPoints()
   local dir = f.dir or "up"
   if dir == "up" then
@@ -321,7 +382,9 @@ local function styleCast(btn, rec, icon, castType)
   if not cast then return end
   local ext = ExtensionHeight(icon)
   local src = aspectMask(icon:GetWidth(), icon:GetHeight() + ext)   -- nil → base shape mask
-  -- 2. Shape the end-burst completion flash to the pill.
+  -- 2. Shape the end-burst completion flash to the pill (used by successful casts
+  --    AND replayed red for cancels). Reset its tint to white each cast so a real
+  --    completion stays gold after a prior cancel tinted it red.
   local burst = cast.EndBurst
   if burst and burst.GlowRing then
     local slot = rec.castBurst or {}; rec.castBurst = slot
@@ -329,8 +392,10 @@ local function styleCast(btn, rec, icon, castType)
     if slot.mask then burst.GlowRing:RemoveMaskTexture(slot.mask) end
     slot.mask = buildMask(burst, icon, ext, src)
     burst.GlowRing:AddMaskTexture(slot.mask)
+    burst.GlowRing:SetVertexColor(1, 1, 1)
+    setEndBurstSpeed(burst, 1)   -- normal speed for a real completion (cancel slows it)
   end
-  -- 3. Our own pill-shaped linear fill.
+  -- 3. Our own pill-shaped linear cast/channel fill.
   if not rec.castFillFrame then
     local f = CreateFrame("Frame", nil, btn)
     f.tex = f:CreateTexture(nil, "OVERLAY")   -- WHITE8X8 = maskable (masks don't clip SetColorTexture)
@@ -349,8 +414,10 @@ local function styleCast(btn, rec, icon, castType)
   local a = (GB.db and GB.db.castFillAlpha) or 0.55
   f.tex:SetVertexColor(col[1], col[2], col[3], a)
   f.dir = (GB.db and GB.db.castDrainDir) or "up"
+  f.cast = cast                                    -- for the cancel → red EndBurst replay
   f.blizzFill = cast.Fill and cast.Fill.CastFill   -- OnUpdate force-suppresses this each frame
-  f.grace = nil
+  f.interrupt = btn.InterruptDisplay               -- and Blizzard's red square (we replay EndBurst instead)
+  f.grace, f.lastP, f.flashed, f.bursting = nil, nil, nil, nil   -- fresh cast (clear prior interrupt state)
   f:Show()                                    -- OnUpdate polls the live cast/channel + hides at the end
 end
 

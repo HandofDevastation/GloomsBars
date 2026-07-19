@@ -212,6 +212,8 @@ local DB_DEFAULTS = {
   castFillColor = { 1, 0.85, 0.4 },   -- tint
   castFillAlpha = 0.55,               -- opacity
   castDrainDir = "up",                -- "up" | "down" | "left" | "right" (edge the fill grows from)
+  castInterruptColor = { 1, 0.25, 0.25 },   -- interrupt/cancel burst tint (Blizzard's completion burst, replayed red)
+  castInterruptSpeed = 0.6,                 -- cancel-burst speed vs Blizzard's default (<1 = slower)
 }
 
 local loader = CreateFrame("Frame")
@@ -577,6 +579,20 @@ local function CastInfo()
   dump(caf, "SpellCastAnimFrame")
   dump(caf.Fill, ".Fill")
   dump(caf.EndBurst, ".EndBurst")
+  -- EndBurst animation structure — to replay the completion burst on cancel.
+  local eb = caf.EndBurst
+  if eb then
+    if eb.GetAnimationGroups then
+      local ags = { eb:GetAnimationGroups() }
+      print(("  .EndBurst animation groups: %d"):format(#ags))
+      for _, ag in ipairs(ags) do
+        print(("    AG name=%s playing=%s"):format(tostring(ag.GetName and ag:GetName()), tostring(ag.IsPlaying and ag:IsPlaying())))
+      end
+    end
+    for _, k in ipairs({ "Anim", "Animation", "AnimIn", "Pulse", "Grow" }) do
+      if eb[k] then print("    field .EndBurst." .. k .. " (" .. type(eb[k]) .. ")") end
+    end
+  end
   dump(caf.InterruptDisplay, "caf.InterruptDisplay")
   if b.InterruptDisplay then dump(b.InterruptDisplay, "btn.InterruptDisplay") end
   -- The cancel/interrupt red is a separate element — hunt any red-tinted texture.
@@ -613,6 +629,54 @@ local function BorderInfo()
   if n == 0 then print("  |cffff7729No .Border is shown — the green border is a DIFFERENT element.|r") end
 end
 
+-- /gb hunt — arm a one-shot capture on the next cast INTERRUPT/FAIL, then scan
+-- EVERY action button's whole texture tree for the red cancel overlay and name
+-- it (works regardless of which button/addon owns it). Flags red-tinted textures
+-- OR ones whose atlas looks interrupt/fail-ish. Scans at a few delays to catch a
+-- brief flash.
+local huntFrame
+local function scanInterrupt(tag)
+  local n = 0
+  local function walk(frame, depth)
+    if not frame or depth > 5 then return end
+    if frame.GetRegions then
+      for _, r in ipairs({ frame:GetRegions() }) do
+        if r.GetObjectType and r:GetObjectType() == "Texture" and r.IsShown and r:IsShown() and (r.GetAlpha and r:GetAlpha() > 0.15) then
+          local rr, g, bl = r.GetVertexColor and r:GetVertexColor()
+          local atlas = r.GetAtlas and r:GetAtlas()
+          local redTint = rr and rr > 0.5 and (g or 0) < 0.5 and (bl or 0) < 0.5 and (rr - (g or 0)) > 0.2
+          local badAtlas = atlas and atlas:lower():match("interrupt") or (atlas and atlas:lower():match("fail")) or (atlas and atlas:lower():match("cancel"))
+          if redTint or badAtlas then
+            n = n + 1
+            print(("  [%s] %s | atlas=%s | a=%.2f | %s"):format(tag, tostring(r:GetDebugName()), tostring(atlas), r:GetAlpha(), redTint and "RED" or "atlas"))
+          end
+        end
+      end
+    end
+    if frame.GetChildren then for _, c in ipairs({ frame:GetChildren() }) do walk(c, depth + 1) end end
+  end
+  GB:ForEachButton(function(btn) walk(btn, 0) end)
+  if n == 0 then print(("  [%s] nothing flagged"):format(tag)) end
+end
+local function ArmHunt()
+  huntFrame = huntFrame or CreateFrame("Frame")
+  huntFrame:UnregisterAllEvents()
+  huntFrame:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
+  huntFrame:RegisterEvent("UNIT_SPELLCAST_FAILED")
+  huntFrame:SetScript("OnEvent", function(_, event, unit)
+    if unit and unit ~= "player" then return end
+    huntFrame:UnregisterAllEvents()
+    msg(event .. " — scanning all buttons for the red overlay:")
+    scanInterrupt("0.00s")
+    if C_Timer then
+      C_Timer.After(0.06, function() scanInterrupt("0.06s") end)
+      C_Timer.After(0.15, function() scanInterrupt("0.15s") end)
+      C_Timer.After(0.30, function() scanInterrupt("0.30s") end)
+    end
+  end)
+  msg("hunt ARMED — now cancel a cast (start casting, then move/jump). The red element will be named.")
+end
+
 -- ---------------------------------------------------------------------------
 -- /gb slash router
 -- ---------------------------------------------------------------------------
@@ -638,6 +702,8 @@ SlashCmdList.GLOOMSBARS = function(input)
     CastInfo()
   elseif cmd == "borderinfo" then
     BorderInfo()
+  elseif cmd == "hunt" then
+    ArmHunt()
   elseif cmd == "skin" then
     GB.Skin:Toggle()
   elseif cmd == "sweep" then
