@@ -141,7 +141,10 @@ before touching mask/skin code.
    combat — hence "no pulse"; Jason's decisive test: the game's highlight-assist
    setting kills it). ⚠ Jason's prioritization (2026-07-18): the assist highlight
    is LOW PRIORITY — the hook exists but do NOT iterate/QA it further; if it
-   works, bonus.
+   works, bonus. **→ Bonus landed (2026-07-18): after /reload Jason observed the
+   square ants frame gone and our shaped soft-pulsing halo on Hatchet Toss.**
+   (Reads white-ish: additive assist-blue washes out over the bright icon rim —
+   tint/intensity = Config backlog, not a bug to chase.)
 10. ❌ **QA pending — THE core differentiator case: a real gold proc in combat**
     (shaped pulsing gold halo instead of Blizzard's square flipbook).
 11. Next build steps: shaped cast/channel overlay frames (`SpellCastAnimFrame`),
