@@ -169,6 +169,22 @@ before touching mask/skin code.
 10. ✅ QA'd (2026-07-18): `/gb shape roundrect` + /reload → all 8 bars rounded-rects.
     The shape registry is proven end-to-end.
 
+## ★★ NORTH STAR CORRECTED (Jason, 2026-07-18 — supersedes nuance below):
+**Styles must be USER-AUTHORED through the UI, not shipped presets.** Jason: "I
+wanted to build this via the UI myself — not a baked-in recipe. Define the height
+and width of the icons (via the UI), overlay a gradient and position it, decide
+where the keybind shows up, apply a shape to the overall construction." So:
+- The recipe ENGINE (Skin.lua decor pass) is the substrate; `GB.STYLES` in code is
+  scaffolding/proof-of-concept ONLY. Real styles = data in SavedVariables, authored
+  by a **style editor** in the Config UI (the next major phase). Ship at most a
+  couple of starter templates.
+- Scope note on icon sizing: the VISIBLE construction (icon texture, masks, plates)
+  is freely sizable/aspectable via UI (textures aren't protected). The CLICKABLE
+  hit area is the secure button — Edit-Mode-sized unless the §B out-of-combat
+  geometry fork is taken later. Communicate this distinction in the UI.
+- Engine bug found in QA: masks do NOT clip `SetColorTexture` fills → plates must
+  use a white texture FILE (`Interface\Buttons\WHITE8X8`). Recorded in API-NOTES.
+
 ## ★ DESIGN NORTH STAR (Jason, 2026-07-18) — heavily customized button looks
 Jason's mockup: a rounded-rect icon with an **orange gradient plate covering the
 bottom ~40%** (opaque at bottom, fading upward into the icon) and the **keybind in

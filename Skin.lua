@@ -146,7 +146,9 @@ local function ApplyDecor(btn)
         rec.plates[used] = plate
       end
       local tex = plate.tex
-      tex:SetColorTexture(1, 1, 1, 1)
+      -- A white texture FILE, not SetColorTexture: masks don't clip
+      -- solid-color textures (QA 2026-07-18 — square plate corners).
+      tex:SetTexture("Interface\\Buttons\\WHITE8X8")
       tex:ClearAllPoints()
       local c = layer.color or { 1, 1, 1 }
       local fromA, toA = layer.fromAlpha or 1, layer.toAlpha or 0

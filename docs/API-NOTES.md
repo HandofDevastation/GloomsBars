@@ -73,5 +73,6 @@ From `Interface/AddOns/Blizzard_ActionBar/` (`Shared/ActionButton.lua` unless no
 - **Cooldown path never re-sets swipe textures**: `ActionButton_UpdateCooldown` → `ActionButton_ApplyCooldown` only calls `SetCooldown`/`Clear` (:823–868); `SetSwipeColor` appears only in cast-anim paths (:1211 hides, :1731 restores `0,0,0,1`) and per-bar OnLoads. One-time `SetSwipeTexture` on the widgets persists (⚠ in-game verify). Note `chargeCooldown` is edge-only by default — leave it untouched when shaping swipes. Swipe rendering respects the swipe texture's alpha → circular 0.8-alpha texture = round Blizzard-like sweep.
 
 ## §4 Misc verified behaviors
+- **Masks do NOT clip `SetColorTexture` solid fills** (VERIFIED 2026-07-18: gradient plate corners stayed square). Use a white texture FILE (`Interface\Buttons\WHITE8X8`) + `SetGradient`/`SetVertexColor` when a masked solid/gradient is needed.
 - **Error inside a `SlashCmdList` handler ⇒ typed text stays undigested in the chat input** (the throw aborts `ChatEdit ParseText/SendText` cleanup). Symptom = handler error; always check BugSack.
 - Bar button globals + subregions: see HANDOFF gates 1–2 (all 8 bars = Dragonflight-era names, 12 buttons each).
