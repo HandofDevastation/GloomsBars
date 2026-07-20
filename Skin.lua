@@ -152,6 +152,20 @@ local function ExtensionAbove()
   return ExtensionPct() < 0
 end
 
+-- Continuous-OFF makes a HYBRID construction — a rounded icon on a SQUARE plate —
+-- that no single all-round shape matches (its bottom, or top, is square). This
+-- returns the mixed-corner pattern that DOES match (rounded on the icon end, sharp
+-- on the plate end), for the glow + cast-fill to use; nil when there's nothing to
+-- mix (continuous ON, no plate, or a non-rounded shape — circle/square/hexagon).
+local function mixedCornerBase()
+  if ExtensionPct() == 0 then return nil end
+  local c = GB:GetStyle().construction
+  if not (c and c.continuous == false) then return nil end
+  local pat, r = tostring(GB.db and GB.db.shape):match("^corner%-(%d%d%d%d)%-r(%d)$")
+  if pat ~= "1111" then return nil end
+  return ExtensionAbove() and ("corner-0011-r" .. r) or ("corner-1100-r" .. r)
+end
+
 -- Anchor a mask over the whole construction (padding-compensated per axis). `ext`
 -- is the magnitude; the extension sits ABOVE or BELOW the icon per ExtensionAbove.
 local function AnchorConstructionMask(mask, icon, ext)
@@ -178,6 +192,21 @@ local function AnchorConstruction(tex, icon, ratio, extraPx)
   tex:ClearAllPoints()
   tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -growX, growY + extT)
   tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", growX, -(growY + extB))
+end
+-- Public: let other modules (Glows) anchor a texture/frame over the construction
+-- (icon + extension) with the same math the overlays use.
+function Skin:AnchorOverlay(tex, icon, ratio, extraPx) return AnchorConstruction(tex, icon, ratio, extraPx) end
+
+-- Public: the glow art matching the CURRENT construction. Normally the shape's
+-- own glow; but in continuous-OFF mode the construction is a rounded icon on a
+-- SQUARE plate, so a fully-rounded glow floats off the plate — pick the MIXED-
+-- corner glow instead (rounded on the icon end, sharp on the plate end). Only the
+-- all-rounded family (corner-1111) has a clean mixed match; circle / square /
+-- hexagon keep their own glow (a circle has no straight side to meet the plate).
+function Skin:GlowArt()
+  local mb = mixedCornerBase()
+  if mb then return GB.MEDIA .. "art\\" .. mb .. "-glow.png" end
+  return GB:GetShape().glow
 end
 
 -- Anchor a mask over the construction EXPANDED by `t` px on every side — for the
@@ -417,7 +446,12 @@ local function styleCast(btn, rec, icon, castType)
   local cast = btn.SpellCastAnimFrame
   if not cast then return end
   local ext = ExtensionHeight(icon)
-  local src = aspectMask(icon:GetWidth(), icon:GetHeight() + ext)   -- nil → base shape mask
+  -- Cast fill spans the whole construction, so in continuous-OFF it needs the
+  -- mixed-corner mask (rounded icon end, square plate end) to hug the square plate
+  -- — otherwise it draws rounded bottom corners floating off the plate.
+  local mb = mixedCornerBase()
+  local src = mb and (GB.MEDIA .. "masks\\" .. mb .. ".png")
+    or aspectMask(icon:GetWidth(), icon:GetHeight() + ext)   -- nil → base shape mask
   -- 2. Shape the end-burst completion flash to the pill (used by successful casts
   --    AND replayed red for cancels). Reset its tint to white each cast so a real
   --    completion stays gold after a prior cancel tinted it red.
@@ -457,6 +491,51 @@ local function styleCast(btn, rec, icon, castType)
   f:Show()                                    -- OnUpdate polls the live cast/channel + hides at the end
 end
 
+-- Resolve a hotkey `font` value to a TTF path. The Config picker stores an LSM
+-- font NAME (our bundled fonts + every other addon's registered fonts); fall back
+-- to our bundled-name map if LSM is absent, then to a legacy GB.FONT key (older
+-- saved styles stored "label"/"head"/…), then the default.
+local function resolveFont(key)
+  key = key or "label"
+  local lsm = GB.GetLSM and GB.GetLSM()
+  if lsm then local p = lsm:Fetch("font", key, true); if p then return p end end
+  return (GB.BUNDLED_FONTS and GB.BUNDLED_FONTS[key]) or GB.FONT[key] or GB.FONT.label
+end
+
+-- Mac modifier display (opt-in per style: styleData.keybindMods == "symbols").
+-- Rewrite Blizzard's abbreviated modifier PREFIXES (s-/c-/a-/m- = Shift/Ctrl/Alt/
+-- Cmd) into inline symbol icons, hyphen removed — e.g. "s-m-Z" → ⇧⌘Z. GENERAL:
+-- it strips whatever known modifier prefixes lead the text, for any bind / user;
+-- nothing is hardcoded to a specific keybind. We only edit the display fontstring
+-- (never a binding). `|T...:0|t` scales each glyph to the keybind's line height.
+-- White glyph, scaled to the keybind's line height (`:0`). Inline textures don't
+-- inherit the fontstring colour, so these stay white regardless of the keybind
+-- tint — which reads clean/legible (Jason's call, 2026-07-19).
+local MOD_ICON = {
+  s = "|T" .. GB.MEDIA .. "ui\\shift.png:0|t",
+  c = "|T" .. GB.MEDIA .. "ui\\ctrl.png:0|t",
+  a = "|T" .. GB.MEDIA .. "ui\\opt.png:0|t",
+  m = "|T" .. GB.MEDIA .. "ui\\cmd.png:0|t",
+}
+local function symbolizeHotkey(text)
+  local prefix = ""
+  while true do
+    local mod, rest = text:match("^([scam])%-(.*)$")   -- peel one modifier prefix off the front
+    if not mod then break end
+    prefix = prefix .. MOD_ICON[mod]
+    text = rest
+  end
+  return prefix .. text
+end
+-- Rewrite a button's CURRENT hotkey text if the style opts in. Idempotent: once
+-- rewritten the text leads with "|T", so the [scam]- match no longer fires.
+local function symbolizeButton(btn)
+  local hk = btn.HotKey
+  if not hk or (GB:GetStyle().keybindMods) ~= "symbols" then return end
+  local raw = hk:GetText()
+  if raw and raw:match("^[scam]%-") then hk:SetText(symbolizeHotkey(raw)) end
+end
+
 local function ApplyHotkeyOverride(btn)
   local rec = records[btn]
   local hk = btn.HotKey
@@ -485,7 +564,7 @@ local function ApplyHotkeyOverride(btn)
   end
   hk:SetSize(icon:GetWidth(), (conf.size or 13) + 4)
   hk:SetJustifyH("CENTER")
-  hk:SetFont(GB.FONT[conf.font or "label"], conf.size or 13, conf.flags or "OUTLINE")
+  hk:SetFont(resolveFont(conf.font), conf.size or 13, conf.flags or "OUTLINE")
   if conf.color then hk:SetTextColor(unpack(conf.color)) end
   rec.hkOverridden = true
 end
@@ -496,6 +575,7 @@ local function ApplyDecor(btn)
   if not (rec and icon) then return end
   local style = GB:GetStyle()
   rec.plates = rec.plates or {}
+  rec.plateFresh = false   -- set by getPlate when a plate texture is first created (mask-retry, below)
   local ext = ExtensionHeight(icon)
   local above = ExtensionAbove()
   local extT, extB = (above and ext or 0), (above and 0 or ext)   -- extension split per direction
@@ -505,6 +585,11 @@ local function ApplyDecor(btn)
   -- crisp square plate. So the MASKS (icon + border) span the construction only
   -- when continuous; the plate positioning always uses the real extension.
   local continuous = not (style.construction and style.construction.continuous == false)
+  -- Continuous-OFF only means something when there's a PLATE to square off. With no
+  -- extension — or for a circle (no straight side to meet a square plate) — force
+  -- continuous, else getPlate strips the gradient's mask and it draws as an unmasked
+  -- square (the hexagon-gradient regression: continuous was toggled off globally).
+  if ext == 0 or (GB.db and GB.db.shape) == "circle" then continuous = true end
   local maskExt = continuous and ext or 0
   local mExtT, mExtB = (above and maskExt or 0), (above and 0 or maskExt)
   -- The aspect mask comes from the (masked) construction's aspect; a fresh mask is
@@ -533,9 +618,24 @@ local function ApplyDecor(btn)
     end
     local b, t = rec.border, bd.thickness
     local col = bd.color or { 0, 0, 0 }
+    local a = bd.alpha or 1
     local _, isub = icon:GetDrawLayer()
     b.tex:SetDrawLayer("BACKGROUND", math.max(-8, (isub or 0) - 1))   -- just behind the icon
-    b.tex:SetVertexColor(col[1], col[2], col[3], bd.alpha or 1)
+    -- Two-tone border: SetGradient runs a colour across the shape and only the
+    -- rim shows → the frame transitions colour → color2. `gradDir` picks the axis
+    -- (up/down = vertical, left/right = horizontal). One colour = plain fill.
+    -- Per-colour alpha (col[4], from the alpha-enabled picker) × the master
+    -- Opacity (a) → each stop can be independently transparent (e.g. a gradient
+    -- that fades to nothing), with Opacity still dimming the whole border.
+    if bd.color2 then
+      local c2, orient = bd.color2, (bd.gradDir == "left" or bd.gradDir == "right") and "HORIZONTAL" or "VERTICAL"
+      local g1 = CreateColor(col[1], col[2], col[3], (col[4] or 1) * a)
+      local g2 = CreateColor(c2[1], c2[2], c2[3], (c2[4] or 1) * a)
+      if bd.gradDir == "down" or bd.gradDir == "left" then b.tex:SetGradient(orient, g2, g1)
+      else b.tex:SetGradient(orient, g1, g2) end
+    else
+      b.tex:SetVertexColor(col[1], col[2], col[3], (col[4] or 1) * a)
+    end
     b.tex:ClearAllPoints()
     b.tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -t, t + mExtT)      -- frames the masked region
     b.tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", t, -(mExtB + t))
@@ -567,13 +667,14 @@ local function ApplyDecor(btn)
       tex:SetTexture("Interface\\Buttons\\WHITE8X8")
       plate = { tex = tex }
       rec.plates[idx] = plate
+      rec.plateFresh = true   -- brand-new texture: its first AddMaskTexture will silently fail (see mask-retry)
     end
     -- Continuous: the plate shares the icon's mask so it joins the pill (rebuild
     -- on plan change, else re-anchor). NOT continuous: no mask → a plain square
     -- rectangle (the crisp plate that squares off the junction).
     if not continuous then
       if plate.mask then plate.tex:RemoveMaskTexture(plate.mask); plate.mask = nil; plate.maskKey = nil end
-    elseif plate.mask and plate.maskKey == maskKey then
+    elseif plate.mask and plate.maskKey == maskKey and not rec.forcePlateMask then
       AnchorConstructionMask(plate.mask, icon, maskExt)
     else
       if plate.mask then plate.tex:RemoveMaskTexture(plate.mask) end
@@ -584,45 +685,60 @@ local function ApplyDecor(btn)
     plate.tex:ClearAllPoints()
     return plate
   end
+  -- Gradient layers. A layer is a directional fade masked to the shape (so it
+  -- follows a hexagon, pill, etc.). `dir` = the way the fade travels FROM its
+  -- solid edge (up = solid at bottom fading up; down/left/right mirror it).
+  -- `bleedPct` ("Fade start") = how far the fade reaches from that solid edge,
+  -- as a fraction of the icon — works on EVERY shape now (was extension-only).
+  -- When an extension lies on the solid edge it's drawn as a flat SOLID zone
+  -- first (the "plate" look): solid through the extension, fading into the icon.
   local used = 0
-  for i, layer in ipairs(style.layers or {}) do
+  for _, layer in ipairs(style.layers or {}) do
     if layer.enabled ~= false and layer.kind == "gradient" then
       local c = layer.color or { 1, 1, 1 }
       local fromA, toA = layer.fromAlpha or 1, layer.toAlpha or 0
-      if layer.zone == "extension" and ext > 0 then
-        -- Mock-matched (QA 2026-07-18): the extension is FULL opacity to the
-        -- icon's edge; the fade lives INSIDE the icon. Mirrored for an ABOVE
-        -- extension (solid above the top edge, fade running down into the icon).
-        local iconEdge = above and "TOP" or "BOTTOM"
-        local outward = above and ext or -ext              -- solid extends away from the icon
-        local fromC = CreateColor(c[1], c[2], c[3], fromA)
-        local toC = CreateColor(c[1], c[2], c[3], toA)
-        used = used + 1
-        local solid = getPlate(used)
-        solid.tex:SetPoint(iconEdge .. "LEFT", icon, iconEdge .. "LEFT", 0, outward)
-        solid.tex:SetPoint(iconEdge .. "RIGHT", icon, iconEdge .. "RIGHT", 0, outward)
-        solid.tex:SetHeight(ext)
-        solid.tex:SetGradient("VERTICAL", fromC, fromC)
-        solid.tex:Show()
+      local fromC = CreateColor(c[1], c[2], c[3], fromA)
+      local toC = CreateColor(c[1], c[2], c[3], toA)
+      local dir = layer.dir or "up"
+      local reach = layer.bleedPct or 0.5              -- fraction of the icon the fade spans
+      if dir == "left" or dir == "right" then
+        -- Horizontal fade across the whole construction; solid at the far edge.
+        local solidRight = (dir == "left")             -- fades left ⇒ solid on the right
+        local edge = solidRight and "RIGHT" or "LEFT"
         used = used + 1
         local fade = getPlate(used)
-        fade.tex:SetPoint(iconEdge .. "LEFT", icon, iconEdge .. "LEFT", 0, 0)
-        fade.tex:SetPoint(iconEdge .. "RIGHT", icon, iconEdge .. "RIGHT", 0, 0)
-        fade.tex:SetHeight(icon:GetHeight() * (layer.bleedPct or 0.4))
-        -- VERTICAL gradient min = bottom, max = top → full colour sits at the
-        -- icon edge (bottom for a below plate, top for an above plate).
-        if above then fade.tex:SetGradient("VERTICAL", toC, fromC)
-        else fade.tex:SetGradient("VERTICAL", fromC, toC) end
+        fade.tex:SetPoint("TOP" .. edge, icon, "TOP" .. edge, 0, extT)
+        fade.tex:SetPoint("BOTTOM" .. edge, icon, "BOTTOM" .. edge, 0, -extB)
+        fade.tex:SetWidth(math.max(0.01, icon:GetWidth() * reach))
+        -- HORIZONTAL gradient: min = left, max = right.
+        if solidRight then fade.tex:SetGradient("HORIZONTAL", toC, fromC)
+        else fade.tex:SetGradient("HORIZONTAL", fromC, toC) end
         fade.tex:Show()
       else
+        -- Vertical fade; solid at the bottom for "up", the top for "down".
+        local solidBottom = (dir == "up")
+        local edge = solidBottom and "BOTTOM" or "TOP"
+        -- Extension on the solid edge → a flat SOLID zone through it (plate look).
+        local extAligned = ext > 0 and ((solidBottom and not above) or (not solidBottom and above))
+        if extAligned then
+          used = used + 1
+          local solid = getPlate(used)
+          local outward = solidBottom and -ext or ext
+          solid.tex:SetPoint(edge .. "LEFT", icon, edge .. "LEFT", 0, outward)
+          solid.tex:SetPoint(edge .. "RIGHT", icon, edge .. "RIGHT", 0, outward)
+          solid.tex:SetHeight(ext)
+          solid.tex:SetGradient("VERTICAL", fromC, fromC)
+          solid.tex:Show()
+        end
         used = used + 1
-        local plate = getPlate(used)
-        plate.tex:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, 0)
-        plate.tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
-        plate.tex:SetHeight(icon:GetHeight() * (layer.sizePct or 0.4))
-        -- VERTICAL gradient: min color = bottom, max color = top.
-        plate.tex:SetGradient("VERTICAL", CreateColor(c[1], c[2], c[3], fromA), CreateColor(c[1], c[2], c[3], toA))
-        plate.tex:Show()
+        local fade = getPlate(used)
+        fade.tex:SetPoint(edge .. "LEFT", icon, edge .. "LEFT", 0, 0)
+        fade.tex:SetPoint(edge .. "RIGHT", icon, edge .. "RIGHT", 0, 0)
+        fade.tex:SetHeight(math.max(0.01, icon:GetHeight() * reach))
+        -- VERTICAL gradient: min = bottom, max = top. Full colour at the solid edge.
+        if solidBottom then fade.tex:SetGradient("VERTICAL", fromC, toC)
+        else fade.tex:SetGradient("VERTICAL", toC, fromC) end
+        fade.tex:Show()
       end
     end
   end
@@ -632,12 +748,42 @@ local function ApplyDecor(btn)
     btn.TextOverlayContainer:SetFrameLevel(btn:GetFrameLevel() + 4)
   end
   ApplyHotkeyOverride(btn)
+  -- Mask-retry: a plate texture created THIS frame hasn't rendered yet, so its
+  -- first AddMaskTexture silently fails (never-rendered-texture quirk, API-NOTES
+  -- §2) and the gradient draws UNMASKED — e.g. a square bottom on a hexagon,
+  -- whose fixed aspect never changes maskKey to trigger a rebuild. Once the plate
+  -- has drawn one frame it accepts the mask, so force ONE mask rebuild next frame.
+  if rec.plateFresh and not rec.plateRetryPending then
+    rec.plateRetryPending = true
+    C_Timer.After(0, function()
+      rec.plateRetryPending = nil
+      if not (Skin.enabled and rec.active) then return end
+      rec.forcePlateMask = true
+      ApplyDecor(btn)
+      rec.forcePlateMask = nil
+    end)
+  end
 end
 
 function Skin:ReapplyDecor()
   if not self.enabled then return end
   GB:ForEachButton(function(btn)
     if records[btn] and records[btn].active then ApplyDecor(btn) end
+  end)
+  if GB.Glows then GB.Glows:RefreshShape(); GB.Glows:RefreshSize() end   -- glow art + span follow continuous/extension edits
+end
+
+-- Apply (or revert) the Mac modifier rewrite across all buttons — call when the
+-- setting changes. Revert asks Blizzard to re-set the original text; the hook
+-- then leaves it alone (mods != "symbols"), so nothing re-symbolizes it.
+function Skin:RefreshHotkeyText()
+  if not self.enabled then return end
+  local symbols = (GB:GetStyle().keybindMods) == "symbols"
+  GB:ForEachButton(function(btn)
+    local rec = records[btn]
+    if not (rec and rec.active and btn.HotKey) then return end
+    if symbols then symbolizeButton(btn)
+    elseif btn.UpdateHotkeys then btn:UpdateHotkeys(btn.buttonType) end
   end)
 end
 
@@ -753,6 +899,7 @@ function Skin:SetShape(name)
     applyShapeArt(btn, icon)
     ApplyDecor(btn)
   end)
+  if GB.Glows then GB.Glows:RefreshShape() end   -- proc halo art follows the new shape
 end
 
 -- Live state-highlight tint. `which` = hover | selected | flash → the matching
@@ -802,6 +949,7 @@ function Skin:SetIconSize(w, h)
     AlignCooldowns(btn)
     ApplyDecor(btn)
   end)
+  if GB.Glows then GB.Glows:RefreshSize() end   -- proc halo tracks the new icon size/aspect
 end
 
 local function ApplyButton(btn)
@@ -844,9 +992,9 @@ local function ApplyButton(btn)
     end
     if btn.UpdateHotkeys then
       hooksecurefunc(btn, "UpdateHotkeys", function(b)
-        if Skin.enabled and records[b] and records[b].hkOverridden then
-          ApplyHotkeyOverride(b)
-        end
+        if not (Skin.enabled and records[b]) then return end
+        symbolizeButton(b)                                    -- Mac modifier icons (if opted in)
+        if records[b].hkOverridden then ApplyHotkeyOverride(b) end
       end)
     end
   end
@@ -914,6 +1062,7 @@ local function ApplyButton(btn)
   Suppress(btn)
   rec.active = true
   ApplyDecor(btn)
+  symbolizeButton(btn)   -- symbolize the already-set hotkey text (the hook covers later updates)
 end
 
 local function RestoreButton(btn)

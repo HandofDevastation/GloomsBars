@@ -17,7 +17,10 @@ import zlib
 
 SIZE, SS = 256, 4      # 256px canvas, 4x4 supersampling
 EXTENT = 120.0         # shape half-extent in design px (of 128)
-GLOW_EXTENT = 96.0     # glow art: shape edge inset so the halo fits OUTSIDE it
+GLOW_EXTENT = 80.0     # glow art: shape edge well inset so a WIDE soft halo fits OUTSIDE
+                       # it (edge at 80/128 → ~38px of outward bloom room before the 120
+                       # padding). Engine sizes the glow frame by 128/80 so the edge lands
+                       # on the icon rim. Wider than the old 96 → a soft, diffuse outer edge.
 
 
 # --- signed-distance functions (negative = inside) --------------------------
@@ -109,11 +112,17 @@ def swipe_alpha(d):
 
 
 def glow_alpha(d):
-    # Proc-glow halo: peaks just outside the shape edge, blooms outward ~20px,
-    # bleeds gently inward over the icon rim. Ends by +23 (96+23 < 120: padded).
-    if d >= 23:
+    # Proc-glow halo: a soft LUMINOUS BLOOM, not a rim stroke. Brightest right AT
+    # the shape silhouette (d=0) and fading SMOOTHLY outward to nothing by +23,
+    # with a gentle inward bleed lighting the icon rim. The old profile peaked a
+    # few px OUTSIDE the edge (a bright band → read as an outline/stroke); this one
+    # is monotonic from the edge out, so it reads as a diffuse glow. (96+23 < 120,
+    # so it stays inside the padded canvas — API-NOTES §2 edge-bleed rule.)
+    if d >= 38:
         return 0.0
-    return min(1.0, 0.9 * math.exp(-((d - 3) / 8.0) ** 2))
+    if d >= 0:
+        return 0.8 * math.exp(-(d / 13.0) ** 2)   # WIDE outward Gaussian → melts away over ~35px
+    return 0.8 * math.exp(-(d / 10.0) ** 2)        # inward: rim-light bleed so the edge WRAPS softly
 
 
 def ring_alpha(d):
@@ -218,9 +227,19 @@ def gen_shape(name, sdf):
     write_png(f"Media/art/{name}-glow.png", render(glow_sdf, glow_alpha))
 
 
+def gen_glows():
+    # Re-render ONLY the proc-glow halos for every shape (fast: one render each,
+    # skips masks/swipes/rings). Use after editing glow_alpha / GLOW_EXTENT.
+    for name, sdf in SHAPES.items():
+        glow_sdf = lambda px, py, s=sdf: s(px, py, GLOW_EXTENT)
+        write_png(f"Media/art/{name}-glow.png", render(glow_sdf, glow_alpha))
+
+
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "pills":
+    if len(sys.argv) > 1 and sys.argv[1] == "glows":
+        gen_glows()   # fast: only the proc-glow halos (after a glow_alpha edit)
+    elif len(sys.argv) > 1 and sys.argv[1] == "pills":
         gen_pills()   # fast: only the aspect masks, not the ~384 corner PNGs
     elif len(sys.argv) > 1 and sys.argv[1] in SHAPES:
         gen_shape(sys.argv[1], SHAPES[sys.argv[1]])   # fast: one named shape (e.g. "hexagon")

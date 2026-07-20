@@ -115,16 +115,39 @@ end
 local function sliderRow(parent, yTop, labelText, minV, maxV, step, get, set, fmt)
   local lab = newText(parent, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 18, yTop); lab:SetText(labelText)
   local val = newText(parent, FONT.label, 11, TEXT, "RIGHT"); val:SetPoint("TOPRIGHT", -18, yTop)
+  -- The Slider FRAME is a tall, full-width hit area (easy to grab); the visible
+  -- track is a thin bar centered in it, so the look is unchanged but the grab
+  -- target isn't just the 5px thumb (Jason QA 2026-07-19).
   local sl = CreateFrame("Slider", nil, parent)
-  sl:SetPoint("TOPLEFT", 18, yTop - 20); sl:SetPoint("TOPRIGHT", -18, yTop - 20); sl:SetHeight(6)
+  sl:SetPoint("TOPLEFT", 18, yTop - 15); sl:SetPoint("TOPRIGHT", -18, yTop - 15); sl:SetHeight(16)
+  sl:EnableMouse(true)
   sl:SetOrientation("HORIZONTAL"); sl:SetMinMaxValues(minV, maxV); sl:SetValueStep(step); sl:SetObeyStepOnDrag(true)
-  local track = sl:CreateTexture(nil, "BACKGROUND"); track:SetAllPoints()
+  local track = sl:CreateTexture(nil, "BACKGROUND")
+  track:SetPoint("LEFT"); track:SetPoint("RIGHT"); track:SetHeight(6)   -- thin visual bar, vertically centered
   track:SetColorTexture(COLOR.heroic.r, COLOR.heroic.g, COLOR.heroic.b, 0.20)
   local thumb = sl:CreateTexture(nil, "ARTWORK"); thumb:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 1)
   thumb:SetSize(5, 20); sl:SetThumbTexture(thumb)
   local applying = false
   local function show(v) val:SetText(fmt and fmt(v) or tostring(v)) end
   sl:SetScript("OnValueChanged", function(_, v) if not applying then set(v) end; show(v) end)
+  -- Click / drag ANYWHERE on the row seeks the value (map cursor X → min..max,
+  -- snap to step) — so you never have to land on the thin thumb.
+  local function seek(self)
+    local left, w = self:GetLeft(), self:GetWidth()
+    if not (left and w and w > 0) then return end
+    local frac = (GetCursorPosition() / self:GetEffectiveScale() - left) / w
+    frac = math.max(0, math.min(1, frac))
+    local v = minV + frac * (maxV - minV)
+    if step and step > 0 then v = minV + math.floor((v - minV) / step + 0.5) * step end
+    self:SetValue(v)
+  end
+  sl:SetScript("OnMouseDown", function(self) if self:IsEnabled() then self._seek = true; seek(self) end end)
+  sl:SetScript("OnMouseUp", function(self) self._seek = false end)
+  sl:SetScript("OnUpdate", function(self)
+    if self._seek then
+      if self:IsEnabled() and IsMouseButtonDown("LeftButton") then seek(self) else self._seek = false end
+    end
+  end)
   local row = {}
   function row:refresh() applying = true; local v = get() or minV; sl:SetValue(v); show(v); applying = false end
   function row:setEnabled(on) sl:SetEnabled(on); sl:SetAlpha(on and 1 or 0.35) end
@@ -136,24 +159,57 @@ end
 -- Color swatch — a solid button that opens the game ColorPickerFrame (modern
 -- SetupColorPickerAndShow API, present on this client, with a fallback). Returns
 -- { swatch, refresh }.
-local function colorSwatch(parent, get, set)
+local function colorSwatch(parent, get, set, withAlpha)
   local sw = CreateFrame("Button", nil, parent); sw:SetSize(28, 20)
   local tex = sw:CreateTexture(nil, "ARTWORK"); tex:SetAllPoints()
   addEdges(sw, COLOR.rim, 1)
+  -- The swatch shows the hue at full opacity (its alpha lives on the target, e.g.
+  -- the border) so a near-transparent colour stays visible/clickable here.
   local function update() local c = get() or { 1, 1, 1 }; tex:SetColorTexture(c[1] or 1, c[2] or 1, c[3] or 1, 1) end
   sw:SetScript("OnClick", function()
     local c = get() or { 1, 1, 1 }
     local function apply()
       local r, g, b = ColorPickerFrame:GetColorRGB()
-      set({ r, g, b }); update()
+      if withAlpha then
+        local a = ColorPickerFrame.GetColorAlpha and ColorPickerFrame:GetColorAlpha() or 1
+        set({ r, g, b, a })
+      else
+        set({ r, g, b })
+      end
+      update()
     end
-    local info = { hasOpacity = false, r = c[1], g = c[2], b = c[3], swatchFunc = apply }
+    local info = { hasOpacity = withAlpha or false, opacity = withAlpha and (c[4] or 1) or nil,
+      r = c[1], g = c[2], b = c[3], swatchFunc = apply, opacityFunc = apply }
     if ColorPickerFrame.SetupColorPickerAndShow then ColorPickerFrame:SetupColorPickerAndShow(info)
     else ColorPickerFrame.func = apply; ColorPickerFrame:SetColorRGB(c[1], c[2], c[3]); ColorPickerFrame:Show() end
   end)
   update()
   local row = { swatch = sw }
   function row:refresh() update() end
+  return row
+end
+
+-- A 4-way direction picker: label (left) + Up/Down/Left/Right buttons (right),
+-- the current one highlighted (flatButton active = full opacity). get() returns
+-- "up"|"down"|"left"|"right"; set(dir) writes it. Reused by the gradient fill and
+-- the two-tone border (and, later, the cast-fill direction). Returns { refresh, setEnabled }.
+local DIR_CHOICES = { { "up", "Up" }, { "down", "Down" }, { "left", "Left" }, { "right", "Right" } }
+local function dirRow(parent, yTop, labelText, get, set)
+  local lab = newText(parent, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 18, yTop); lab:SetText(labelText)
+  local btns, prev = {}, nil
+  for i = #DIR_CHOICES, 1, -1 do            -- lay out right-to-left so Up is leftmost
+    local d = DIR_CHOICES[i]
+    local b = flatButton(parent, 40, 22, COLOR.heroic, d[2], 11)
+    if prev then b:SetPoint("TOPRIGHT", prev, "TOPLEFT", -4, 0)
+    else b:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -18, yTop + 1) end
+    b:SetScript("OnClick", function() set(d[1]); for _, e in ipairs(btns) do e.b:SetActive(e.d == get()) end end)
+    btns[#btns + 1] = { b = b, d = d[1] }
+    prev = b
+  end
+  local row = {}
+  function row:refresh() local cur = get(); for _, e in ipairs(btns) do e.b:SetActive(e.d == cur) end end
+  function row:setEnabled(on) for _, e in ipairs(btns) do e.b:SetEnabled(on) end; lab:SetAlpha(on and 1 or 0.35) end
+  row:refresh()
   return row
 end
 
@@ -171,6 +227,103 @@ local sections = {}
 local previewFrame, previewIcon, previewMask, previewGlow, previewRing, previewCD
 local previewBorder, previewBorderMask
 local previewChips, previewState = {}, "idle"
+
+-- --------------------------------------------------------------------------
+-- Font picker — a dropdown whose label is drawn IN the current font; clicking
+-- opens a scrollable flyout of every LibSharedMedia font (our bundled ones + all
+-- other addons', incl. StoneTweaks), or just the bundled set if LSM is absent.
+-- --------------------------------------------------------------------------
+local function fontChoices()
+  local lsm = GB.GetLSM and GB.GetLSM()
+  if lsm and lsm.List then
+    local shared, t = lsm:List("font"), {}   -- LSM hands back its own array; copy it
+    for i = 1, #shared do t[i] = shared[i] end
+    return t
+  end
+  local t = {}
+  for n in pairs(GB.BUNDLED_FONTS or {}) do t[#t + 1] = n end
+  table.sort(t)
+  return t
+end
+local function fontPath(name)
+  local lsm = GB.GetLSM and GB.GetLSM()
+  if lsm and name then local p = lsm:Fetch("font", name, true); if p then return p end end
+  return (GB.BUNDLED_FONTS and GB.BUNDLED_FONTS[name]) or GB.FONT.label
+end
+
+local fontFlyout
+local function fontFlyoutFrame()
+  if fontFlyout then return fontFlyout end
+  -- Full-screen catcher (child of the panel, so it auto-hides with it) at a
+  -- strata ABOVE the DIALOG panel → any click outside the flyout closes it.
+  local catcher = CreateFrame("Button", nil, panel)
+  catcher:SetFrameStrata("FULLSCREEN"); catcher:SetAllPoints(UIParent); catcher:Hide()
+  local fly = CreateFrame("Frame", nil, catcher)
+  fly:SetFrameStrata("FULLSCREEN_DIALOG"); fly:SetSize(210, 300)
+  skinPlate(fly); addEdges(fly, COLOR.rim, 1)
+  local scroll = CreateFrame("ScrollFrame", nil, fly)
+  scroll:SetPoint("TOPLEFT", 5, -5); scroll:SetPoint("BOTTOMRIGHT", -5, 5)
+  scroll:EnableMouseWheel(true)
+  local child = CreateFrame("Frame", nil, scroll); child:SetSize(200, 10)
+  scroll:SetScrollChild(child)
+  scroll:SetScript("OnMouseWheel", function(self, delta)
+    local range = math.max(0, child:GetHeight() - self:GetHeight())
+    self:SetVerticalScroll(math.max(0, math.min(range, self:GetVerticalScroll() - delta * 34)))
+  end)
+  catcher:SetScript("OnClick", function() catcher:Hide() end)
+  fly.catcher, fly.scroll, fly.child, fly.rows = catcher, scroll, child, {}
+  fontFlyout = fly
+  return fly
+end
+
+local function openFontFlyout(anchor, current, onPick)
+  local fly = fontFlyoutFrame()
+  local names, rows = fontChoices(), fly.rows
+  local ROW_H, y = 22, -2
+  for i, name in ipairs(names) do
+    local row = rows[i]
+    if not row then
+      row = CreateFrame("Button", nil, fly.child); row:SetHeight(ROW_H)
+      row.hl = row:CreateTexture(nil, "BACKGROUND"); row.hl:SetAllPoints()
+      row.hl:SetColorTexture(1, 1, 1, 0.07); row.hl:Hide()
+      row:SetScript("OnEnter", function(self) self.hl:Show() end)
+      row:SetScript("OnLeave", function(self) self.hl:Hide() end)
+      row.text = newText(row, FONT.body, 13, TEXT, "LEFT"); row.text:SetWordWrap(false)
+      row.text:SetPoint("LEFT", 8, 0); row.text:SetPoint("RIGHT", -8, 0)
+      rows[i] = row
+    end
+    row:ClearAllPoints()
+    row:SetPoint("TOPLEFT", 0, y); row:SetPoint("TOPRIGHT", 0, y)
+    row.text:SetText(name)
+    if not row.text:SetFont(fontPath(name), 14, "") then row.text:SetFont(GB.FONT.body, 13, "") end
+    if name == current then row.text:SetTextColor(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b)
+    else row.text:SetTextColor(1, 1, 1) end
+    row:SetScript("OnClick", function() fly.catcher:Hide(); onPick(name) end)
+    row:Show()
+    y = y - ROW_H
+  end
+  for i = #names + 1, #rows do rows[i]:Hide() end
+  fly.child:SetHeight(math.max(10, #names * ROW_H + 4))
+  fly:SetHeight(math.min(300, #names * ROW_H + 10))   -- snug for short lists, scroll past ~13
+  fly:ClearAllPoints(); fly:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, -2)
+  fly.scroll:SetVerticalScroll(0)
+  fly.catcher:Show()
+end
+
+-- Dropdown button: label drawn in the current font; click opens the flyout.
+-- get() → current LSM font name, set(name) writes it. Returns the button (+:refresh).
+local function fontDropdown(parent, w, get, set)
+  local b = flatButton(parent, w, 22, COLOR.heroic, "", 11); b:SetBase(0.2)
+  b.text:SetWordWrap(false)
+  function b:refresh()
+    local n = get() or "GeneralSans SemiBold"
+    self.text:SetText(n)
+    if not self.text:SetFont(fontPath(n), 11, "") then self.text:SetFont(FONT.bodyM, 11, "") end
+  end
+  b:SetScript("OnClick", function() openFontFlyout(b, get(), function(name) set(name); b:refresh() end) end)
+  b:refresh()
+  return b
+end
 
 local function relayout()
   local prevBottom
@@ -455,6 +608,17 @@ local function ensureBorder()
   return st.border
 end
 
+-- The keybind (HotKey) override. Present = the engine restyles/repositions the
+-- keybind text (ApplyHotkeyOverride reads styleData.hotkey: zone/offset/size/
+-- font/flags/color); absent = Blizzard's default (top-right). `font` is a GB.FONT
+-- key. Default = the reference look (bold white centered in the extension).
+local function hotkeyData() local st = GB.db and GB.db.styleData; return st and st.hotkey end
+local function ensureHotkey()
+  local st = GB.db and GB.db.styleData; if not st then return nil end
+  st.hotkey = st.hotkey or { zone = "extension", offsetX = 0, offsetY = 0, size = 13, font = "GeneralSans SemiBold", flags = "OUTLINE", color = { 1, 1, 1 } }
+  return st.hotkey
+end
+
 -- Construction — the extension zone below the icon (extra plate real estate). A
 -- lighter re-anchor (ReapplyDecor) applies it; no mask recreation needed.
 local function buildConstructionSection(bf, s)
@@ -500,12 +664,17 @@ local function buildConstructionSection(bf, s)
   bf:SetHeight(112)
   s.refresh = function()
     local hex = isHex()
-    row:setEnabled(not hex)
+    -- Continuous-OFF only makes sense with a plate on a shape that has straight
+    -- sides: force-ON (and grey the toggle) for the hexagon AND the circle.
+    local noCont = hex or (GB.db and GB.db.shape) == "circle"
+    row:setEnabled(not hex)   -- circle CAN have an extension (→ a pill); only the hexagon can't
     row:refresh()
-    contTog:EnableMouse(not hex); contTog:SetAlpha(hex and 0.35 or 1); contTog:refresh()
+    contTog:EnableMouse(not noCont); contTog:SetAlpha(noCont and 0.35 or 1); contTog:refresh()
     hint:SetText(hex
       and "The hexagon is a fixed shape — no plate extension."
-      or "Centered slider: LEFT = plate above, RIGHT = below. Continuous = one shape; off = rounded icon + square plate.")
+      or ((GB.db and GB.db.shape) == "circle"
+        and "Circle: an extension makes a pill (always one continuous shape)."
+        or "Centered slider: LEFT = plate above, RIGHT = below. Continuous = one shape; off = rounded icon + square plate."))
   end
 end
 
@@ -529,37 +698,250 @@ local function buildDecorSection(bf, s)
     function(v) local l = ensureGradLayer(); l.bleedPct = v; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end,
     function(v) return math.floor(v * 100 + 0.5) .. "%" end)
 
+  -- Direction — which edge the fill is solid at and which way it fades. Works on
+  -- every shape (incl. hexagon); "Fade start" sets how far the fade reaches.
+  local dirR = dirRow(bf, -128, "Direction",
+    function() local l = gradLayer(); return (l and l.dir) or "up" end,
+    function(d) local l = ensureGradLayer(); l.dir = d; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end)
+
   -- Border — a colored frame around ANY shape (a shape-copy behind the icon,
-  -- peeking out by the thickness). On/off + color + thickness + opacity.
-  local blab = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); blab:SetPoint("TOPLEFT", 18, -118); blab:SetText("BORDER")
+  -- peeking out by the thickness). On/off + color(s) + thickness + opacity.
+  local blab = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); blab:SetPoint("TOPLEFT", 18, -168); blab:SetText("BORDER")
   local ben = makeToggle(bf,
     function() local b = borderData(); return b and b.enabled end,
     function(v) local b = ensureBorder(); b.enabled = v; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end)
-  ben:SetPoint("TOPRIGHT", -18, -116)
+  ben:SetPoint("TOPRIGHT", -18, -166)
 
-  local bclab = newText(bf, FONT.body, 12, TEXT, "LEFT"); bclab:SetPoint("TOPLEFT", 18, -148); bclab:SetText("Color")
+  local bclab = newText(bf, FONT.body, 12, TEXT, "LEFT"); bclab:SetPoint("TOPLEFT", 18, -198); bclab:SetText("Color")
   local bcs = colorSwatch(bf,
     function() local b = borderData(); return b and b.color end,
-    function(c) local b = ensureBorder(); b.color = c; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end)
-  bcs.swatch:SetPoint("TOPRIGHT", -18, -146)
+    function(c) local b = ensureBorder(); b.color = c; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end, true)
+  bcs.swatch:SetPoint("TOPRIGHT", -18, -196)
 
-  local thickRow = sliderRow(bf, -180, "Thickness", 1, 12, 1,
+  -- Two-tone: a second colour turns the border into a gradient (only the rim
+  -- shows → a colour transition around the frame). Off clears color2.
+  local twoLab = newText(bf, FONT.body, 12, TEXT, "LEFT"); twoLab:SetPoint("TOPLEFT", 18, -228); twoLab:SetText("Two-tone")
+  local twoTog = makeToggle(bf,
+    function() local b = borderData(); return b and b.color2 ~= nil end,
+    function(v)
+      local b = ensureBorder()
+      b.color2 = v and (b.color2 or { 1, 1, 1 }) or nil
+      if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview(); s.refresh()
+    end)
+  twoTog:SetPoint("TOPRIGHT", -18, -226)
+
+  local bc2lab = newText(bf, FONT.body, 12, TEXT, "LEFT"); bc2lab:SetPoint("TOPLEFT", 18, -258); bc2lab:SetText("Color 2")
+  local bcs2 = colorSwatch(bf,
+    function() local b = borderData(); return b and b.color2 end,
+    function(c) local b = ensureBorder(); b.color2 = c; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end, true)
+  bcs2.swatch:SetPoint("TOPRIGHT", -18, -256)
+
+  local bdirR = dirRow(bf, -288, "Blend dir",
+    function() local b = borderData(); return (b and b.gradDir) or "up" end,
+    function(d) local b = ensureBorder(); b.gradDir = d; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end)
+
+  local thickRow = sliderRow(bf, -328, "Thickness", 1, 12, 1,
     function() local b = borderData(); return (b and b.thickness) or 3 end,
     function(v) local b = ensureBorder(); b.thickness = v; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end,
     function(v) return v .. "px" end)
 
-  local bopRow = sliderRow(bf, -224, "Opacity", 0, 1, 0.05,
+  local bopRow = sliderRow(bf, -372, "Opacity", 0, 1, 0.05,
     function() local b = borderData(); return (b and b.alpha) or 1 end,
     function(v) local b = ensureBorder(); b.alpha = v; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end,
     function(v) return math.floor(v * 100 + 0.5) .. "%" end)
 
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -268); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("Gradient fills the extension; Border frames any shape. More layer kinds later.")
-  bf:SetHeight(292)
+  hint:SetPoint("TOPLEFT", 18, -416); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Direction sets the solid edge; Fade start its reach. Two-tone makes the border a gradient.")
+  bf:SetHeight(440)
   s.refresh = function()
-    en:refresh(); cs:refresh(); bleedRow:refresh()
-    ben:refresh(); bcs:refresh(); thickRow:refresh(); bopRow:refresh()
+    en:refresh(); cs:refresh(); bleedRow:refresh(); dirR:refresh()
+    ben:refresh(); bcs:refresh(); twoTog:refresh(); bcs2:refresh(); bdirR:refresh(); thickRow:refresh(); bopRow:refresh()
+    -- Grey Color 2 + Blend dir unless two-tone is on.
+    local two = (function() local b = borderData(); return b and b.color2 ~= nil end)()
+    bc2lab:SetAlpha(two and 1 or 0.35)
+    bcs2.swatch:EnableMouse(two); bcs2.swatch:SetAlpha(two and 1 or 0.35)
+    bdirR:setEnabled(two)
+  end
+end
+
+-- Text — keybind styling + placement. The engine (ApplyHotkeyOverride, re-run
+-- via ReapplyDecor and re-asserted in the UpdateHotkeys hook) reads styleData.
+-- hotkey. Off = Blizzard's default. Count/Name overrides come in a later pass.
+local function buildTextSection(bf, s)
+  local function reapply() if GB.Skin then GB.Skin:ReapplyDecor() end end
+
+  local lab = newText(bf, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 18, -14); lab:SetText("Custom keybind")
+  local en = makeToggle(bf,
+    function() return hotkeyData() ~= nil end,
+    function(v) local st = GB.db.styleData; if v then ensureHotkey() elseif st then st.hotkey = nil end; reapply(); s.refresh() end)
+  en:SetPoint("TOPRIGHT", -18, -12)
+
+  local clab = newText(bf, FONT.body, 12, TEXT, "LEFT"); clab:SetPoint("TOPLEFT", 18, -46); clab:SetText("Color")
+  local cs = colorSwatch(bf,
+    function() local h = hotkeyData(); return h and h.color end,
+    function(c) local h = ensureHotkey(); h.color = c; reapply() end)
+  cs.swatch:SetPoint("TOPRIGHT", -18, -44)
+
+  local sizeRow = sliderRow(bf, -78, "Size", 6, 28, 1,
+    function() local h = hotkeyData(); return (h and h.size) or 13 end,
+    function(v) local h = ensureHotkey(); h.size = v; reapply() end,
+    function(v) return v .. "px" end)
+
+  -- Font — a dropdown of every LibSharedMedia font (bundled + other addons').
+  local flab = newText(bf, FONT.body, 12, TEXT, "LEFT"); flab:SetPoint("TOPLEFT", 18, -122); flab:SetText("Font")
+  local fontBtn = fontDropdown(bf, 150,
+    function() local h = hotkeyData(); return h and h.font end,
+    function(name) local h = ensureHotkey(); h.font = name; reapply() end)
+  fontBtn:SetPoint("TOPRIGHT", -18, -120)
+
+  -- POSITION — zone (over the icon vs. in the extension plate) + nudge offsets.
+  local phdr = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); phdr:SetPoint("TOPLEFT", 18, -160); phdr:SetText("POSITION")
+  local zlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); zlab:SetPoint("TOPLEFT", 18, -190); zlab:SetText("Zone")
+  local zoneBtns, zPrev = {}, nil
+  for i = 2, 1, -1 do
+    local zc = ({ { "center", "Center" }, { "extension", "Extension" } })[i]
+    local b = flatButton(bf, 80, 22, COLOR.heroic, zc[2], 11)
+    if zPrev then b:SetPoint("TOPRIGHT", zPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -188) end
+    b:SetScript("OnClick", function()
+      local h = ensureHotkey(); h.zone = zc[1]
+      for _, e in ipairs(zoneBtns) do e.b:SetActive(e.z == h.zone) end; reapply()
+    end)
+    zoneBtns[#zoneBtns + 1] = { b = b, z = zc[1] }; zPrev = b
+  end
+
+  local oxRow = sliderRow(bf, -222, "Offset X", -40, 40, 1,
+    function() local h = hotkeyData(); return (h and h.offsetX) or 0 end,
+    function(v) local h = ensureHotkey(); h.offsetX = v; reapply() end,
+    function(v) return v .. "px" end)
+  local oyRow = sliderRow(bf, -266, "Offset Y", -40, 40, 1,
+    function() local h = hotkeyData(); return (h and h.offsetY) or 0 end,
+    function(v) local h = ensureHotkey(); h.offsetY = v; reapply() end,
+    function(v) return v .. "px" end)
+
+  -- Modifiers — INDEPENDENT of the styling override above: swap the keybind's
+  -- modifier prefixes (m-/s-/c-/a-) for Mac symbols (⌘⇧⌃⌥), hyphen removed.
+  -- Works whether or not Custom keybind is on; stored per style (keybindMods).
+  local mhdr = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); mhdr:SetPoint("TOPLEFT", 18, -306); mhdr:SetText("MODIFIERS")
+  local mlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); mlab:SetPoint("TOPLEFT", 18, -336); mlab:SetText("Mac symbol icons")
+  local modTog = makeToggle(bf,
+    function() local st = GB.db and GB.db.styleData; return st and st.keybindMods == "symbols" end,
+    function(v)
+      local st = GB.db and GB.db.styleData; if st then st.keybindMods = v and "symbols" or "default" end
+      if GB.Skin then GB.Skin:RefreshHotkeyText() end
+    end)
+  modTog:SetPoint("TOPRIGHT", -18, -334)
+
+  local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
+  hint:SetPoint("TOPLEFT", 18, -366); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Color/size/font/position need Custom keybind on. Mac symbol icons work on their own — ⌘/⇧/⌥/⌃ replace m-/s-/… (macOS binds).")
+  bf:SetHeight(404)
+  s.refresh = function()
+    local h = hotkeyData()
+    local on = h ~= nil
+    en:refresh(); cs:refresh(); sizeRow:refresh(); oxRow:refresh(); oyRow:refresh()
+    fontBtn:refresh(); modTog:refresh()
+    -- Grey the styling controls when the override is off (Mac symbols stay live).
+    cs.swatch:EnableMouse(on); cs.swatch:SetAlpha(on and 1 or 0.35)
+    sizeRow:setEnabled(on); oxRow:setEnabled(on); oyRow:setEnabled(on)
+    fontBtn:SetEnabled(on)
+    for _, e in ipairs(zoneBtns) do e.b:SetActive(on and (h.zone or "extension") == e.z); e.b:SetEnabled(on) end
+  end
+end
+
+-- Cast & channel — our pill-shaped fill (replaces Blizzard's square drain) and
+-- the cancel/interrupt burst. All db-level (not per-style); the engine reads
+-- these live on the NEXT cast (styleCast / CastFillOnUpdate / PlayEndBurstRed in
+-- Skin.lua), so the setters are plain db writes — no ReapplyDecor, and the
+-- preview pane doesn't animate casts. Test by casting / cancelling a spell.
+local function buildCastSection(bf, s)
+  local rows = {}
+  -- FILL (cast fills up, channel drains).
+  local flab = newText(bf, FONT.body, 12, TEXT, "LEFT"); flab:SetPoint("TOPLEFT", 18, -14); flab:SetText("Fill color")
+  local fcs = colorSwatch(bf,
+    function() return GB.db and GB.db.castFillColor end,
+    function(c) if GB.db then GB.db.castFillColor = c end end)
+  fcs.swatch:SetPoint("TOPRIGHT", -18, -12)
+  rows[#rows + 1] = fcs
+
+  local opRow = sliderRow(bf, -46, "Opacity", 0, 1, 0.05,
+    function() return (GB.db and GB.db.castFillAlpha) or 0.55 end,
+    function(v) if GB.db then GB.db.castFillAlpha = v end end,
+    function(v) return math.floor(v * 100 + 0.5) .. "%" end)
+  rows[#rows + 1] = opRow
+
+  local dirR = dirRow(bf, -96, "Direction",
+    function() return (GB.db and GB.db.castDrainDir) or "up" end,
+    function(d) if GB.db then GB.db.castDrainDir = d end end)
+  rows[#rows + 1] = dirR
+
+  -- INTERRUPT / cancel = Blizzard's completion burst replayed in this colour.
+  local ihdr = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); ihdr:SetPoint("TOPLEFT", 18, -136); ihdr:SetText("INTERRUPT")
+  local iclab = newText(bf, FONT.body, 12, TEXT, "LEFT"); iclab:SetPoint("TOPLEFT", 18, -166); iclab:SetText("Color")
+  local ics = colorSwatch(bf,
+    function() return GB.db and GB.db.castInterruptColor end,
+    function(c) if GB.db then GB.db.castInterruptColor = c end end)
+  ics.swatch:SetPoint("TOPRIGHT", -18, -164)
+  rows[#rows + 1] = ics
+
+  local spRow = sliderRow(bf, -198, "Speed", 0.2, 2, 0.1,
+    function() return (GB.db and GB.db.castInterruptSpeed) or 0.6 end,
+    function(v) if GB.db then GB.db.castInterruptSpeed = v end end,
+    function(v) return string.format("%.1fx", v) end)
+  rows[#rows + 1] = spRow
+
+  local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
+  hint:SetPoint("TOPLEFT", 18, -238); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Changes apply on your next cast. Speed <1 slows the interrupt burst.")
+  bf:SetHeight(268)
+  s.refresh = function() for _, r in ipairs(rows) do r:refresh() end end
+end
+
+-- Proc glow — THE differentiator: the shaped halo Blizzard's procs/assist drive.
+-- Colour (proc + assist), Brightness (resting pulse level), Size (bloom past the
+-- rim) and Pulse speed, all live via GB.Glows. Opening the section flips the
+-- preview to its Proc chip so you can tune the gold glow without being in combat.
+local function buildGlowSection(bf, s)
+  local rows = {}
+  local function showGlow() C:SetPreviewState("proc") end   -- reflect the change in the preview
+
+  local pl = newText(bf, FONT.body, 12, TEXT, "LEFT"); pl:SetPoint("TOPLEFT", 18, -14); pl:SetText("Proc color")
+  local pcs = colorSwatch(bf,
+    function() return GB.db and GB.db.glowColor end,
+    function(c) if GB.Glows then GB.Glows:SetColor("proc", c) end; showGlow() end)
+  pcs.swatch:SetPoint("TOPRIGHT", -18, -12); rows[#rows + 1] = pcs
+
+  local al = newText(bf, FONT.body, 12, TEXT, "LEFT"); al:SetPoint("TOPLEFT", 18, -42); al:SetText("Assist color")
+  local acs = colorSwatch(bf,
+    function() return GB.db and GB.db.glowAssistColor end,
+    function(c) if GB.Glows then GB.Glows:SetColor("assist", c) end end)
+  acs.swatch:SetPoint("TOPRIGHT", -18, -40); rows[#rows + 1] = acs
+
+  local intRow = sliderRow(bf, -74, "Brightness", 0.2, 1, 0.05,
+    function() return (GB.db and GB.db.glowIntensity) or 0.9 end,
+    function(v) if GB.Glows then GB.Glows:SetIntensity(v) end; showGlow() end,
+    function(v) return math.floor(v * 100 + 0.5) .. "%" end)
+  rows[#rows + 1] = intRow
+
+  local sizeRow = sliderRow(bf, -118, "Size", 1, 2, 0.05,
+    function() return (GB.db and GB.db.glowScale) or (128 / 80) end,
+    function(v) if GB.Glows then GB.Glows:SetSize(v) end; showGlow() end,
+    function(v) return math.floor(v * 100 + 0.5) .. "%" end)
+  rows[#rows + 1] = sizeRow
+
+  local spRow = sliderRow(bf, -162, "Pulse speed", 0.3, 2, 0.1,
+    function() return (GB.db and GB.db.glowPulseSpeed) or 1 end,
+    function(v) if GB.Glows then GB.Glows:SetPulseSpeed(v) end end,
+    function(v) return string.format("%.1fx", v) end)
+  rows[#rows + 1] = spRow
+
+  local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
+  hint:SetPoint("TOPLEFT", 18, -202); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Preview is static (Proc chip); in-game the halo pulses up to full. Assist color = the blue assisted-rotation glow.")
+  bf:SetHeight(230)
+  s.refresh = function()
+    for _, r in ipairs(rows) do r:refresh() end
+    C:SetPreviewState("proc")   -- show the glow while this section is open
   end
 end
 
@@ -647,7 +1029,17 @@ function C:RefreshPreview()
     previewBorder:ClearAllPoints()
     previewBorder:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -t, t)
     previewBorder:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", t, -t)
-    previewBorder:SetVertexColor(col[1], col[2], col[3], bd.alpha or 1)
+    local a = bd.alpha or 1
+    if bd.color2 then
+      local c2 = bd.color2
+      local orient = (bd.gradDir == "left" or bd.gradDir == "right") and "HORIZONTAL" or "VERTICAL"
+      local g1 = CreateColor(col[1], col[2], col[3], (col[4] or 1) * a)
+      local g2 = CreateColor(c2[1], c2[2], c2[3], (c2[4] or 1) * a)
+      if bd.gradDir == "down" or bd.gradDir == "left" then previewBorder:SetGradient(orient, g2, g1)
+      else previewBorder:SetGradient(orient, g1, g2) end
+    else
+      previewBorder:SetVertexColor(col[1], col[2], col[3], (col[4] or 1) * a)
+    end
     if previewBorderMask then previewBorder:RemoveMaskTexture(previewBorderMask) end
     previewBorderMask = previewFrame:CreateMaskTexture()
     previewBorderMask:SetTexture(GB.Skin:AspectMask(pw + 2 * t, ph + 2 * t) or shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
@@ -670,7 +1062,22 @@ end
 
 function C:SetPreviewState(st)
   previewState = st or "idle"
-  if previewGlow then previewGlow:SetShown(previewState == "proc") end
+  if previewGlow then
+    previewGlow:SetShown(previewState == "proc")
+    if previewState == "proc" and previewIcon then
+      -- Mirror the engine: proc tint, bloom scaled by glowScale, alpha = the
+      -- resting (pulse-min) level so the Brightness slider shows here (in-game it
+      -- pulses up to full).
+      local c = (GB.db and GB.db.glowColor) or { 1, 0.85, 0.35 }
+      local sc = (GB.db and GB.db.glowScale) or (128 / 80)
+      local ox, oy = previewIcon:GetWidth() * (sc - 1) / 2, previewIcon:GetHeight() * (sc - 1) / 2
+      previewGlow:ClearAllPoints()
+      previewGlow:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -ox, oy)
+      previewGlow:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", ox, -oy)
+      previewGlow:SetVertexColor(c[1], c[2], c[3])
+      previewGlow:SetAlpha(math.max(0.35, (GB.db and GB.db.glowIntensity) or 0.9))
+    end
+  end
   if previewCD then
     if previewState == "cooldown" then previewCD:Show(); previewCD:SetCooldown(GetTime(), 12) else previewCD:Hide() end
   end
@@ -794,8 +1201,9 @@ local function BuildPanel()
   makeSection("Shape & icon", buildShapeSection)
   makeSection("Construction", buildConstructionSection)
   makeSection("Decoration layers", buildDecorSection)
-  makeSection("Text", stubBody)
-  makeSection("Proc glow", stubBody)
+  makeSection("Text", buildTextSection)
+  makeSection("Proc glow", buildGlowSection)
+  makeSection("Cast & channel", buildCastSection)
   makeSection("State highlights", buildStateSection)
   makeSection("Cooldown & availability", stubBody)
   makeSection("Bar layout", stubBody)

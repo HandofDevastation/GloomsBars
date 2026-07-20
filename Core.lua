@@ -142,6 +142,32 @@ GB.FONT = {
   label = FONT_DIR .. "GeneralSans-Semibold.ttf",
 }
 
+-- Our bundled fonts exposed to LibSharedMedia under friendly names, so they show
+-- in GB's own font picker alongside every other addon's LSM fonts (and become
+-- usable by other LSM-aware addons — same idea as StoneTweaks). Name → path.
+GB.BUNDLED_FONTS = {
+  ["Khand SemiBold"]       = FONT_DIR .. "Khand-SemiBold.ttf",
+  ["Khand Medium"]         = FONT_DIR .. "Khand-Medium.ttf",
+  ["GeneralSans"]          = FONT_DIR .. "GeneralSans-Regular.ttf",
+  ["GeneralSans Medium"]   = FONT_DIR .. "GeneralSans-Medium.ttf",
+  ["GeneralSans SemiBold"] = FONT_DIR .. "GeneralSans-Semibold.ttf",
+}
+
+-- LibSharedMedia-3.0 is a LibStub singleton shared across all addons; BugSack,
+-- ArcUI, EnhanceQoL, ElvUI etc. all embed it, so it's effectively always loaded.
+-- We consume it if present (nil if truly absent — the picker then falls back to
+-- the bundled fonts). We do NOT embed our own copy (yet); see docs backlog.
+function GB.GetLSM()
+  return LibStub and LibStub("LibSharedMedia-3.0", true) or nil
+end
+-- Register our bundled fonts into LSM (call at login, when all addons are up).
+-- Register returns false if the name is already taken by another addon — harmless.
+local function RegisterMedia()
+  local lsm = GB.GetLSM()
+  if not lsm then return end
+  for name, path in pairs(GB.BUNDLED_FONTS) do lsm:Register("font", name, path) end
+end
+
 function GB:Version()
   local v = C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata(ADDON_NAME, "Version")
   if type(v) ~= "string" or v == "" or v:find("@") then return "dev" end
@@ -215,6 +241,12 @@ local DB_DEFAULTS = {
   castDrainDir = "up",                -- "up" | "down" | "left" | "right" (edge the fill grows from)
   castInterruptColor = { 1, 0.25, 0.25 },   -- interrupt/cancel burst tint (Blizzard's completion burst, replayed red)
   castInterruptSpeed = 0.6,                 -- cancel-burst speed vs Blizzard's default (<1 = slower)
+  -- Proc glow (Glows.lua) — the shaped halo; controls to fight "hard to see".
+  glowColor = { 1, 0.85, 0.35 },      -- standard proc tint (gold)
+  glowAssistColor = { 0.4, 0.75, 1 }, -- assisted-highlight tint (blue)
+  glowIntensity = 0.9,                -- PEAK glow alpha (Brightness); the pulse always dips below it
+  glowScale = 128 / 80,               -- halo size × icon (matches Glows.GLOW_SCALE; wide bloom past the rim)
+  glowPulseSpeed = 1,                 -- pulse speed multiplier (higher = faster)
 }
 
 local loader = CreateFrame("Frame")
@@ -242,8 +274,12 @@ loader:SetScript("OnEvent", function(_, event, arg1)
     -- (the pill); keep all-round and all-sharp (square) as they are.
     local pat, r = tostring(GB.db.shape):match("^corner%-(%d%d%d%d)%-r(%d)$")
     if pat and pat ~= "1111" and pat ~= "0000" then GB.db.shape = "corner-1111-r" .. r end
+    -- Proc-glow art rebuilt with a WIDER bloom (2026-07-19): its natural size
+    -- changed, so reset the saved glow Size ONCE to the new default (re-tunable).
+    if not GB.db.glowWideBloom then GB.db.glowScale = 128 / 80; GB.db.glowWideBloom = true end
   elseif event == "PLAYER_LOGIN" then
     PreloadFonts()
+    RegisterMedia()
   end
 end)
 
@@ -683,6 +719,28 @@ local function ArmHunt()
   msg("hunt ARMED — now cancel a cast (start casting, then move/jump). The red element will be named.")
 end
 
+-- /gb hkinfo — dump the RAW keybind text on each button next to its binding key,
+-- so we can map modifier abbreviations (m-/s-/c-/a-) → display exactly, incl. how
+-- STACKED modifiers concatenate (e.g. Cmd+Shift). Read-only diagnostic.
+local function HotkeyInfo()
+  local RI = _G.RANGE_INDICATOR
+  msg("keybind dump — 'display text' | binding key:")
+  local seen, n = {}, 0
+  for _, bar in ipairs(GB.BARS) do
+    for i = 1, GB.BUTTONS_PER_BAR do
+      local btn = _G[bar.buttonPrefix .. i]
+      local hk = btn and btn.HotKey
+      local disp = hk and hk:GetText()
+      if disp and disp ~= "" and disp ~= RI then
+        local key = btn.bindingAction and GetBindingKey(btn.bindingAction)
+        local line = ("  '%s'  |  %s"):format(disp, key or "?")
+        if not seen[line] then seen[line] = true; n = n + 1; print(line) end
+      end
+    end
+  end
+  if n == 0 then msg("no keybind text found (are keybinds shown on your bars?).") end
+end
+
 -- ---------------------------------------------------------------------------
 -- /gb slash router
 -- ---------------------------------------------------------------------------
@@ -716,6 +774,8 @@ SlashCmdList.GLOOMSBARS = function(input)
     GB.Skin:SetSweepOvershoot(tonumber(arg))
   elseif cmd == "fontinfo" then
     FontInfo()
+  elseif cmd == "hkinfo" then
+    HotkeyInfo()
   elseif cmd == "glowinfo" then
     GlowInfo()
   elseif cmd == "shape" then
