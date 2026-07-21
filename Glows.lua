@@ -336,6 +336,10 @@ function Glows:SetEnabled(on)
         btn.gbHoverHooked = true
         btn:HookScript("OnEnter", function() if Glows.enabled then SetSource(btn, "hover", true) end end)
         btn:HookScript("OnLeave", function() if Glows.enabled then SetSource(btn, "hover", nil) end end)
+        -- Flash (auto-attack / auto-shot active): StartFlash/StopFlash toggle the
+        -- flashing STATE (not each blink), so drive the shaped flash glow off them.
+        if btn.StartFlash then hooksecurefunc(btn, "StartFlash", function(b) if Glows.enabled then SetSource(b, "flash", true) end end) end
+        if btn.StopFlash then hooksecurefunc(btn, "StopFlash", function(b) if Glows.enabled then SetSource(b, "flash", nil) end end) end
       end
       if ActionButtonSpellAlertManager and select(1, ActionButtonSpellAlertManager:HasAlert(btn)) then
         Silence(BlizzAlertFor(btn))
@@ -349,6 +353,7 @@ function Glows:SetEnabled(on)
         SetSource(btn, "assist", hf:IsShown() and true or nil)
       end
       if btn.GetChecked then SetSource(btn, "selected", btn:GetChecked() and true or nil) end
+      if btn.IsFlashing then SetSource(btn, "flash", btn:IsFlashing() == 1 and true or nil) end
     end)
   else
     for frame in pairs(silenced) do frame:SetAlpha(1) end

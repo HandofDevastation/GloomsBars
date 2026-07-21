@@ -1448,7 +1448,7 @@ local function ApplyButton(btn)
     end
     if btn.Flash then
       btn.Flash:SetTexture(ring)
-      btn.Flash:SetVertexColor(unpack(stateColor("flash"))); btn.Flash:SetAlpha(stateIntensity())
+      btn.Flash:SetVertexColor(unpack(stateColor("flash"))); btn.Flash:SetAlpha(sa)   -- hand shape → glow drives it
       fit(btn.Flash)
     end
     rec.stateArt = true
