@@ -315,11 +315,17 @@ local panel, bodyContainer
 local sections = {}
 local previewFrame, previewIcon, previewMask, previewGlow, previewRing, previewCD
 local previewBorder, previewBorderMask, previewCaption
+local previewOuter, previewInner          -- multi-part shaped glow (hand shapes; mirrors the bars)
 local previewFlashFrame, previewFlash, previewFlashAnim   -- finish-flash preview
 local previewPlates = {}                 -- pooled gradient-plate textures (created lazily)
 local previewPlateFresh, previewRetryPending
 local previewExtH, previewExtT, previewExtB = 0, 0, 0   -- live extension px (magnitude + top/bottom split)
 local previewChips, previewState = {}, "idle"
+-- Live pulse for the multi-part preview glow: mirrors the bars' pulse driver so the
+-- Pulse-speed slider is visible on the pulsing chips (proc / flash). previewPulsePeak
+-- = the trigger opacity to breathe about; the OnUpdate on previewFrame drives alpha.
+local previewPulsing, previewPulsePeak, previewPulsePhase = false, 0.9, 0
+local PREVIEW_PULSE_DEPTH = 0.5
 
 -- --------------------------------------------------------------------------
 -- Font picker — a dropdown whose label is drawn IN the current font; clicking
@@ -1316,11 +1322,19 @@ function C:RefreshPreview()
   previewIcon:SetTexCoord(GB.Skin:TexCoordFor(previewIcon:GetWidth(), previewIcon:GetHeight()))
 
   -- Overlay art + span follow the construction shape/aspect, like the bars.
-  previewGlow:SetTexture(GB.Skin:GlowArt() or shp.glow)   -- continuous-OFF picks the mixed-corner glow, etc.
+  previewGlow:SetTexture(GB.Skin:GlowArt() or shp.glow)   -- SDF-fallback proc bloom (non-hand shapes)
   previewRing:SetTexture(GB.Skin:AspectRing(pw, ph + maskExt) or shp.ring)
   anchorPreviewOverlay(previewRing, GB.Skin:StateWidthRatio())   -- spread tracks the Glow width control
   anchorPreviewOverlay(previewCD, 0, 0)                    -- swipe covers the whole pill
-  if previewCD.SetSwipeTexture then previewCD:SetSwipeTexture(GB.Skin:AspectSwipe(pw, ph + maskExt) or shp.swipe) end
+  -- Multi-part glow (hand shapes): mirror the bars' outer (under icon, grown by the
+  -- border) / inner (over plate, +2px) art + per-axis anchor; SetPreviewState tints/shows.
+  if hk then
+    local bg = (style.border and style.border.enabled and (style.border.thickness or 0) > 0) and style.border.thickness or 0
+    previewOuter:SetTexture(GB:HandAsset(hk, "outer")); handAnchor(previewOuter, bg)
+    previewInner:SetTexture(GB:HandAsset(hk, "inner")); handAnchor(previewInner, 2)
+  end
+  -- Cooldown sweep traces the hand silhouette (its -swipe) on hand shapes, else the SDF swipe.
+  if previewCD.SetSwipeTexture then previewCD:SetSwipeTexture((hk and GB:HandAsset(hk, "swipe")) or GB.Skin:AspectSwipe(pw, ph + maskExt) or shp.swipe) end
 
   -- Gradient plate layers — mirror Skin.ApplyDecor's directional renderer. Each
   -- layer is a shape-masked (continuous) or square (off) fade; when an extension
@@ -1469,24 +1483,48 @@ function C:PlayPreviewFlash()
   previewFlashAnim:Stop(); previewFlashAnim:Play()
 end
 
+-- Multi-part preview glow: for a hand shape, the Proc/Hover/Selected/Flash chips
+-- show the real outer+inner glow tinted by that trigger's colour / opacity / layers
+-- (art + anchor set in RefreshPreview). Respects `enabled` (off → blank chip).
+local GLOW_STATES = { proc = true, hover = true, selected = true, flash = true }
+local PREVIEW_PULSING = { proc = true, flash = true }   -- which chips breathe (mirror the bars)
+local function applyPreviewGlow(key)
+  local t = (GB.db and GB.db.triggers and GB.db.triggers[key]) or {}
+  if t.enabled == false then previewOuter:Hide(); previewInner:Hide(); previewPulsing = false; return end
+  local c = t.color or { 1, 0.85, 0.35 }
+  local a = math.max(0.35, t.opacity or 0.9)
+  local layers = t.layers or "both"
+  previewOuter:SetVertexColor(c[1], c[2], c[3]); previewOuter:SetAlpha(a)
+  previewInner:SetVertexColor(c[1], c[2], c[3]); previewInner:SetAlpha(a)
+  previewOuter:SetShown(layers ~= "inner")
+  previewInner:SetShown(layers ~= "outer")
+  previewPulsing, previewPulsePeak = PREVIEW_PULSING[key] or false, a   -- the OnUpdate breathes it
+end
+
 function C:SetPreviewState(st)
   previewState = st or "idle"
+  local hk = GB.db and GB.db.handShape
+  local glowState = GLOW_STATES[previewState]
+  -- Hand shape (the norm): drive the multi-part glow chips; hide the SDF bloom/ring.
+  if previewOuter and previewInner then
+    if hk and glowState then applyPreviewGlow(previewState)
+    else previewOuter:Hide(); previewInner:Hide(); previewPulsing = false end
+  end
+  -- SDF fallback (non-hand): the single soft bloom (proc) + ring (states).
   if previewGlow then
-    previewGlow:SetShown(previewState == "proc")
-    if previewState == "proc" and previewIcon then
-      -- Mirror the engine: the Proc trigger's tint/opacity, bloom scaled by glowScale.
+    previewGlow:SetShown((not hk) and previewState == "proc")
+    if (not hk) and previewState == "proc" and previewIcon then
       local pt = (GB.db and GB.db.triggers and GB.db.triggers.proc) or {}
       local c = pt.color or { 1, 0.85, 0.35 }
       local sc = (GB.db and GB.db.glowScale) or (128 / 80)
-      anchorPreviewOverlay(previewGlow, (sc - 1) / 2)   -- bloom spans the whole construction, like the bars
+      anchorPreviewOverlay(previewGlow, (sc - 1) / 2)
       previewGlow:SetVertexColor(c[1], c[2], c[3])
       previewGlow:SetAlpha(math.max(0.35, pt.opacity or 0.9))
     end
   end
   if previewCD then
     if previewState == "cooldown" then
-      -- Reflect the sweep tint / opacity / edge+colour / bling+colour via the same
-      -- engine path the bars use, so the preview stays in sync.
+      -- Reflect the sweep tint / opacity via the same engine path the bars use.
       if GB.Skin and GB.Skin.StyleCooldown then GB.Skin:StyleCooldown(previewCD) end
       previewCD:Show(); previewCD:SetCooldown(GetTime(), 12)
     else previewCD:Hide() end
@@ -1494,8 +1532,8 @@ function C:SetPreviewState(st)
   if previewIcon then previewIcon:SetDesaturated(previewState == "cooldown") end
   local isRing = RING_TINT[previewState] ~= nil
   if previewRing then
-    previewRing:SetShown(isRing)
-    if isRing then
+    previewRing:SetShown((not hk) and isRing)
+    if (not hk) and isRing then
       local rt = GB.db and GB.db.triggers and GB.db.triggers[previewState]
       local c = (rt and rt.color) or RING_TINT[previewState]
       previewRing:SetVertexColor(c[1], c[2], c[3])
@@ -1529,8 +1567,23 @@ local function buildPreviewPane(parent)
   local frame = CreateFrame("Frame", nil, pane); frame:SetSize(104, 104)
   frame:SetPoint("CENTER", pane, "TOP", 0, PREVIEW_CENTER_Y)
   previewFrame = frame
+  -- Live pulse for the pulsing chips (proc/flash): breathe the multi-part glow's
+  -- alpha about its peak at the current Pulse-speed, mirroring Glows.lua's driver, so
+  -- the slider has a visible effect. Runs only while the window (this frame) is shown.
+  frame:SetScript("OnUpdate", function(_, dt)
+    if not previewPulsing then return end
+    previewPulsePhase = previewPulsePhase + dt * math.max(0.1, (GB.db and GB.db.glowPulseSpeed) or 1)
+    local a = previewPulsePeak * (PREVIEW_PULSE_DEPTH + (1 - PREVIEW_PULSE_DEPTH) * (0.5 + 0.5 * math.cos(previewPulsePhase * 5.7)))
+    if previewOuter:IsShown() then previewOuter:SetAlpha(a) end
+    if previewInner:IsShown() then previewInner:SetAlpha(a) end
+  end)
   previewGlow = frame:CreateTexture(nil, "BACKGROUND"); previewGlow:SetPoint("TOPLEFT", -16, 16); previewGlow:SetPoint("BOTTOMRIGHT", 16, -16)
   previewGlow:SetBlendMode("ADD"); previewGlow:SetVertexColor(1, 0.77, 0.30); previewGlow:Hide()
+  -- Multi-part shaped glow (hand shapes): outer bloom UNDER the icon, inner rim OVER
+  -- the plate — mirrors the bars (Glows.lua) so the Proc/Hover/Selected/Flash chips
+  -- show the real glow, honouring each trigger's colour / opacity / layers.
+  previewOuter = frame:CreateTexture(nil, "BACKGROUND", nil, -1); previewOuter:SetBlendMode("BLEND"); previewOuter:Hide()
+  previewInner = frame:CreateTexture(nil, "OVERLAY"); previewInner:SetBlendMode("BLEND"); previewInner:Hide()
   previewIcon = frame:CreateTexture(nil, "ARTWORK"); previewIcon:SetAllPoints()
   previewCD = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate"); previewCD:SetAllPoints(previewIcon)
   previewCD:SetDrawEdge(false); previewCD:SetDrawBling(false); previewCD:Hide()
