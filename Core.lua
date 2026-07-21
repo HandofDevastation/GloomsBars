@@ -907,17 +907,12 @@ SlashCmdList.GLOOMSBARS = function(input)
       msg(("icon size scale is %.2f× (usage: /gb size 1.25 — × the Edit-Mode button size)."):format(GB.db and GB.db.sizeScale or 1))
     end
   elseif cmd == "handglow" then
-    -- Dev glow preview (force-on), kept for NEXT #1 (wiring the glow to triggers).
-    local key = (arg or ""):lower()
-    if key == "" or key == "off" then
-      if GB.Glows then GB.Glows:HandPreview(nil) end
-      msg("hand-glow preview OFF.")
-    elseif GB.HAND_SHAPES[key] then
-      if GB.Glows then GB.Glows:HandPreview(key) end
-      msg(("hand-glow '%s' ON (glow only; use handshape to set the persistent icon shape)."):format(key))
-    else
-      msg("unknown key. See docs/ART-SPEC.md for the 21 keys.")
-    end
+    -- Dev: force the multi-part glow ON to study the finished proc look out of
+    -- combat (real trigger = procs). Uses the CURRENT shape. /gb handglow [off].
+    local on = (arg or ""):lower() ~= "off"
+    if GB.Glows then GB.Glows:HandPreview(on) end
+    msg(("multi-part glow force-preview %s (shape '%s'; real trigger = procs)."):format(
+      on and "|cff59ff59ON|r" or "|cffff5555OFF|r", tostring(GB.db and GB.db.handShape)))
   elseif cmd == "glowstyle" then
     local key = (arg or ""):upper()
     if key == "" or key == "OFF" or key == "NONE" then

@@ -961,9 +961,10 @@ local function buildCastSection(bf, s)
 end
 
 -- Proc glow — THE differentiator: the shaped halo Blizzard's procs/assist drive.
--- Colour (proc + assist), Brightness (resting pulse level), Size (bloom past the
--- rim) and Pulse speed, all live via GB.Glows. Opening the section flips the
--- preview to its Proc chip so you can tune the gold glow without being in combat.
+-- Colour (proc + assist), Brightness (peak glow alpha) and Pulse speed, all live
+-- via GB.Glows. (Size was retired with the shaped-glow rebuild — the glow size is
+-- baked into each silhouette's art + the border grow.) Opening the section flips
+-- the preview to its Proc chip so you can tune the gold glow without being in combat.
 local function buildGlowSection(bf, s)
   local rows = {}
   local function showGlow() C:SetPreviewState("proc") end   -- reflect the change in the preview
@@ -986,22 +987,16 @@ local function buildGlowSection(bf, s)
     function(v) return math.floor(v * 100 + 0.5) .. "%" end)
   rows[#rows + 1] = intRow
 
-  local sizeRow = sliderRow(bf, -118, "Size", 1, 2, 0.05,
-    function() return (GB.db and GB.db.glowScale) or (128 / 80) end,
-    function(v) if GB.Glows then GB.Glows:SetSize(v) end; showGlow() end,
-    function(v) return math.floor(v * 100 + 0.5) .. "%" end)
-  rows[#rows + 1] = sizeRow
-
-  local spRow = sliderRow(bf, -162, "Pulse speed", 0.3, 2, 0.1,
+  local spRow = sliderRow(bf, -118, "Pulse speed", 0.3, 2, 0.1,
     function() return (GB.db and GB.db.glowPulseSpeed) or 1 end,
     function(v) if GB.Glows then GB.Glows:SetPulseSpeed(v) end end,
     function(v) return string.format("%.1fx", v) end)
   rows[#rows + 1] = spRow
 
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -202); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("Preview is static (Proc chip); in-game the halo pulses up to full. Assist color = the blue assisted-rotation glow.")
-  bf:SetHeight(230)
+  hint:SetPoint("TOPLEFT", 18, -158); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("The preview Proc chip is static; in-game the glow pulses. Assist color = the blue assisted-rotation glow.")
+  bf:SetHeight(190)
   s.refresh = function()
     for _, r in ipairs(rows) do r:refresh() end
     C:SetPreviewState("proc")   -- show the glow while this section is open

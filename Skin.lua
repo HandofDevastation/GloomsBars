@@ -270,6 +270,34 @@ function Skin:RecolorBorders(color)
   end)
 end
 
+-- Apply a border's styled colour to its texture: two-tone → SetGradient (a colour
+-- transition across the rim), one colour → flat SetVertexColor. Per-colour alpha ×
+-- master Opacity. Shared by ApplyDecor and RecolorBorder so a glow can override the
+-- rim then restore the exact styled look. `bd` = styleData.border.
+local function applyBorderColor(tex, bd)
+  local col = bd.color or { 0, 0, 0 }
+  local a = bd.alpha or 1
+  if bd.color2 then
+    local c2, orient = bd.color2, (bd.gradDir == "left" or bd.gradDir == "right") and "HORIZONTAL" or "VERTICAL"
+    local g1 = CreateColor(col[1], col[2], col[3], (col[4] or 1) * a)
+    local g2 = CreateColor(c2[1], c2[2], c2[3], (c2[4] or 1) * a)
+    if bd.gradDir == "down" or bd.gradDir == "left" then tex:SetGradient(orient, g2, g1)
+    else tex:SetGradient(orient, g1, g2) end
+  else
+    tex:SetVertexColor(col[1], col[2], col[3], (col[4] or 1) * a)
+  end
+end
+
+-- Per-button border recolour for the multi-part glow: `color` overrides ONE
+-- button's rim to the glow tint while it's active; nil restores the styled
+-- colour/gradient. Only a VISIBLE border is touched (no border → no-op).
+function Skin:RecolorBorder(btn, color)
+  local rec = records[btn]
+  if not (rec and rec.border and rec.border.tex and rec.border.tex:IsShown()) then return end
+  if color then rec.border.tex:SetVertexColor(color[1], color[2], color[3])
+  else applyBorderColor(rec.border.tex, GB:GetStyle().border or {}) end
+end
+
 -- Skin:SetHandShape is defined lower, next to SetIconSize, so it can share the
 -- full icon-geometry refresh (the size/aspect helpers live there). Activating a
 -- hand silhouette sources its base for the icon, gradient plate AND border via the
@@ -710,25 +738,9 @@ local function ApplyDecor(btn)
       rec.border = { tex = tex }
     end
     local b, t = rec.border, bd.thickness
-    local col = bd.color or { 0, 0, 0 }
-    local a = bd.alpha or 1
     local _, isub = icon:GetDrawLayer()
     b.tex:SetDrawLayer("BACKGROUND", math.max(-8, (isub or 0) - 1))   -- just behind the icon
-    -- Two-tone border: SetGradient runs a colour across the shape and only the
-    -- rim shows → the frame transitions colour → color2. `gradDir` picks the axis
-    -- (up/down = vertical, left/right = horizontal). One colour = plain fill.
-    -- Per-colour alpha (col[4], from the alpha-enabled picker) × the master
-    -- Opacity (a) → each stop can be independently transparent (e.g. a gradient
-    -- that fades to nothing), with Opacity still dimming the whole border.
-    if bd.color2 then
-      local c2, orient = bd.color2, (bd.gradDir == "left" or bd.gradDir == "right") and "HORIZONTAL" or "VERTICAL"
-      local g1 = CreateColor(col[1], col[2], col[3], (col[4] or 1) * a)
-      local g2 = CreateColor(c2[1], c2[2], c2[3], (c2[4] or 1) * a)
-      if bd.gradDir == "down" or bd.gradDir == "left" then b.tex:SetGradient(orient, g2, g1)
-      else b.tex:SetGradient(orient, g1, g2) end
-    else
-      b.tex:SetVertexColor(col[1], col[2], col[3], (col[4] or 1) * a)
-    end
+    applyBorderColor(b.tex, bd)   -- two-tone gradient or flat colour (shared with the glow recolour)
     b.tex:ClearAllPoints()
     b.tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -t, t + mExtT)      -- frames the masked region
     b.tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", t, -(mExtB + t))
