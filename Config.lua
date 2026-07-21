@@ -222,6 +222,78 @@ local function dirRow(parent, yTop, labelText, get, set)
   return row
 end
 
+-- A thin custom scrollbar for a ScrollFrame (family look; no Blizzard widget) with
+-- the ORANGE section-caret thumb. Track + draggable thumb + click/drag-anywhere-on-
+-- the-track to jump (the same QOL the sliders got) + wheel over the bar. The thumb
+-- auto-sizes to the live scroll range via OnUpdate — which pauses while the parent
+-- is hidden, so it costs nothing when the window/flyout is closed. `place(sb)` lets
+-- the caller anchor + inset the bar. Returns the bar frame with :Sync() to force an
+-- immediate thumb refresh (for opening pre-scrolled). Reuse this for every scrollbar.
+local function makeScrollbar(parent, scroll, place)
+  local sb = CreateFrame("Frame", nil, parent)
+  place(sb); sb:SetWidth(4)
+  local track = sb:CreateTexture(nil, "BACKGROUND"); track:SetAllPoints(); track:SetColorTexture(1, 1, 1, 0.06)
+  local thumb = CreateFrame("Button", nil, sb); thumb:SetWidth(4); thumb:SetPoint("TOP", 0, 0)
+  local thumbTex = thumb:CreateTexture(nil, "ARTWORK"); thumbTex:SetAllPoints()
+  local ALPHA = 0.85
+  thumbTex:SetColorTexture(COLOR.orange.r, COLOR.orange.g, COLOR.orange.b, ALPHA)
+  thumb:SetScript("OnEnter", function() thumbTex:SetAlpha(1) end)
+  thumb:SetScript("OnLeave", function() thumbTex:SetAlpha(ALPHA) end)
+
+  local function syncThumb()
+    local range = scroll:GetVerticalScrollRange()
+    local trackH = sb:GetHeight()
+    if range <= 0.5 or trackH <= 0 then thumb:Hide(); return end
+    thumb:Show()
+    local visible = scroll:GetHeight()
+    local th = math.max(24, trackH * visible / (visible + range))
+    thumb:SetHeight(th)
+    local scrolled = math.min(range, math.max(0, scroll:GetVerticalScroll()))
+    thumb:ClearAllPoints(); thumb:SetPoint("TOP", sb, "TOP", 0, -(scrolled / range) * (trackH - th))
+  end
+  -- Map the cursor's Y within the track → scroll fraction (click-to-jump).
+  local function seek()
+    local range = scroll:GetVerticalScrollRange()
+    local top, trackH = sb:GetTop(), sb:GetHeight()
+    if range <= 0 or not top or trackH <= 0 then return end
+    local _, cy = GetCursorPosition(); cy = cy / sb:GetEffectiveScale()
+    scroll:SetVerticalScroll(math.max(0, math.min(1, (top - cy) / trackH)) * range)
+  end
+
+  sb:EnableMouse(true); sb:EnableMouseWheel(true)
+  sb:SetScript("OnMouseWheel", function(_, delta)
+    local range = scroll:GetVerticalScrollRange()
+    scroll:SetVerticalScroll(math.max(0, math.min(range, scroll:GetVerticalScroll() - delta * 42)))
+  end)
+  sb:SetScript("OnMouseDown", function(self) self._seeking = true; seek() end)
+  sb:SetScript("OnMouseUp", function(self) self._seeking = false end)
+  sb:SetScript("OnUpdate", function(self)
+    if self._seeking then
+      if IsMouseButtonDown("LeftButton") then seek() else self._seeking = false end
+    end
+    syncThumb()
+  end)
+
+  thumb:SetScript("OnMouseDown", function(self)
+    local _, cy = GetCursorPosition()
+    self.grabY, self.grabScroll, self.grabbing = cy, scroll:GetVerticalScroll(), true
+  end)
+  thumb:SetScript("OnMouseUp", function(self) self.grabbing = false end)
+  thumb:SetScript("OnUpdate", function(self)
+    if not self.grabbing then return end
+    if not IsMouseButtonDown("LeftButton") then self.grabbing = false; return end
+    local range = scroll:GetVerticalScrollRange()
+    local usable = sb:GetHeight() - self:GetHeight()
+    if usable <= 0 or range <= 0 then return end
+    local _, cy = GetCursorPosition()
+    local dy = (self.grabY - cy) / sb:GetEffectiveScale()
+    scroll:SetVerticalScroll(math.max(0, math.min(range, self.grabScroll + (dy / usable) * range)))
+  end)
+
+  sb.Sync = syncThumb
+  return sb
+end
+
 -- --------------------------------------------------------------------------
 -- Window shell + one-open accordion
 -- --------------------------------------------------------------------------
@@ -288,52 +360,13 @@ local function fontFlyoutFrame()
   local child = CreateFrame("Frame", nil, scroll); child:SetSize(190, 10)
   scroll:SetScrollChild(child)
 
-  -- Custom thin scrollbar on the right edge (family look — no Blizzard widget).
-  local sb = CreateFrame("Frame", nil, fly)
-  sb:SetPoint("TOPRIGHT", -5, -6); sb:SetPoint("BOTTOMRIGHT", -5, 6); sb:SetWidth(4)
-  local track = sb:CreateTexture(nil, "BACKGROUND"); track:SetAllPoints(); track:SetColorTexture(1, 1, 1, 0.06)
-  local thumb = CreateFrame("Button", nil, sb); thumb:SetWidth(4); thumb:SetHeight(24); thumb:SetPoint("TOP", 0, 0)
-  local thumbTex = thumb:CreateTexture(nil, "ARTWORK"); thumbTex:SetAllPoints()
-  thumbTex:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 0.55)
-
-  -- Geometry from fly's EXPLICIT height (set on open) — never read anchor-derived
-  -- heights before layout resolves. Returns viewport height, track height.
-  local function metrics() local h = fly:GetHeight(); return h - 10, h - 12 end
-  local function updateThumb()
-    local sh, trackH = metrics()
-    local ch = child:GetHeight()
-    local range = math.max(0, ch - sh)
-    if range <= 0.5 or ch <= 0 then thumb:Hide(); return end
-    thumb:Show()
-    local th = math.max(24, trackH * (sh / ch))
-    thumb:SetHeight(th)
-    local scrolled = math.min(range, math.max(0, scroll:GetVerticalScroll()))
-    thumb:ClearAllPoints(); thumb:SetPoint("TOP", sb, "TOP", 0, -(scrolled / range) * (trackH - th))
-  end
-  fly.updateThumb = updateThumb
-
+  -- Custom thin scrollbar (shared helper): orange thumb + click-to-jump + drag + wheel.
+  local sb = makeScrollbar(fly, scroll, function(b) b:SetPoint("TOPRIGHT", -5, -6); b:SetPoint("BOTTOMRIGHT", -5, 6) end)
+  fly.updateThumb = sb.Sync
+  -- Content wheel (over the rows) scrolls the list; the bar syncs via its OnUpdate.
   scroll:SetScript("OnMouseWheel", function(self, delta)
     local range = math.max(0, child:GetHeight() - self:GetHeight())
     self:SetVerticalScroll(math.max(0, math.min(range, self:GetVerticalScroll() - delta * 34)))
-    updateThumb()
-  end)
-
-  -- Drag the thumb to scroll.
-  thumb:SetScript("OnMouseDown", function(self)
-    local _, cy = GetCursorPosition()
-    self.grabY, self.grabScroll, self.grabbing = cy, scroll:GetVerticalScroll(), true
-  end)
-  thumb:SetScript("OnMouseUp", function(self) self.grabbing = false end)
-  thumb:SetScript("OnUpdate", function(self)
-    if not self.grabbing then return end
-    local _, cy = GetCursorPosition()
-    local sh, trackH = metrics()
-    local usable = trackH - self:GetHeight()
-    local range = math.max(0, child:GetHeight() - sh)
-    if usable <= 0 or range <= 0 then return end
-    local dy = (self.grabY - cy) / sb:GetEffectiveScale()
-    scroll:SetVerticalScroll(math.max(0, math.min(range, self.grabScroll + (dy / usable) * range)))
-    updateThumb()
   end)
 
   catcher:SetScript("OnClick", function() catcher:Hide() end)
@@ -470,184 +503,121 @@ local function stubBody(bf)
   bf:SetHeight(38)
 end
 
--- The visible icon's "natural" size = the Edit-Mode button size; the sizing
--- sliders start here until an explicit width/height override is set.
-local function naturalIconSize()
-  local b = _G["ActionButton1"]
-  local w = b and b.GetWidth and b:GetWidth()
-  return (w and w > 0) and math.floor(w + 0.5) or 45
-end
-
--- Shape & icon — shape preset + corner radius + icon size, wired to the real
--- engine. Corners are all-or-nothing: Circle (its own mode), Rounded (all four
--- corners rounded at the radius level), or Square (all sharp). Per-corner MIXING
--- was removed 2026-07-19 — a mixed pattern can't render cleanly on a non-square
--- icon (the pill covers rounded-non-square). Shape + radius apply live (fresh
--- masks); zoom + size are live re-anchors. The Corner radius row is shown ONLY
--- for Rounded (it's meaningless for Circle/Square), and the icon controls slide
--- up to fill its place so there's never a floating gap.
+-- Shape & icon — the 21 preset silhouettes as a grouped thumbnail grid, plus a
+-- uniform size scale, icon zoom, and crop-to-fill. The shaped-glow pivot (session
+-- 8, docs/SHAPE-CATALOG.md) retired free width/height + the SDF corner presets: the
+-- icon is ONE baked silhouette so it can't warp, and Size scales every icon
+-- together (aspect fixed by the shape). Picking a thumbnail calls Skin:SetHandShape
+-- (persists + applies live); Size → Skin:SetSizeScale. Each thumbnail draws the
+-- shape's own <key>-base.png (white on transparent), tinted grey / purple-selected.
 local function buildShapeSection(bf, s)
-  local RADIUS_LABELS = { [0] = "Subtle", [1] = "Soft", [2] = "Medium", [3] = "Round", [4] = "Bold", [5] = "Full" }
+  local CELL, GAP, COLS, ROWGAP = 46, 6, 7, 8
+  local thumbs = {}   -- shape key → thumbnail button (for the selection refresh)
 
-  local function parse()  -- db.shape → pattern {tl,tr,bl,br}, radius level, isCircle
-    local sh = GB.db and GB.db.shape
-    if sh == "circle" then return { 1, 1, 1, 1 }, 2, true end
-    local a, b, c, d, r = tostring(sh):match("^corner%-(%d)(%d)(%d)(%d)%-r(%d)$")
-    if a then return { tonumber(a), tonumber(b), tonumber(c), tonumber(d) }, tonumber(r), false end
-    return { 1, 1, 1, 1 }, 2, false
+  -- One shape thumbnail: the silhouette's own -base.png (white on transparent),
+  -- fit to the shape's aspect inside the cell, tinted grey (purple when selected,
+  -- brightening on hover). Clicking sets the persistent hand shape live.
+  local function makeThumb(key)
+    local info = GB.HAND_SHAPES[key] or GB.HAND_SHAPES.circle
+    local b = CreateFrame("Button", nil, bf)
+    b:SetSize(CELL, CELL)
+    local bg = b:CreateTexture(nil, "BACKGROUND"); bg:SetAllPoints(); bg:SetColorTexture(1, 1, 1, 0.04)
+    -- silhouette fit-to-aspect inside a padded box (portrait taller, landscape wider)
+    local box = CELL - 12
+    local w, h = box, box
+    if info.orient == "portrait" then w = box / info.aspect
+    elseif info.orient == "landscape" then h = box / info.aspect end
+    local tex = b:CreateTexture(nil, "ARTWORK")
+    tex:SetSize(w, h); tex:SetPoint("CENTER"); tex:SetTexture(GB:HandAsset(key, "base"))
+    -- purple selection edges (hidden until active)
+    local edges = {}
+    local function edge(p1, p2, vertical)
+      local e = b:CreateTexture(nil, "OVERLAY")
+      e:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 1)
+      e:SetPoint(p1); e:SetPoint(p2)
+      if vertical then e:SetWidth(2) else e:SetHeight(2) end
+      e:Hide(); edges[#edges + 1] = e
+    end
+    edge("TOPLEFT", "TOPRIGHT"); edge("BOTTOMLEFT", "BOTTOMRIGHT")
+    edge("TOPLEFT", "BOTTOMLEFT", true); edge("TOPRIGHT", "BOTTOMRIGHT", true)
+    function b:SetSelected(on)
+      self._sel = on and true or false
+      tex:SetVertexColor(on and COLOR.purple.r or 0.62, on and COLOR.purple.g or 0.64, on and COLOR.purple.b or 0.70)
+      bg:SetColorTexture(1, 1, 1, on and 0.10 or 0.04)
+      for _, e in ipairs(edges) do e:SetShown(on) end
+    end
+    b:SetScript("OnEnter", function(self)
+      if not self._sel then tex:SetVertexColor(0.88, 0.90, 0.95) end
+      GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+      GameTooltip:SetText(info.label, 1, 1, 1)
+      GameTooltip:Show()
+    end)
+    b:SetScript("OnLeave", function(self)
+      if not self._sel then tex:SetVertexColor(0.62, 0.64, 0.70) end
+      GameTooltip:Hide()
+    end)
+    b:SetScript("OnClick", function()
+      if GB.Skin then GB.Skin:SetHandShape(key) else GB.db.handShape = key end
+      s.refresh(); C:RefreshPreview()
+    end)
+    b:SetSelected(false)
+    return b
   end
-  local function isCircle() return (GB.db and GB.db.shape) == "circle" end
-  local function isHexagon() return (GB.db and GB.db.shape) == "hexagon" end
-  local function isSquare() local p, _, c = parse(); return (not c) and p[1] == 0 and p[2] == 0 and p[3] == 0 and p[4] == 0 end
-  -- Rounded = a corner-pattern shape with at least one round corner. Circle and
-  -- Hexagon are their own FIXED modes (parse() falls through to the all-round
-  -- default for them, so guard explicitly) — no corner radius applies.
-  local function isRounded()
-    if isCircle() or isHexagon() then return false end
-    local p, _, c = parse(); return (not c) and (p[1] == 1 or p[2] == 1 or p[3] == 1 or p[4] == 1)
+
+  -- Lay the groups out top-to-bottom: a muted group title, then a wrapping grid.
+  -- yCursor tracks the running vertical position (0 at the section top, negative down).
+  local yCursor = -12
+  local function groupTitle(text)
+    local t = newText(bf, FONT.label, 10, MUTE, "LEFT")
+    t:SetPoint("TOPLEFT", 18, yCursor); t:SetText(text:upper())
+    yCursor = yCursor - 16
   end
-  local function apply(pattern, level)
-    local nm = ("corner-%d%d%d%d-r%d"):format(pattern[1], pattern[2], pattern[3], pattern[4], level)
-    if GB.Skin then GB.Skin:SetShape(nm) else GB.db.shape = nm end
+  local function grid(keys)
+    for i, key in ipairs(keys) do
+      local col, rowIdx = (i - 1) % COLS, math.floor((i - 1) / COLS)
+      local th = makeThumb(key); thumbs[key] = th
+      th:SetPoint("TOPLEFT", 18 + col * (CELL + GAP), yCursor - rowIdx * (CELL + ROWGAP))
+    end
+    local rows = math.max(1, math.ceil(#keys / COLS))
+    yCursor = yCursor - rows * CELL - (rows - 1) * ROWGAP - 14
   end
+  for _, g in ipairs(GB.HAND_GROUPS) do groupTitle(g.title); grid(g.keys) end
 
-  -- Shape presets (four now — narrower to fit one row)
-  local lbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); lbl:SetPoint("TOPLEFT", 18, -13); lbl:SetText("Shape")
-  local presetBtns = {
-    { label = "Circle",  set = function() if GB.Skin then GB.Skin:SetShape("circle") else GB.db.shape = "circle" end end,
-      on = isCircle },
-    -- Keep the current level when already Rounded; otherwise default to a visible round.
-    { label = "Rounded", set = function() local _, lv = parse(); apply({ 1, 1, 1, 1 }, isRounded() and lv or 3) end,
-      on = isRounded },
-    { label = "Square",  set = function() apply({ 0, 0, 0, 0 }, 0) end,
-      on = isSquare },
-    -- Hexagon is fixed-aspect → force a SQUARE icon (no separate width/height).
-    { label = "Hexagon", set = function()
-        local sz = (GB.db and GB.db.iconW) or naturalIconSize()
-        GB.db.iconLockAspect, GB.db.iconAspect = true, 1
-        if GB.Skin then GB.Skin:SetIconSize(sz, sz); GB.Skin:SetShape("hexagon")
-        else GB.db.iconW, GB.db.iconH, GB.db.shape = sz, sz, "hexagon" end
-      end, on = isHexagon },
-  }
-  local x = 18
-  for _, p in ipairs(presetBtns) do
-    local b = flatButton(bf, 70, 24, COLOR.heroic, p.label, 11)
-    b:SetPoint("TOPLEFT", x, -36); x = x + 74
-    p.btn = b
-    b:SetScript("OnClick", function() p.set(); s.refresh(); C:RefreshPreview() end)
-  end
+  -- Uniform size scale (× the Edit-Mode button size) — replaces free width/height.
+  local sizeRow = sliderRow(bf, yCursor, "Size", 0.5, 2.0, 0.05,
+    function() return GB.db and GB.db.sizeScale end,
+    function(v) if GB.Skin then GB.Skin:SetSizeScale(v) else GB.db.sizeScale = v end; C:RefreshPreview() end,
+    function(v) return math.floor(v * 100 + 0.5) .. "%" end)
+  yCursor = yCursor - 34
 
-  -- Corner radius — discrete levels (baked masks, so it snaps); r5 = fully round.
-  -- Shown only for Rounded (see s.refresh); at -74 (where its own label sits).
-  local radiusRow = sliderRow(bf, -74, "Corner radius", 0, 5, 1,
-    function() local _, lv = parse(); return lv end,
-    function(v) if not isRounded() then return end; local pat = parse(); apply(pat, v); C:RefreshPreview() end,
-    function(v) return RADIUS_LABELS[v] or tostring(v) end)
-
-  -- The icon controls live in a group we slide up one row when the radius row is
-  -- hidden (Circle/Square), so nothing floats. Offsets below are relative to it.
-  local iconGroup = CreateFrame("Frame", nil, bf)
-  iconGroup:SetPoint("TOPLEFT", bf, "TOPLEFT", 0, -106)
-  iconGroup:SetPoint("TOPRIGHT", bf, "TOPRIGHT", 0, -106)
-  iconGroup:SetHeight(224)
-
-  -- Icon zoom — live (SetTexCoord)
-  local zoomRow = sliderRow(iconGroup, -12, "Icon zoom", 0, 0.30, 0.01,
+  -- Icon zoom (live SetTexCoord) + crop-to-fill (kept from the old section).
+  local zoomRow = sliderRow(bf, yCursor, "Icon zoom", 0, 0.30, 0.01,
     function() return GB.db and GB.db.zoom end,
     function(v) if GB.Skin then GB.Skin:SetZoom(v) end; C:PreviewZoom(v) end,
     function(v) return math.floor(v * 100 + 0.5) .. "%" end)
+  yCursor = yCursor - 34
 
-  -- Icon width / height — resize the VISIBLE icon (hit area stays Edit Mode's)
-  local wRow, hRow
-  local function applySize()
-    if GB.Skin then GB.Skin:SetIconSize(GB.db.iconW, GB.db.iconH) end
-    C:RefreshPreview()
-  end
-  -- Lock aspect ratio = keep the CURRENT width:height ratio while resizing (not
-  -- force square). The ratio is captured when lock is enabled; dragging one axis
-  -- scales the other to match.
-  local function lockRatio() return (GB.db and GB.db.iconAspect) or 1 end
-  wRow = sliderRow(iconGroup, -56, "Icon width", 16, 96, 1,
-    function() return (GB.db and GB.db.iconW) or naturalIconSize() end,
-    function(v)
-      GB.db.iconW = v
-      if GB.db.iconLockAspect then GB.db.iconH = math.floor(v * lockRatio() + 0.5); hRow:refresh()
-      elseif not GB.db.iconH then GB.db.iconH = naturalIconSize() end
-      applySize()
-    end,
-    function(v) return v .. "px" end)
-  hRow = sliderRow(iconGroup, -100, "Icon height", 16, 96, 1,
-    function() return (GB.db and GB.db.iconH) or naturalIconSize() end,
-    function(v)
-      GB.db.iconH = v
-      if GB.db.iconLockAspect then GB.db.iconW = math.floor(v / lockRatio() + 0.5); wRow:refresh()
-      elseif not GB.db.iconW then GB.db.iconW = naturalIconSize() end
-      applySize()
-    end,
-    function(v) return v .. "px" end)
-
-  -- Icon SIZE — the single control for fixed-aspect shapes (Hexagon): one square
-  -- size, no separate width/height. Shown only for Hexagon (s.refresh), sharing
-  -- the width row's slot (-56) so the two never appear together.
-  local sizeRow = sliderRow(iconGroup, -56, "Icon size", 16, 96, 1,
-    function() return (GB.db and GB.db.iconW) or naturalIconSize() end,
-    function(v) GB.db.iconW, GB.db.iconH = v, v; applySize() end,
-    function(v) return v .. "px" end)
-
-  local lockLbl = newText(iconGroup, FONT.body, 12, TEXT, "LEFT"); lockLbl:SetPoint("TOPLEFT", 18, -138); lockLbl:SetText("Lock aspect ratio")
-  local lockTog = makeToggle(iconGroup,
-    function() return GB.db and GB.db.iconLockAspect end,
-    function(v)
-      GB.db.iconLockAspect = v
-      if v then
-        -- Capture the current shape's ratio so locking PRESERVES it (no reset to square).
-        local w = GB.db.iconW or naturalIconSize()
-        local h = GB.db.iconH or naturalIconSize()
-        GB.db.iconAspect = (w > 0) and (h / w) or 1
-      end
-    end)
-  lockTog:SetPoint("TOPRIGHT", -18, -136)
-
-  -- Crop to fill vs stretch — how a non-square icon shows the (square) spell art.
-  local fillLbl = newText(iconGroup, FONT.body, 12, TEXT, "LEFT"); fillLbl:SetPoint("TOPLEFT", 18, -166); fillLbl:SetText("Crop to fill")
-  local fillTog = makeToggle(iconGroup,
+  local fillLbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); fillLbl:SetPoint("TOPLEFT", 18, yCursor); fillLbl:SetText("Crop to fill")
+  local fillTog = makeToggle(bf,
     function() return not (GB.db and GB.db.iconFill == "stretch") end,
     function(v)
       if GB.Skin then GB.Skin:SetIconFill(v and "fill" or "stretch") else GB.db.iconFill = v and "fill" or "stretch" end
       C:RefreshPreview()
     end)
-  fillTog:SetPoint("TOPRIGHT", -18, -164)
+  fillTog:SetPoint("TOPRIGHT", -18, yCursor + 2)
+  yCursor = yCursor - 26
 
-  local hint = newText(iconGroup, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -196); hint:SetPoint("RIGHT", iconGroup, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("Size is the VISIBLE icon; the clickable hit area stays Edit Mode's. Unlock aspect for non-square; Crop to fill keeps art undistorted.")
-  bf:SetHeight(336)   -- initial (Rounded); s.refresh sets the real height per shape
+  local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
+  hint:SetPoint("TOPLEFT", 18, yCursor); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Pick a silhouette; Size scales every icon together. The clickable hit area stays Edit Mode's.")
+  yCursor = yCursor - 40
+
+  bf:SetHeight(-yCursor + 8)
 
   s.refresh = function()
-    for _, p in ipairs(presetBtns) do p.btn:SetActive(p.on()) end
-    local showRadius = isRounded()   -- Corner radius: only for Rounded
-    local hex = isHexagon()          -- Hexagon: fixed-aspect → single square size
-    radiusRow:SetShown(showRadius)
-    -- Icon controls swap by shape: Hexagon shows one "Icon size" and hides width/
-    -- height/lock/crop (sizeRow shares the width slot); flexible shapes show the
-    -- full set. The hint + heights move so nothing floats; relayout() lets the
-    -- sections below follow the height change.
-    sizeRow:SetShown(hex)
-    wRow:SetShown(not hex); hRow:SetShown(not hex)
-    lockLbl:SetShown(not hex); lockTog:SetShown(not hex)
-    fillLbl:SetShown(not hex); fillTog:SetShown(not hex)
-    hint:SetPoint("TOPLEFT", 18, hex and -100 or -196)
-    hint:SetText(hex
-      and "Size is the VISIBLE icon (hexagons stay square, fixed shape); the clickable hit area stays Edit Mode's."
-      or "Size is the VISIBLE icon; the clickable hit area stays Edit Mode's. Unlock aspect for non-square; Crop to fill keeps art undistorted.")
-    local yIcon = showRadius and -106 or -62
-    iconGroup:SetPoint("TOPLEFT", bf, "TOPLEFT", 0, yIcon)
-    iconGroup:SetPoint("TOPRIGHT", bf, "TOPRIGHT", 0, yIcon)
-    bf:SetHeight(hex and 200 or (showRadius and 336 or 292))
-    if showRadius then radiusRow:refresh() end
-    zoomRow:refresh()
-    if hex then sizeRow:refresh()
-    else wRow:refresh(); hRow:refresh(); lockTog:refresh(); fillTog:refresh() end
+    local active = GB.db and GB.db.handShape
+    for key, th in pairs(thumbs) do th:SetSelected(key == active) end
+    sizeRow:refresh(); zoomRow:refresh(); fillTog:refresh()
     relayout()
   end
 end
@@ -1208,26 +1178,51 @@ end
 
 function C:RefreshPreview()
   if not previewIcon then return end
+  local hk = GB.db and GB.db.handShape
+  local handInfo = hk and GB:HandShapeInfo(hk)
   local shp = GB:GetShape()
   local style = GB:GetStyle()
-  -- Reflect the icon's aspect ratio, fit within a ~104px box.
-  local iw, ih = (GB.db and GB.db.iconW) or 1, (GB.db and GB.db.iconH) or 1
+  -- Reflect the icon's aspect ratio, fit within a ~104px box (long side = base).
   local base = 104
   local pw, ph = base, base
-  if iw > 0 and ih > 0 then
-    if iw >= ih then pw, ph = base, base * ih / iw else pw, ph = base * iw / ih, base end
+  if hk then
+    -- Hand shape: aspect comes from the silhouette; cap the LONG side to the box.
+    if handInfo.orient == "portrait" then pw, ph = base / handInfo.aspect, base
+    elseif handInfo.orient == "landscape" then pw, ph = base, base / handInfo.aspect end
+  else
+    local iw, ih = (GB.db and GB.db.iconW) or 1, (GB.db and GB.db.iconH) or 1
+    if iw > 0 and ih > 0 then
+      if iw >= ih then pw, ph = base, base * ih / iw else pw, ph = base * iw / ih, base end
+    end
   end
   previewFrame:SetSize(pw, ph)
+
+  -- Per-axis hand-mask growth (mirrors Skin.hgAnchor): a hand silhouette fills a
+  -- different fraction of its canvas per axis, so grow each edge to land `grow` px
+  -- out (caps stay round). Anchored to previewIcon's corners using pw/ph directly
+  -- (no reliance on GetWidth mid-refresh). grow=0 → icon edge; grow=t → border.
+  local function handAnchor(tex, grow)
+    grow = grow or 0
+    local m0 = 0.5 * math.min(pw, ph)
+    local aspect = math.max(pw, ph) / math.max(1, math.min(pw, ph))
+    local addL = grow * (aspect + 1) / aspect
+    local mx = m0 + (pw <= ph and 2 * grow or addL)
+    local my = m0 + (ph < pw and 2 * grow or addL)
+    tex:ClearAllPoints()
+    tex:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -mx, my)
+    tex:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", mx, -my)
+  end
 
   -- Construction = icon + extension (a plate above/below). Mirror the engine:
   -- extendPct is signed (< 0 = above), the hexagon has none, and Continuous-OFF
   -- only bites with a plate on a straight-sided shape — force it ON with no
   -- extension or a circle (else the plate loses its mask → an unmasked square).
-  local extPct = previewExtendPct()
+  -- Hand shapes take no plate extension (the silhouette IS the elongation).
+  local extPct = hk and 0 or previewExtendPct()
   local ext = ph * math.abs(extPct)
   local above = extPct < 0
   local continuous = not (style.construction and style.construction.continuous == false)
-  if ext == 0 or (GB.db and GB.db.shape) == "circle" then continuous = true end
+  if hk or ext == 0 or (GB.db and GB.db.shape) == "circle" then continuous = true end
   local maskExt = continuous and ext or 0
   previewExtH = ext
   previewExtT, previewExtB = (above and ext or 0), (above and 0 or ext)   -- overlays span the real ext
@@ -1244,15 +1239,21 @@ function C:RefreshPreview()
   -- Icon mask spans the construction when continuous (one pill wrapping icon +
   -- plate), else just the icon (a rounded icon on a crisp square plate). Same
   -- aspect source the engine uses (maskPlan → the construction's aspect).
-  local maskSrc = GB.Skin:AspectMask(pw, ph + maskExt)
+  -- A hand shape masks the icon to its own -base silhouette (per-axis grown);
+  -- otherwise the SDF aspect mask, grown by GROW_RATIO, as the engine does.
+  local maskSrc = hk and GB:HandAsset(hk, "base") or GB.Skin:AspectMask(pw, ph + maskExt)
   local growX = pw * GROW_RATIO
   local growY = (ph + maskExt) * GROW_RATIO
   if previewMask then previewIcon:RemoveMaskTexture(previewMask) end
   previewMask = previewFrame:CreateMaskTexture()
   previewMask:SetTexture(maskSrc or shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-  previewMask:ClearAllPoints()
-  previewMask:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -growX, growY + mExtT)
-  previewMask:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", growX, -(growY + mExtB))
+  if hk then
+    handAnchor(previewMask, 0)
+  else
+    previewMask:ClearAllPoints()
+    previewMask:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -growX, growY + mExtT)
+    previewMask:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", growX, -(growY + mExtB))
+  end
   previewIcon:AddMaskTexture(previewMask)
   -- Same cover-fit crop as the engine so the preview matches the bars (part a).
   previewIcon:SetTexCoord(GB.Skin:TexCoordFor(previewIcon:GetWidth(), previewIcon:GetHeight()))
@@ -1274,9 +1275,13 @@ function C:RefreshPreview()
     if not continuous then return end                     -- square plate (crisp junction)
     local m = previewFrame:CreateMaskTexture()
     m:SetTexture(maskSrc or shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    m:ClearAllPoints()
-    m:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -growX, growY + mExtT)
-    m:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", growX, -(growY + mExtB))
+    if hk then
+      handAnchor(m, 0)
+    else
+      m:ClearAllPoints()
+      m:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -growX, growY + mExtT)
+      m:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", growX, -(growY + mExtB))
+    end
     plate.tex:AddMaskTexture(m)
     plate.mask = m
   end
@@ -1352,10 +1357,14 @@ function C:RefreshPreview()
     if previewBorderMask then previewBorder:RemoveMaskTexture(previewBorderMask) end
     previewBorderMask = previewFrame:CreateMaskTexture()
     previewBorderMask:SetTexture(maskSrc or shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    local gx, gy = (pw + 2 * t) * GROW_RATIO, (ph + maskExt + 2 * t) * GROW_RATIO
-    previewBorderMask:ClearAllPoints()
-    previewBorderMask:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -(t + gx), (t + gy) + mExtT)
-    previewBorderMask:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", (t + gx), -(mExtB + t + gy))
+    if hk then
+      handAnchor(previewBorderMask, t)
+    else
+      local gx, gy = (pw + 2 * t) * GROW_RATIO, (ph + maskExt + 2 * t) * GROW_RATIO
+      previewBorderMask:ClearAllPoints()
+      previewBorderMask:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -(t + gx), (t + gy) + mExtT)
+      previewBorderMask:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", (t + gx), -(mExtB + t + gy))
+    end
     previewBorder:AddMaskTexture(previewBorderMask)
     previewBorder:Show()
   else
@@ -1561,6 +1570,12 @@ local function BuildPanel()
   bodyContainer = CreateFrame("Frame", nil, scroll)
   bodyContainer:SetSize(PANEL_W - PREVIEW_W - 9, 10)
   scroll:SetScrollChild(bodyContainer)
+
+  -- Custom thin scrollbar (shared helper): orange thumb + click-to-jump + drag + wheel.
+  -- The accordion grows/shrinks as sections open; the bar's OnUpdate tracks it.
+  makeScrollbar(panel, scroll, function(b)
+    b:SetPoint("TOPRIGHT", -4, TITLE_DIV_Y - 2); b:SetPoint("BOTTOMRIGHT", -4, FOOTER_H + 2)
+  end)
 
   -- Sections (mockup order). Bar layout + Apply to bars are still stubs.
   makeSection("Shape & icon", buildShapeSection)

@@ -185,13 +185,15 @@ local function mixedCornerBase()
   return ExtensionAbove() and ("corner-0011-r" .. r) or ("corner-1100-r" .. r)
 end
 
--- Hand-authored shapes (Phase 3): while a hand shape is active, EVERY masked element
--- (icon, gradient plate, border) sources from Media/art/hand/<key>-base.png, whose
+-- Hand-authored shapes: while a hand shape is active, EVERY masked element (icon,
+-- gradient plate, border) sources from Media/art/hand/<key>-base.png, whose
 -- silhouette sits in the centre 256 of a 512 canvas — so to map it onto a region we
 -- expand the region by HALF its short side (`pad` extends further, e.g. a border's
--- thickness). The two mask anchors below defer here when handShapeKey is set; overlay
+-- thickness). The two mask anchors below defer here when a hand shape is set; overlay
 -- (ring/sweep) anchoring is left alone (those are replaced by the hand glow).
-local handShapeKey
+-- Session 8 pivot: the active key is a PERSISTED setting (GB.db.handShape), read
+-- straight from the db here — nil → the legacy SDF shape path.
+local function handKey() return GB.db and GB.db.handShape end
 -- Anchor a hand texture/mask so its silhouette maps to the icon GROWN uniformly by
 -- `grow` screen-px on every side. The base's shape occupies a different FRACTION of the
 -- canvas per axis (short = 0.5, long = long/(long+256)), so a uniform margin would grow
@@ -215,7 +217,7 @@ end
 -- Anchor a mask over the whole construction (padding-compensated per axis). `ext`
 -- is the magnitude; the extension sits ABOVE or BELOW the icon per ExtensionAbove.
 local function AnchorConstructionMask(mask, icon, ext)
-  if handShapeKey then return hgAnchor(mask, icon, 0) end
+  if handKey() then return hgAnchor(mask, icon, 0) end
   local above = ExtensionAbove()
   local extT, extB = (above and ext or 0), (above and 0 or ext)
   local growX = icon:GetWidth() * GROW_RATIO
@@ -268,19 +270,11 @@ function Skin:RecolorBorders(color)
   end)
 end
 
--- DEV/Phase 3: mask the icon to a hand-authored base (<key>-base.png) so the icon
--- takes that exact silhouette. Anchored by the hand canvas convention: the shape's
--- 256-of-512 reference rect maps to the icon bounds (margin = 0.5x the icon's short
--- side). Fresh mask each call — editing a live mask's texture never re-renders (§2).
--- nil restores the normal mask. (For elongated keys, set a matching icon aspect.)
--- Activate a hand-authored silhouette (or nil to restore the normal shape). Just
--- flips handShapeKey and re-runs decor — the mask pipeline (maskPlan + the two anchors
--- above) then sources the hand base for the icon, gradient plate AND border, so the
--- whole construction follows the shape through the proven ApplyDecor rebuild.
-function Skin:SetHandShape(key)
-  handShapeKey = key
-  if self.enabled then self:ReapplyDecor() end
-end
+-- Skin:SetHandShape is defined lower, next to SetIconSize, so it can share the
+-- full icon-geometry refresh (the size/aspect helpers live there). Activating a
+-- hand silhouette sources its base for the icon, gradient plate AND border via the
+-- mask pipeline (maskPlan + the two anchors above), through the proven ApplyDecor
+-- rebuild — plus it re-derives the icon's W/H from the shape's aspect × size scale.
 
 -- Public: anchor a hand texture grown by `grow` px on all sides (per-axis, caps stay
 -- round) — used by the glow engine so the outer glow blooms from OUTSIDE the border.
@@ -298,7 +292,7 @@ end
 -- `t`). Same padding compensation as AnchorConstructionMask, sized for the larger
 -- region so the shape silhouette lands on the border's outer edge.
 local function AnchorBorderMask(mask, icon, ext, t)
-  if handShapeKey then return hgAnchor(mask, icon, t) end
+  if handKey() then return hgAnchor(mask, icon, t) end
   local above = ExtensionAbove()
   local extT, extB = (above and ext or 0), (above and 0 or ext)
   local gx = (icon:GetWidth() + 2 * t) * GROW_RATIO
@@ -401,8 +395,9 @@ end
 -- The key lets callers skip a fresh-mask rebuild (source swaps never re-render —
 -- §2) when nothing shape-relevant changed (a plain re-anchor re-clips live).
 local function maskPlan(icon, ext)
-  if handShapeKey then
-    return GB.MEDIA .. "art\\hand\\" .. handShapeKey .. "-base.png", "hand:" .. handShapeKey
+  local hk = handKey()
+  if hk then
+    return GB:HandAsset(hk, "base"), "hand:" .. hk
   end
   local src = aspectMask(icon:GetWidth(), icon:GetHeight() + (ext or 0))
   return src, tostring(src or (GB.db and GB.db.shape))
@@ -1106,13 +1101,38 @@ function Skin:SetAvailOOM(c) if GB.db then GB.db.availOOM = c end; applyAvailabi
 function Skin:SetRangeTint(b) if GB.db then GB.db.rangeTint = b end; applyAvailabilityAll() end
 function Skin:SetRangeColor(c) if GB.db then GB.db.rangeColor = c end; applyAvailabilityAll() end
 
--- Resize the VISIBLE icon to db.iconW/iconH (centered on the button). The secure
--- button's hit area is untouched (textures aren't protected). "auto" (nil) leaves
--- Blizzard's anchoring. Defined before the setters that call it (SetIconSize).
+-- Icon W/H for the active hand shape: short side = the button's Edit-Mode size ×
+-- sizeScale; the long side = short × the shape's aspect on its long axis. Returns
+-- nil when no hand shape is set (legacy free-size path). This is the pivot: the
+-- silhouette dictates the proportion, so the icon can never be sized to the wrong
+-- aspect (which is what warped the old glows/overlays).
+local function handIconSize(btn)
+  local hk = handKey()
+  if not hk then return nil end
+  local info = GB:HandShapeInfo(hk)
+  local nat = (btn.GetWidth and btn:GetWidth()) or 0
+  if not (nat and nat > 0) then nat = 45 end
+  local scale = (GB.db and GB.db.sizeScale) or 1
+  local short = math.max(8, math.floor(nat * scale + 0.5))
+  if info.orient == "portrait" then return short, math.floor(short * info.aspect + 0.5)
+  elseif info.orient == "landscape" then return math.floor(short * info.aspect + 0.5), short
+  else return short, short end
+end
+
+-- Resize the VISIBLE icon (centered on the button). The secure button's hit area
+-- is untouched (textures aren't protected). With a hand shape active, W/H come
+-- from the shape's aspect × size scale (and are mirrored into db.iconW/iconH so
+-- downstream anchor/preview math stays consistent). Otherwise the legacy free
+-- iconW/iconH ("auto"/nil = leave Blizzard's anchoring). Defined before its callers.
 local function applyIconSize(btn)
   local icon = btn.icon or btn.Icon
   if not icon then return end
-  local w, h = GB.db and GB.db.iconW, GB.db and GB.db.iconH
+  local w, h = handIconSize(btn)
+  if w and h then
+    if GB.db then GB.db.iconW, GB.db.iconH = w, h end
+  else
+    w, h = GB.db and GB.db.iconW, GB.db and GB.db.iconH
+  end
   if not (w and h) then return end
   icon:ClearAllPoints()
   icon:SetPoint("CENTER", btn, "CENTER", 0, 0)
@@ -1226,27 +1246,53 @@ function Skin:SetStateWidth(v)
   end)
 end
 
--- Live icon resize: re-anchor the visible icon, then everything that follows it
--- (state art, cooldowns, and mask + plates + hotkey via ApplyDecor). All plain
--- re-anchors — the secure hit area is never touched.
+-- Full per-button geometry refresh after a size- or shape-affecting change: re-size
+-- the icon, re-crop (cover-fit), re-pick overlay art for the aspect, re-anchor the
+-- state rings + cooldowns, and rebuild masks/plates via ApplyDecor. All plain
+-- re-anchors + file swaps — the secure hit area is never touched.
+local function refreshIconGeometry(btn)
+  local rec = records[btn]
+  local icon = btn.icon or btn.Icon
+  if not (rec and rec.active and icon) then return end
+  applyIconSize(btn)
+  applyTexCoord(icon)        -- cover-fit crop follows the new aspect (no art stretch)
+  applyShapeArt(btn, icon)   -- swap overlay art to the new aspect (ring/swipe)
+  local function fit(tex) if tex then AnchorConstruction(tex, icon, stateWidthRatio()) end end
+  if btn.GetHighlightTexture then fit(btn:GetHighlightTexture()) end
+  if btn.GetCheckedTexture then fit(btn:GetCheckedTexture()) end
+  fit(btn.Flash)
+  AlignCooldowns(btn)
+  ApplyDecor(btn)
+end
+
+-- Live icon resize (legacy free-size path; a hand shape overrides these dims in
+-- applyIconSize). Kept for the SDF fallback; the hand-shape UI drives size via
+-- SetSizeScale instead.
 function Skin:SetIconSize(w, h)
   GB.db.iconW, GB.db.iconH = w, h
   if not self.enabled then return end
-  GB:ForEachButton(function(btn)
-    local rec = records[btn]
-    local icon = btn.icon or btn.Icon
-    if not (rec and rec.active and icon) then return end
-    applyIconSize(btn)
-    applyTexCoord(icon)   -- cover-fit crop follows the new aspect (no art stretch)
-    applyShapeArt(btn, icon)   -- swap overlay art to the new aspect (ring/swipe)
-    local function fit(tex) if tex then AnchorConstruction(tex, icon, stateWidthRatio()) end end
-    if btn.GetHighlightTexture then fit(btn:GetHighlightTexture()) end
-    if btn.GetCheckedTexture then fit(btn:GetCheckedTexture()) end
-    fit(btn.Flash)
-    AlignCooldowns(btn)
-    ApplyDecor(btn)
-  end)
+  GB:ForEachButton(refreshIconGeometry)
   if GB.Glows then GB.Glows:RefreshSize() end   -- proc halo tracks the new icon size/aspect
+end
+
+-- Activate a hand-authored silhouette (a GB.HAND_SHAPES key) — persisted. Sourcing
+-- its base for the icon/plate/border AND re-deriving the icon's W/H from the shape's
+-- aspect × size scale, so the whole construction takes the exact silhouette with no
+-- manual sizing. Falls back through refreshIconGeometry's proven ApplyDecor rebuild.
+function Skin:SetHandShape(key)
+  if key then GB.db.handShape = key end
+  if not self.enabled then return end
+  GB:ForEachButton(refreshIconGeometry)
+  if GB.Glows then GB.Glows:RefreshShape(); GB.Glows:RefreshSize() end
+end
+
+-- Live uniform size scale (× the Edit-Mode button size). The hand shape keeps its
+-- aspect; only the overall scale changes. Pure re-anchors + file swaps, safe live.
+function Skin:SetSizeScale(v)
+  if GB.db then GB.db.sizeScale = v end
+  if not self.enabled then return end
+  GB:ForEachButton(refreshIconGeometry)
+  if GB.Glows then GB.Glows:RefreshSize() end
 end
 
 local function ApplyButton(btn)

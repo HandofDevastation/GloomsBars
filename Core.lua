@@ -91,6 +91,71 @@ function GB:GetShape()
 end
 
 -- ---------------------------------------------------------------------------
+-- Hand-authored preset silhouettes — the frozen catalog (docs/SHAPE-CATALOG.md,
+-- assets docs/ART-SPEC.md). The shaped-glow pivot (session 8): free width/height
+-- is retired; the icon is ONE of these 21 presets + a uniform size scale, so the
+-- silhouette can never warp. Each entry: aspect = long/short side ratio, orient =
+-- which axis is the long one ("square" = 1:1). The engine derives the icon's W/H
+-- from aspect × orient × naturalSize × sizeScale, so a shape is always the right
+-- proportion (no manual sizing). Files: Media/art/hand/<key>-base|-outer|-inner.png.
+-- ---------------------------------------------------------------------------
+local HAND_DEF = {  -- { key, aspect, orient, label }, in picker order
+  -- 1:1 footprint
+  { "circle",        1,   "square",    "Circle" },
+  { "square",        1,   "square",    "Square" },
+  { "roundsq1",      1,   "square",    "Rounded 1" },
+  { "roundsq2",      1,   "square",    "Rounded 2" },
+  { "roundsq3",      1,   "square",    "Rounded 3" },
+  { "hexagon",       1,   "square",    "Hexagon" },
+  { "diamond",       1,   "square",    "Diamond" },
+  { "tombstone",     1,   "square",    "Tombstone" },
+  { "tombstone-inv", 1,   "square",    "Tombstone (inv.)" },
+  -- portrait-elongated (3:2 & 2:1) — these carry the plate-extension option
+  { "pill32",        1.5, "portrait",  "Pill 3:2" },
+  { "pill21",        2,   "portrait",  "Pill 2:1" },
+  { "square32",      1.5, "portrait",  "Tall square 3:2" },
+  { "square21",      2,   "portrait",  "Tall square 2:1" },
+  { "roundsq1-32",   1.5, "portrait",  "Tall rounded 1 · 3:2" },
+  { "roundsq1-21",   2,   "portrait",  "Tall rounded 1 · 2:1" },
+  { "roundsq2-32",   1.5, "portrait",  "Tall rounded 2 · 3:2" },
+  { "roundsq2-21",   2,   "portrait",  "Tall rounded 2 · 2:1" },
+  { "roundsq3-32",   1.5, "portrait",  "Tall rounded 3 · 3:2" },
+  { "roundsq3-21",   2,   "portrait",  "Tall rounded 3 · 2:1" },
+  -- landscape-elongated (3:2 & 2:1) — no plate extension
+  { "square32w",     1.5, "landscape", "Wide square 3:2" },
+  { "square21w",     2,   "landscape", "Wide square 2:1" },
+}
+GB.HAND_SHAPES = {}   -- key → { aspect, orient, label }
+GB.HAND_ORDER  = {}   -- ordered list of keys (picker order)
+for _, d in ipairs(HAND_DEF) do
+  GB.HAND_SHAPES[d[1]] = { aspect = d[2], orient = d[3], label = d[4] }
+  GB.HAND_ORDER[#GB.HAND_ORDER + 1] = d[1]
+end
+-- Grouped for the Config picker (grouped thumbnail grid).
+GB.HAND_GROUPS = {
+  { title = "1:1", keys = { "circle", "square", "roundsq1", "roundsq2", "roundsq3",
+                            "hexagon", "diamond", "tombstone", "tombstone-inv" } },
+  { title = "Portrait", keys = { "pill32", "pill21", "square32", "square21",
+                                 "roundsq1-32", "roundsq1-21", "roundsq2-32", "roundsq2-21",
+                                 "roundsq3-32", "roundsq3-21" } },
+  { title = "Landscape", keys = { "square32w", "square21w" } },
+}
+
+-- Media paths for a hand silhouette's three assets (base = icon mask; outer/inner
+-- = the multi-part glow, wired to triggers in a later step).
+function GB:HandAsset(key, part)
+  return GB.MEDIA .. "art\\hand\\" .. key .. "-" .. (part or "base") .. ".png"
+end
+
+-- The active hand-shape key (db-backed) + its metadata; nil until first-run
+-- migration sets it. Falls back to "circle" so callers never nil-index.
+function GB:HandShapeKey() return GB.db and GB.db.handShape end
+function GB:HandShapeInfo(key)
+  key = key or (GB.db and GB.db.handShape)
+  return (key and GB.HAND_SHAPES[key]) or GB.HAND_SHAPES.circle
+end
+
+-- ---------------------------------------------------------------------------
 -- Style recipes — the DESIGN NORTH STAR (docs/HANDOFF.md): a style is DATA
 -- (decoration layers + text overrides); the engine in Skin.lua interprets it.
 -- v0 supports layer kind "gradient" (a shape-clipped gradient plate) and a
@@ -226,8 +291,13 @@ local DB_DEFAULTS = {
   shape = "circle",        -- key into GB.SHAPES
   style = "none",          -- key into GB.STYLES
   zoom = 0.08,             -- icon zoom-crop (SetTexCoord inset); live via Skin:SetZoom
-  -- iconW / iconH absent = "auto" (icon matches the Edit-Mode button size); set
-  -- explicitly by the Config UI to resize the VISIBLE icon (hit area unchanged).
+  -- Shaped-glow pivot (session 8): the icon is one of 21 preset silhouettes
+  -- (handShape, a GB.HAND_SHAPES key) + a uniform size scale — free width/height
+  -- is retired (it warped the silhouette/glow). iconW/iconH are still WRITTEN by
+  -- the engine (derived from the shape's aspect × sizeScale) so downstream anchor
+  -- math is unchanged; they're just no longer user-facing. handShape is seeded on
+  -- first run from the legacy shape (migration below).
+  sizeScale = 1,           -- uniform icon size multiplier (× the Edit-Mode button size)
   iconLockAspect = true,   -- keep the width:height RATIO while sizing (not force square)
   iconAspect = 1,          -- the locked height/width ratio (captured when lock is enabled)
   iconFill = "fill",       -- "fill" (cover: keep art aspect, crop) or "stretch"
@@ -298,6 +368,17 @@ loader:SetScript("OnEvent", function(_, event, arg1)
     -- Proc-glow art rebuilt with a WIDER bloom (2026-07-19): its natural size
     -- changed, so reset the saved glow Size ONCE to the new default (re-tunable).
     if not GB.db.glowWideBloom then GB.db.glowScale = 128 / 80; GB.db.glowWideBloom = true end
+    -- Shaped-glow pivot (session 8): seed handShape from the legacy SDF shape so
+    -- the look carries over (circle→circle, square→square, hexagon→hexagon, any
+    -- rounded corner-shape→a medium rounded square, else circle). Only once.
+    if GB.db.handShape == nil then
+      local legacy = tostring(GB.db.shape)
+      local seed = "circle"
+      if legacy == "square" or legacy == "corner-0000-r0" then seed = "square"
+      elseif legacy == "hexagon" then seed = "hexagon"
+      elseif legacy:match("^corner%-%d%d%d%d%-r%d$") then seed = "roundsq2" end
+      GB.db.handShape = seed
+    end
   elseif event == "PLAYER_LOGIN" then
     PreloadFonts()
     RegisterMedia()
@@ -768,13 +849,6 @@ end
 SLASH_GLOOMSBARS1 = "/gb"
 SLASH_GLOOMSBARS2 = "/gloomsbars"
 local glowTestOn = false   -- /gb glowtest force-preview state (session 8 glow bake-off)
--- The 21 hand-authored silhouette keys (docs/ART-SPEC.md) for the Phase 3 previews.
-local HAND_KEYS = {}
-for _, k in ipairs({
-  "circle", "square", "roundsq1", "roundsq2", "roundsq3", "hexagon", "diamond", "tombstone", "tombstone-inv",
-  "pill32", "pill21", "square32", "square21", "square32w", "square21w",
-  "roundsq1-32", "roundsq1-21", "roundsq2-32", "roundsq2-21", "roundsq3-32", "roundsq3-21",
-}) do HAND_KEYS[k] = true end
 SlashCmdList.GLOOMSBARS = function(input)
   local cmd, arg = (input or ""):lower():match("^%s*(%S*)%s*(%S*)")
   if cmd == "" or cmd == "config" or cmd == "ui" then
@@ -814,25 +888,33 @@ SlashCmdList.GLOOMSBARS = function(input)
       glowTestOn and " — now run /gb glowstyle 0|A|B|C to compare (off = real art)" or ""))
   elseif cmd == "handshape" then
     local key = (arg or ""):lower()
-    if key == "" or key == "off" then
-      if GB.Skin then GB.Skin:SetHandShape(nil) end
-      if GB.Glows then GB.Glows:HandPreview(nil) end
-      msg("hand-shape preview OFF (/reload for an exact restore).")
-    elseif HAND_KEYS[key] then
-      if GB.Skin then GB.Skin:SetHandShape(key) end
-      if GB.Glows then GB.Glows:HandPreview(key) end
-      msg(("hand-shape '%s' — icon, border & gradient all masked to it + glow on."):format(key))
+    if key == "" then
+      msg(("hand-shape is '%s'. Set with /gb handshape <key> (persists). 21 keys in docs/ART-SPEC.md.")
+        :format(tostring(GB.db and GB.db.handShape)))
+    elseif GB.HAND_SHAPES[key] then
+      if GB.Skin then GB.Skin:SetHandShape(key) else GB.db.handShape = key end
+      msg(("hand-shape set to '%s' — icon, border & gradient masked to it (persists)."):format(key))
     else
       msg("unknown key '" .. key .. "'. See docs/ART-SPEC.md for the 21 keys (e.g. diamond, tombstone, roundsq2-32).")
     end
+  elseif cmd == "size" then
+    local v = tonumber(arg)
+    if v then
+      v = math.max(0.4, math.min(3, v))
+      if GB.Skin then GB.Skin:SetSizeScale(v) else GB.db.sizeScale = v end
+      msg(("icon size scale set to %.2f× (persists)."):format(v))
+    else
+      msg(("icon size scale is %.2f× (usage: /gb size 1.25 — × the Edit-Mode button size)."):format(GB.db and GB.db.sizeScale or 1))
+    end
   elseif cmd == "handglow" then
+    -- Dev glow preview (force-on), kept for NEXT #1 (wiring the glow to triggers).
     local key = (arg or ""):lower()
     if key == "" or key == "off" then
       if GB.Glows then GB.Glows:HandPreview(nil) end
       msg("hand-glow preview OFF.")
-    elseif HAND_KEYS[key] then
+    elseif GB.HAND_SHAPES[key] then
       if GB.Glows then GB.Glows:HandPreview(key) end
-      msg(("hand-glow '%s' ON (glow only; use handshape to also mask the icon)."):format(key))
+      msg(("hand-glow '%s' ON (glow only; use handshape to set the persistent icon shape)."):format(key))
     else
       msg("unknown key. See docs/ART-SPEC.md for the 21 keys.")
     end
