@@ -332,6 +332,7 @@ local DB_DEFAULTS = {
   castDrainDir = "up",                -- "up" | "down" | "left" | "right" (edge the fill grows from)
   castInterruptColor = { 1, 0.25, 0.25 },   -- interrupt/cancel burst tint (Blizzard's completion burst, replayed red)
   castInterruptSpeed = 0.6,                 -- cancel-burst speed vs Blizzard's default (<1 = slower)
+  castCompleteColor = { 1, 0.9, 0.5 },      -- successful cast/channel completion burst tint (was native white)
   -- Proc glow (Glows.lua) — the shaped halo; controls to fight "hard to see".
   glowColor = { 1, 0.85, 0.35 },      -- standard proc tint (gold)
   glowAssistColor = { 0.4, 0.75, 1 }, -- assisted-highlight tint (blue)

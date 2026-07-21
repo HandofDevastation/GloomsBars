@@ -402,10 +402,15 @@ function Skin:AspectSwipe(w, h) local b = aspectBase(w, h); return b and (GB.MED
 -- vertex colours / blend modes / anchors are configured once in ApplyButton.
 local function applyShapeArt(btn, icon)
   local art = shapeArt(icon)
+  -- Cooldown swipe: the hand shape's own squished-square swipe (generated from its
+  -- base by tools/generate-hand-swipes.py) so the sweep traces the silhouette; else
+  -- the SDF swipe. SetSwipeTexture needs a square pow2 texture, which both are.
+  local hk = handKey()
+  local swipe = (hk and GB:HandAsset(hk, "swipe")) or art.swipe
   -- Skip the SetTexture churn when the art is unchanged (e.g. dragging the size
   -- slider within one aspect bucket) — keeps the sliders smooth.
   local rec = records[btn]
-  local key = tostring(art.ring) .. "|" .. tostring(art.swipe)
+  local key = tostring(art.ring) .. "|" .. tostring(swipe)
   if rec then
     if rec.artKey == key then return end
     rec.artKey = key
@@ -413,8 +418,8 @@ local function applyShapeArt(btn, icon)
   if btn.GetHighlightTexture then local hl = btn:GetHighlightTexture(); if hl then hl:SetTexture(art.ring) end end
   if btn.GetCheckedTexture then local ct = btn:GetCheckedTexture(); if ct then ct:SetTexture(art.ring) end end
   if btn.Flash then btn.Flash:SetTexture(art.ring) end
-  for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
-    if cd and cd.SetSwipeTexture then cd:SetSwipeTexture(art.swipe) end
+  for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown, btn.chargeCooldown }) do
+    if cd and cd.SetSwipeTexture then cd:SetSwipeTexture(swipe) end
   end
 end
 
@@ -561,11 +566,13 @@ local function styleCast(btn, rec, icon, castType)
   -- mixed-corner mask (rounded icon end, square plate end) to hug the square plate
   -- — otherwise it draws rounded bottom corners floating off the plate.
   local mb = mixedCornerBase()
-  local src = mb and (GB.MEDIA .. "masks\\" .. mb .. ".png")
-    or aspectMask(icon:GetWidth(), icon:GetHeight() + ext)   -- nil → base shape mask
-  -- 2. Shape the end-burst completion flash to the pill (used by successful casts
-  --    AND replayed red for cancels). Reset its tint to white each cast so a real
-  --    completion stays gold after a prior cancel tinted it red.
+  local hk = handKey()
+  local src = (hk and GB:HandAsset(hk, "base"))               -- hand silhouette (icon + burst + fill all trace it)
+    or (mb and (GB.MEDIA .. "masks\\" .. mb .. ".png"))
+    or aspectMask(icon:GetWidth(), icon:GetHeight() + ext)     -- nil → base shape mask
+  -- 2. Shape the end-burst completion flash to the silhouette (used by successful
+  --    casts AND replayed red for cancels). Reset its tint to the COMPLETE colour
+  --    each cast so a real completion shows it (and a prior cancel's red doesn't linger).
   local burst = cast.EndBurst
   if burst and burst.GlowRing then
     local slot = rec.castBurst or {}; rec.castBurst = slot
@@ -573,7 +580,8 @@ local function styleCast(btn, rec, icon, castType)
     if slot.mask then burst.GlowRing:RemoveMaskTexture(slot.mask) end
     slot.mask = buildMask(burst, icon, ext, src)
     burst.GlowRing:AddMaskTexture(slot.mask)
-    burst.GlowRing:SetVertexColor(1, 1, 1)
+    local cc = (GB.db and GB.db.castCompleteColor) or { 1, 0.9, 0.5 }
+    burst.GlowRing:SetVertexColor(cc[1], cc[2], cc[3])
     setEndBurstSpeed(burst, 1)   -- normal speed for a real completion (cancel slows it)
   end
   -- 3. Our own pill-shaped linear cast/channel fill.
@@ -587,7 +595,10 @@ local function styleCast(btn, rec, icon, castType)
   end
   local f = rec.castFillFrame
   f:SetFrameLevel(btn:GetFrameLevel() + 3)    -- above icon, below text (TextOverlayContainer = +4)
-  AnchorConstruction(f, icon, GROW_RATIO)     -- frame spans the pill construction
+  -- The fill is a DRAINING rectangle, so the frame must stay icon-sized (drains over
+  -- the icon height); the mask (hand base via buildMask → hgAnchor) does the shaping.
+  -- (Do NOT hgAnchor the frame — that's the 2x hand-canvas size and would drain over 2x.)
+  AnchorConstruction(f, icon, GROW_RATIO)
   if f.mask then f.tex:RemoveMaskTexture(f.mask) end
   f.mask = buildMask(f, icon, ext, src)       -- fresh aspect pill mask, clips the tint to the shape
   f.tex:AddMaskTexture(f.mask)
@@ -937,8 +948,24 @@ local function AlignCooldowns(btn)
   -- edge lands ON the icon edge, and a fixed +0.75px kills the anti-aliased rim
   -- leak (QA 2026-07-18). This was the whole point of the old "overshoot" — it
   -- fixed Blizzard's undershoot — so it's baked, not a user slider (Jason 2026-07-20).
+  -- Hand swipe fills its texture edge-to-edge (the -swipe crop has no art padding),
+  -- so anchor the cooldown to the ICON BOUNDS + a hair for the AA rim — NOT the
+  -- GROW_RATIO compensation the padded SDF swipe needs (that overshot, worst on the
+  -- long axis of 2:1/3:2). The SDF path keeps the ratio grow.
+  -- Hand swipe + icon mask both derive from the SAME reference rect, so the cooldown
+  -- anchors to the icon bounds EXACTLY (no overshoot) — the sweep edge lands on the
+  -- silhouette edge. (A white sweep makes any overshoot fringe visible; 0 is right.)
+  local hk = handKey()
   for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown, btn.chargeCooldown }) do
-    if cd then AnchorConstruction(cd, icon, GROW_RATIO, 0.75) end
+    if cd then
+      if hk then
+        cd:ClearAllPoints()
+        cd:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0)
+        cd:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
+      else
+        AnchorConstruction(cd, icon, GROW_RATIO, 0.75)
+      end
+    end
   end
 end
 
@@ -992,10 +1019,14 @@ local function playFinishFlash(btn)
   local rec = records[btn]
   local icon = btn.icon or btn.Icon
   if not (rec and rec.active and icon and rec.flashFrame) then return end
-  rec.flashTex:SetTexture(Skin:GlowArt())
+  local hk = handKey()
+  rec.flashTex:SetTexture(hk and GB:HandAsset(hk, "outer") or Skin:GlowArt())
   local c = db.finishFlashColor or { 1, 0.9, 0.5 }
   rec.flashTex:SetVertexColor(c[1], c[2], c[3])
-  AnchorConstruction(rec.flashFrame, icon, (FLASH_SCALE - 1) / 2)   -- frame spans the construction; texture fills it
+  -- Hand shape: the outer glow art's silhouette maps to the icon (bloom in the
+  -- margin), and the burst's scale-out expands it. Else the SDF construction anchor.
+  if hk then hgAnchor(rec.flashFrame, icon, 0)
+  else AnchorConstruction(rec.flashFrame, icon, (FLASH_SCALE - 1) / 2) end
   rec.flashFrame:SetAlpha(1)
   rec.flashAnim:Stop(); rec.flashAnim:Play()
 end
@@ -1411,7 +1442,8 @@ local function ApplyButton(btn)
   -- chargeCooldown IS included now (it was edge-only → the recharge showed a bare
   -- square edge and no shaped sweep); applySwipe forces its swipe on + edge off.
   if not rec.cooldownStyled then
-    local swipe = shapeArt(icon).swipe
+    local hk = handKey()
+    local swipe = (hk and GB:HandAsset(hk, "swipe")) or shapeArt(icon).swipe
     for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown, btn.chargeCooldown }) do
       if cd and cd.SetSwipeTexture then
         cd:SetSwipeTexture(swipe)

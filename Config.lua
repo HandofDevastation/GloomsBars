@@ -938,25 +938,35 @@ local function buildCastSection(bf, s)
     function(d) if GB.db then GB.db.castDrainDir = d end end)
   rows[#rows + 1] = dirR
 
+  -- COMPLETE = the burst on a SUCCESSFUL cast/channel (Blizzard's completion flash,
+  -- shaped + tinted). Distinct from the cooldown Finish flash (Cooldown & availability),
+  -- which fires when an ability comes OFF cooldown.
+  local cclab = newText(bf, FONT.body, 12, TEXT, "LEFT"); cclab:SetPoint("TOPLEFT", 18, -136); cclab:SetText("Complete color")
+  local ccs = colorSwatch(bf,
+    function() return GB.db and GB.db.castCompleteColor end,
+    function(c) if GB.db then GB.db.castCompleteColor = c end end)
+  ccs.swatch:SetPoint("TOPRIGHT", -18, -134)
+  rows[#rows + 1] = ccs
+
   -- INTERRUPT / cancel = Blizzard's completion burst replayed in this colour.
-  local ihdr = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); ihdr:SetPoint("TOPLEFT", 18, -136); ihdr:SetText("INTERRUPT")
-  local iclab = newText(bf, FONT.body, 12, TEXT, "LEFT"); iclab:SetPoint("TOPLEFT", 18, -166); iclab:SetText("Color")
+  local ihdr = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); ihdr:SetPoint("TOPLEFT", 18, -172); ihdr:SetText("INTERRUPT")
+  local iclab = newText(bf, FONT.body, 12, TEXT, "LEFT"); iclab:SetPoint("TOPLEFT", 18, -202); iclab:SetText("Color")
   local ics = colorSwatch(bf,
     function() return GB.db and GB.db.castInterruptColor end,
     function(c) if GB.db then GB.db.castInterruptColor = c end end)
-  ics.swatch:SetPoint("TOPRIGHT", -18, -164)
+  ics.swatch:SetPoint("TOPRIGHT", -18, -200)
   rows[#rows + 1] = ics
 
-  local spRow = sliderRow(bf, -198, "Speed", 0.2, 2, 0.1,
+  local spRow = sliderRow(bf, -234, "Speed", 0.2, 2, 0.1,
     function() return (GB.db and GB.db.castInterruptSpeed) or 0.6 end,
     function(v) if GB.db then GB.db.castInterruptSpeed = v end end,
     function(v) return string.format("%.1fx", v) end)
   rows[#rows + 1] = spRow
 
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -238); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetPoint("TOPLEFT", 18, -274); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
   hint:SetText("Changes apply on your next cast. Speed <1 slows the interrupt burst.")
-  bf:SetHeight(268)
+  bf:SetHeight(304)
   s.refresh = function() for _, r in ipairs(rows) do r:refresh() end end
 end
 
