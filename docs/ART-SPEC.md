@@ -40,7 +40,9 @@ each one at runtime (procs, hover, cast = the same asset, different tint). Lumin
 - **Border** — engine-generated from the mask (the shape scaled up by the thickness slider), so it
   auto-fits every shape and stays user-adjustable. Its color is overridden to the glow color on glow.
 - **Cooldown swipe** — technical constraints (power-of-2, pre-distorted for aspect); I generate it
-  from your mask.
+  from your mask. **IMPLEMENTED (session 9):** `tools/generate-hand-swipes.py` crops each `-base`'s
+  reference rect (128px margin), squishes to a 256² pow2, bakes 0.8 alpha → `Media/art/hand/<key>-swipe.png`.
+  Re-run it if you re-export a base.
 - **State ring** — gone; hover/selected/cast reuse `-glow-outer` + `-glow-inner` with a different tint.
 
 ## Edge rule (important)
