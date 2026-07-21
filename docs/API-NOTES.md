@@ -44,6 +44,13 @@ Bar 1 buttons parented via `MainActionBarButtonContainer#` (`ActionBar.lua:14`),
 - **Hard cap: 3 masks per texture.** `AddMaskTexture` throws `"Texture already has the maximum number of mask textures (3)"`. Blizzard uses 1 (`IconMask`) → we have budget for 2, production uses 1. Probes must be idempotent toggles.
 - **Editing an already-rendered mask does NOT re-render** — `SetAtlas` on Blizzard's live `IconMask` changed `GetAtlas()` but never changed pixels, even after `RemoveMaskTexture`+`AddMaskTexture`. A **freshly created** `CreateMaskTexture` + `AddMaskTexture` renders immediately. Production: always create our own masks; never mutate Blizzard's.
 - **Masks persist** through Blizzard's update cycle (mouseover etc.).
+- **A mask texture must be WHITE (rgb 255), not just alpha — the mask reads LUMINANCE**
+  (VERIFIED 2026-07-21, session 8). Our SDF masks are `(255,255,255,alpha)` and clip fine;
+  Figma-exported PNGs mattes transparent regions to BLACK `(0,0,0,0)`, and under
+  `CLAMPTOBLACKADDITIVE` a black-rgb mask **does not clip** (the icon stays full/square) even
+  though its alpha is the shape. Fix: force rgb→255 on any hand-authored `*-base.png` used as a
+  mask (keep alpha). ⇒ the `Media/art/hand/*-base.png` masks were whitened on import; re-whiten
+  if Jason re-exports one. (This cost ~6 debug rounds — do not rediscover.)
 - **Runtime `AddMaskTexture` reliability — refined rule (evidence through 2026-07-18):**
   works on textures that are **actively rendering** (fresh mask on the live `.icon` ✓)
   or that **already carried a mask** (`CastFill`, Blizzard's FillMask removed → ours

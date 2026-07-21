@@ -185,9 +185,37 @@ local function mixedCornerBase()
   return ExtensionAbove() and ("corner-0011-r" .. r) or ("corner-1100-r" .. r)
 end
 
+-- Hand-authored shapes (Phase 3): while a hand shape is active, EVERY masked element
+-- (icon, gradient plate, border) sources from Media/art/hand/<key>-base.png, whose
+-- silhouette sits in the centre 256 of a 512 canvas — so to map it onto a region we
+-- expand the region by HALF its short side (`pad` extends further, e.g. a border's
+-- thickness). The two mask anchors below defer here when handShapeKey is set; overlay
+-- (ring/sweep) anchoring is left alone (those are replaced by the hand glow).
+local handShapeKey
+-- Anchor a hand texture/mask so its silhouette maps to the icon GROWN uniformly by
+-- `grow` screen-px on every side. The base's shape occupies a different FRACTION of the
+-- canvas per axis (short = 0.5, long = long/(long+256)), so a uniform margin would grow
+-- the long axis more and flatten the caps — this compensates PER AXIS: the short axis
+-- adds 2*grow, the long axis adds grow*(aspect+1)/aspect, which both land the edge exactly
+-- `grow` px out. grow=0 → icon edge (icon/plate mask); grow=thickness → border outer edge
+-- (border mask + the outer glow, so the glow blooms from OUTSIDE the border).
+local function hgAnchor(tex, icon, grow)
+  grow = grow or 0
+  local w, h = icon:GetWidth(), icon:GetHeight()
+  local m0 = 0.5 * math.min(w, h)
+  local aspect = math.max(w, h) / math.max(1, math.min(w, h))
+  local addS, addL = 2 * grow, grow * (aspect + 1) / aspect
+  local mx = m0 + (w <= h and addS or addL)
+  local my = m0 + (h < w and addS or addL)
+  tex:ClearAllPoints()
+  tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -mx, my)
+  tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", mx, -my)
+end
+
 -- Anchor a mask over the whole construction (padding-compensated per axis). `ext`
 -- is the magnitude; the extension sits ABOVE or BELOW the icon per ExtensionAbove.
 local function AnchorConstructionMask(mask, icon, ext)
+  if handShapeKey then return hgAnchor(mask, icon, 0) end
   local above = ExtensionAbove()
   local extT, extB = (above and ext or 0), (above and 0 or ext)
   local growX = icon:GetWidth() * GROW_RATIO
@@ -228,11 +256,49 @@ function Skin:GlowArt()
   return GB:GetShape().glow
 end
 
+-- Recolor every VISIBLE border to `color` ({r,g,b}) so it adopts a glow's colour
+-- while the glow is active. Pass nil to restore the styled colour (re-runs decor).
+function Skin:RecolorBorders(color)
+  if not color then self:ReapplyDecor(); return end
+  GB:ForEachButton(function(btn)
+    local rec = records[btn]
+    if rec and rec.border and rec.border.tex and rec.border.tex:IsShown() then
+      rec.border.tex:SetVertexColor(color[1], color[2], color[3])
+    end
+  end)
+end
+
+-- DEV/Phase 3: mask the icon to a hand-authored base (<key>-base.png) so the icon
+-- takes that exact silhouette. Anchored by the hand canvas convention: the shape's
+-- 256-of-512 reference rect maps to the icon bounds (margin = 0.5x the icon's short
+-- side). Fresh mask each call — editing a live mask's texture never re-renders (§2).
+-- nil restores the normal mask. (For elongated keys, set a matching icon aspect.)
+-- Activate a hand-authored silhouette (or nil to restore the normal shape). Just
+-- flips handShapeKey and re-runs decor — the mask pipeline (maskPlan + the two anchors
+-- above) then sources the hand base for the icon, gradient plate AND border, so the
+-- whole construction follows the shape through the proven ApplyDecor rebuild.
+function Skin:SetHandShape(key)
+  handShapeKey = key
+  if self.enabled then self:ReapplyDecor() end
+end
+
+-- Public: anchor a hand texture grown by `grow` px on all sides (per-axis, caps stay
+-- round) — used by the glow engine so the outer glow blooms from OUTSIDE the border.
+function Skin:AnchorHandGrown(tex, icon, grow) return hgAnchor(tex, icon, grow) end
+
+-- The current style's border thickness (0 if no border) — the amount the outer glow
+-- must clear so a thick border can't bury it.
+function Skin:BorderGrow()
+  local bd = GB:GetStyle().border
+  return (bd and bd.enabled and (bd.thickness or 0) > 0) and bd.thickness or 0
+end
+
 -- Anchor a mask over the construction EXPANDED by `t` px on every side — for the
 -- border backing (a colored copy of the shape behind the icon that peeks out by
 -- `t`). Same padding compensation as AnchorConstructionMask, sized for the larger
 -- region so the shape silhouette lands on the border's outer edge.
 local function AnchorBorderMask(mask, icon, ext, t)
+  if handShapeKey then return hgAnchor(mask, icon, t) end
   local above = ExtensionAbove()
   local extT, extB = (above and ext or 0), (above and 0 or ext)
   local gx = (icon:GetWidth() + 2 * t) * GROW_RATIO
@@ -335,6 +401,9 @@ end
 -- The key lets callers skip a fresh-mask rebuild (source swaps never re-render —
 -- §2) when nothing shape-relevant changed (a plain re-anchor re-clips live).
 local function maskPlan(icon, ext)
+  if handShapeKey then
+    return GB.MEDIA .. "art\\hand\\" .. handShapeKey .. "-base.png", "hand:" .. handShapeKey
+  end
   local src = aspectMask(icon:GetWidth(), icon:GetHeight() + (ext or 0))
   return src, tostring(src or (GB.db and GB.db.shape))
 end
@@ -546,11 +615,18 @@ local function symbolizeHotkey(text)
   end
   return prefix .. text
 end
+-- Custom keybind master switch: the styling table exists AND enabled ~= false.
+-- Mac symbols are a SUB-feature of it (they only apply when it's on) — turning
+-- Custom keybind off returns the keybind to Blizzard's default, symbols and all.
+local function hotkeyEnabled()
+  local h = GB:GetStyle().hotkey
+  return h ~= nil and h.enabled ~= false
+end
 -- Rewrite a button's CURRENT hotkey text if the style opts in. Idempotent: once
 -- rewritten the text leads with "|T", so the [scam]- match no longer fires.
 local function symbolizeButton(btn)
   local hk = btn.HotKey
-  if not hk or (GB:GetStyle().keybindMods) ~= "symbols" then return end
+  if not hk or not hotkeyEnabled() or (GB:GetStyle().keybindMods) ~= "symbols" then return end
   local raw = hk:GetText()
   if raw and raw:match("^[scam]%-") then hk:SetText(symbolizeHotkey(raw)) end
 end
@@ -561,11 +637,14 @@ local function ApplyHotkeyOverride(btn)
   local icon = btn.icon or btn.Icon
   if not (rec and hk and icon) then return end
   local conf = GB:GetStyle().hotkey
-  if not conf then
+  if not conf or conf.enabled == false then
     if rec.hkOverridden then
-      -- Best-effort revert: Blizzard restores anchors/size; /reload is exact.
+      -- Full revert: restore the pristine font (Blizzard won't) + let Blizzard
+      -- re-anchor/re-size via UpdateHotkeys.
       rec.hkOverridden = nil
-      hk:SetJustifyH("RIGHT")
+      hk:SetJustifyH(rec.hkJustify or "RIGHT")
+      if rec.hkFont and rec.hkFont[1] then hk:SetFont(rec.hkFont[1], rec.hkFont[2], rec.hkFont[3] or "") end
+      if rec.hkColor then hk:SetTextColor(rec.hkColor[1], rec.hkColor[2], rec.hkColor[3], rec.hkColor[4] or 1) end
       if btn.UpdateHotkeys then btn:UpdateHotkeys(btn.buttonType) end
     end
     return
@@ -797,7 +876,9 @@ end
 -- then leaves it alone (mods != "symbols"), so nothing re-symbolizes it.
 function Skin:RefreshHotkeyText()
   if not self.enabled then return end
-  local symbols = (GB:GetStyle().keybindMods) == "symbols"
+  -- Symbols only render when Custom keybind is on; otherwise ask Blizzard to
+  -- re-set the plain (un-symbolized) text.
+  local symbols = (GB:GetStyle().keybindMods == "symbols") and hotkeyEnabled()
   GB:ForEachButton(function(btn)
     local rec = records[btn]
     if not (rec and rec.active and btn.HotKey) then return end
@@ -1182,6 +1263,10 @@ local function ApplyButton(btn)
     rec.mask = buildMask(btn, icon, ext0, src0)
     rec.maskKey = key0
     rec.texCoord = { icon:GetTexCoord() }
+    -- Capture the pristine keybind font/justify BEFORE we ever override it, so
+    -- turning Custom keybind OFF restores it exactly (Blizzard's UpdateHotkeys
+    -- re-anchors + re-sizes but never re-sets the font — API-NOTES §3).
+    if btn.HotKey then rec.hkFont = { btn.HotKey:GetFont() }; rec.hkJustify = btn.HotKey:GetJustifyH(); rec.hkColor = { btn.HotKey:GetTextColor() } end
     if btn.UpdateButtonArt then
       hooksecurefunc(btn, "UpdateButtonArt", function(b)
         if Skin.enabled then
@@ -1329,7 +1414,9 @@ local function RestoreButton(btn)
   if caf and caf.Fill and caf.Fill.CastFill then caf.Fill.CastFill:SetAlpha(1) end
   if rec.hkOverridden then
     rec.hkOverridden = nil
-    btn.HotKey:SetJustifyH("RIGHT")
+    btn.HotKey:SetJustifyH(rec.hkJustify or "RIGHT")
+    if rec.hkFont and rec.hkFont[1] then btn.HotKey:SetFont(rec.hkFont[1], rec.hkFont[2], rec.hkFont[3] or "") end
+    if rec.hkColor then btn.HotKey:SetTextColor(rec.hkColor[1], rec.hkColor[2], rec.hkColor[3], rec.hkColor[4] or 1) end
     if btn.UpdateHotkeys then btn:UpdateHotkeys(btn.buttonType) end
   end
   rec.active = false

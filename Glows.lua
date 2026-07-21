@@ -44,8 +44,20 @@ local function tintFor(key)
 end
 
 local glows = {}      -- [button] = { frame, tex, anim }
-local sources = {}    -- [button] = { alert = "gold"|"assist"|nil, assist = true|nil }
+local sources = {}    -- [button] = { alert = "gold"|"assist"|nil, assist = true|nil, test = "gold"|nil }
 local silenced = {}   -- [blizzard frame] = true — frames we alpha-0'd
+
+-- DEV glow-comparison harness (session 8): /gb glowtest force-shows the halo out
+-- of combat (procs are too fast to study live) and /gb glowstyle swaps in a
+-- candidate profile PNG. testArt overrides the normal shape art while set.
+local testArt
+local forceScale   -- test: pin the glow scale to the candidates' design scale so
+                   -- a stray Size-slider value can't throw off the shape fit
+local function currentGlowTex()
+  return testArt
+    or (GB.Skin and GB.Skin.GlowArt and GB.Skin:GlowArt())
+    or GB:GetShape().glow
+end
 
 -- The spell-alert manager ALSO fires for Midnight's Cooldown Viewer frames, whose
 -- geometry is a SECRET combat value — reading it (e.g. Icon:GetWidth() * scale)
@@ -65,7 +77,7 @@ end
 -- the extension — not just the icon. Reuses Skin's overlay anchoring (same math as
 -- the ring/sweep); falls back to the icon alone if Skin isn't up yet.
 local function anchorGlow(frame, icon)
-  local ratio = (glowScale() - 1) / 2
+  local ratio = ((forceScale or glowScale()) - 1) / 2
   if GB.Skin and GB.Skin.AnchorOverlay then
     GB.Skin:AnchorOverlay(frame, icon, ratio)
   else
@@ -87,7 +99,7 @@ local function GetGlow(btn)
     anchorGlow(frame, icon)
     local tex = frame:CreateTexture(nil, "OVERLAY")
     tex:SetAllPoints()
-    tex:SetTexture((GB.Skin and GB.Skin.GlowArt and GB.Skin:GlowArt()) or GB:GetShape().glow)
+    tex:SetTexture(currentGlowTex())
     tex:SetBlendMode("ADD")
     local anim = frame:CreateAnimationGroup()
     anim:SetLooping("BOUNCE")
@@ -123,7 +135,7 @@ local function Refresh(btn)
   local s = sources[btn]
   local g = GetGlow(btn)
   if not g then return end
-  local tintKey = s and (s.assist and "assist" or s.alert) or nil
+  local tintKey = s and (s.assist and "assist" or s.alert or s.test) or nil
   if tintKey then
     local tint = tintFor(tintKey)
     g.tex:SetVertexColor(tint[1], tint[2], tint[3])
@@ -221,9 +233,96 @@ end
 -- SetTexture (no mask quirk), so it swaps live. Called from Skin:SetShape — the
 -- glow texture was previously set only at creation, so it went stale on a reshape.
 function Glows:RefreshShape()
-  local tex = (GB.Skin and GB.Skin.GlowArt and GB.Skin:GlowArt()) or GB:GetShape().glow
+  local tex = currentGlowTex()
   for btn, g in pairs(glows) do
     if isOurs(btn) then g.tex:SetTexture(tex) end
+  end
+end
+
+-- DEV: force the halo on (or off) for every button so it can be studied out of
+-- combat. Uses a dedicated "test" source so it never collides with real procs.
+function Glows:ForceTest(on)
+  self:Init()
+  forceScale = on and GLOW_SCALE or nil   -- pin the design scale while previewing
+  GB:ForEachButton(function(btn) SetSource(btn, "test", on and "gold" or nil) end)
+  for btn, g in pairs(glows) do
+    if isOurs(btn) then local ic = btn.icon or btn.Icon; if ic then anchorGlow(g.frame, ic) end end
+  end
+  return on
+end
+
+-- DEV: swap the glow art to a candidate profile ("0"/"A"/"B"/"C"), or nil to
+-- restore the real shape art. Re-points every existing halo live.
+function Glows:SetTestArt(key)
+  testArt = key and (GB.MEDIA .. "art\\gbtest-glow-" .. key .. ".png") or nil
+  local tex = currentGlowTex()
+  for btn, g in pairs(glows) do
+    if isOurs(btn) then g.tex:SetTexture(tex) end
+  end
+  return key
+end
+
+-- DEV (Phase 3 milestone 1): draw Jason's hand-authored MULTI-PART glow — outer
+-- UNDER the icon (perfect outward falloff) + inner OVER it (interior tint) — tinted,
+-- on every button. Isolated from the proc engine so it can't destabilize it. Anchored
+-- per the hand-asset canvas convention: the shape sits in a 256-of-512 reference rect
+-- with a 128px margin, so the glow frame = icon expanded by 0.5x the icon's short side
+-- on every side (which maps the reference rect onto the icon). Set the matching icon
+-- shape first so the silhouettes line up. /gb handglow <square|pill32|off>.
+local handGlows = {}   -- [btn] = { outer, innerFrame, inner }
+function Glows:HandPreview(shape, color)
+  local art = shape and {
+    outer = GB.MEDIA .. "art\\hand\\" .. shape .. "-outer.png",
+    inner = GB.MEDIA .. "art\\hand\\" .. shape .. "-inner.png",
+  }
+  local c = color or { 1, 0.82, 0.3 }   -- gold, like a proc
+  GB:ForEachButton(function(btn)
+    local icon = btn.icon or btn.Icon
+    if not icon then return end
+    local hg = handGlows[btn]
+    if not art then
+      if hg then hg.outer:Hide(); hg.inner:Hide() end
+      return
+    end
+    if not hg then
+      hg = {}
+      -- Outer: a texture UNDER the icon (blooms out from behind). Inner: on its OWN
+      -- frame ABOVE the gradient plate (rec.decorFrame = btn+2), so the glow wins over
+      -- any gradient. (Text lives at frameLevel 500, so +5 stays below the keybind/count.)
+      hg.outer = btn:CreateTexture(nil, "BACKGROUND", nil, -2)
+      hg.innerFrame = CreateFrame("Frame", nil, btn)
+      hg.innerFrame:SetFrameLevel(btn:GetFrameLevel() + 5)
+      hg.inner = hg.innerFrame:CreateTexture(nil, "OVERLAY")
+      hg.outer:SetBlendMode("BLEND")   -- colored glow (matches the approved preview)
+      hg.inner:SetBlendMode("BLEND")
+      -- Blizzard disables pixel snapping on their glow/highlight textures to avoid
+      -- sub-pixel edge seams (see the TargetReticle Highlight in the template); the
+      -- inner glow's hard outer edge needs the same or it seams on fractional pixels.
+      for _, t in ipairs({ hg.outer, hg.inner }) do
+        t:SetSnapToPixelGrid(false); t:SetTexelSnappingBias(0)
+      end
+      handGlows[btn] = hg
+    end
+    -- Outer glow blooms from OUTSIDE the border (grown by the border thickness) so a
+    -- thick border can't bury the glow's brightest edge. Inner glow overshoots the icon
+    -- rim by ~2px to hide the hard-edge seam. Both use the per-axis hand anchor so caps
+    -- stay round on elongated shapes.
+    local bg = (GB.Skin and GB.Skin.BorderGrow and GB.Skin:BorderGrow()) or 0
+    if GB.Skin and GB.Skin.AnchorHandGrown then
+      GB.Skin:AnchorHandGrown(hg.outer, icon, bg)
+      GB.Skin:AnchorHandGrown(hg.inner, icon, 2)
+    else
+      local m = 0.5 * math.min(icon:GetWidth(), icon:GetHeight())
+      for _, t in ipairs({ hg.outer, hg.inner }) do
+        t:ClearAllPoints(); t:SetPoint("TOPLEFT", icon, "TOPLEFT", -m, m); t:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", m, -m)
+      end
+    end
+    hg.outer:SetTexture(art.outer); hg.inner:SetTexture(art.inner)
+    hg.outer:SetVertexColor(c[1], c[2], c[3]); hg.inner:SetVertexColor(c[1], c[2], c[3])
+    hg.outer:Show(); hg.inner:Show()
+  end)
+  if GB.Skin and GB.Skin.RecolorBorders then
+    GB.Skin:RecolorBorders(art and c or nil)   -- border adopts the glow colour when present
   end
 end
 

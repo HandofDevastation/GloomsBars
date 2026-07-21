@@ -1,14 +1,104 @@
 # Gloom's Bars — Session Handoff
-**Last updated: end of session 7 (2026-07-20). Base: `5b7e8c7` (session 6, committed). Session-7 work is
-committed in THIS commit — modified `Core.lua` `Skin.lua` `Config.lua` `tools/generate-art.py` + 196
-regenerated `Media/art/*-ring.png` (bolder highlight rings). Git history holds the older narrative; this
-file is the current-state snapshot. ⇒ Read SESSION 7 first (preview plate/extension + Glow width + the
-whole Cooldown & availability section), then SESSION 6 (Config wiring/proc-glow), then 5/4/3/2.**
+**Last updated: end of session 8 (2026-07-21). ⇒ Read SESSION 8 FIRST — it is a MAJOR pivot (the
+"shaped-glow rebuild": free width/height is being REPLACED by 21 hand-authored preset shapes, and the
+glow is being rebuilt as a multi-part outer+inner+border system). Then read the new docs it produced —
+[SHAPE-CATALOG.md](SHAPE-CATALOG.md) (Phase 1, FROZEN), [EFFECTS-MATRIX.md](EFFECTS-MATRIX.md) (Phase 2),
+[ART-SPEC.md](ART-SPEC.md) (the hand-asset spec + naming). Sessions 2–7 below are the still-valid skin/
+Config foundation, but the glow/shape parts of them are being superseded by session 8.**
 
-## ▶ FIRST THING NEXT SESSION: nothing is mid-flight — pick from the ▶▶ NEXT list.
-Session 7 ended clean (Jason: "That's much better"). Everything built this session was QA'd in-game and is
-listed under SESSION 7. NEXT #1 from session 6 (render plate/extension in the preview) is DONE. The whole
-"Cooldown & availability" section is built + QA'd. No un-verified builds are pending. Start from ▶▶ NEXT.
+## ▶ FIRST THING NEXT SESSION (session 9): pick up at SESSION 8 → "▶▶ NEXT (session 9)".
+Session 8 built + QA'd the ENTIRE shaped-render foundation as a DEV PREVIEW (`/gb handshape <key>`): for any
+of the 21 hand shapes, the icon clips to it AND the gradient + border + glow all follow it. Validated
+in-game on diamond (pointy) and pill32 with a thick border (round caps, glow clears the border). Jason:
+"That works better." **Nothing is mid-flight; the preview works.** The remaining work is turning the preview
+into the real thing (wire to triggers, real shape picker, animation) — see the session-8 NEXT list.
+
+## ★★★ SESSION 8 (2026-07-21) — THE SHAPED-GLOW REBUILD (major pivot; all QA'd; UNCOMMITTED until this commit)
+A long, decisive session. We reframed the whole shape/glow model, and built + validated the render foundation
+in-game as a dev preview. Structured into phases at Jason's request (he wanted a frozen plan, not reactive
+feature-chasing — see memory `work-structured-catalog-first`).
+
+**THE PIVOT (settled with Jason, do not reopen):** free width/height sizing produced warped glows/overlays
+on stretched shapes (a stretched *round* glow ovals; a pill glow on a square; etc. — no profile tweak fixes
+a SILHOUETTE mismatch). So: **free width/height is REMOVED → a fixed catalog of 21 hand-authored preset
+shapes + one uniform size scale.** Each shape's icon mask + glow + overlays are cut from ONE silhouette, so
+they can't mismatch. Icons never stretch (crop-to-fill; the Icon-zoom slider stays).
+
+**Phase 1 — SHAPE CATALOG, FROZEN → [docs/SHAPE-CATALOG.md].** 21 silhouettes: 1:1 = circle, square,
+rounded-square ×3 curvatures (keys `roundsq1/2/3`), hexagon, diamond, tombstone, tombstone-inv; elongated
+PORTRAIT at 2:1 & 3:2 = pill, square, rounded-square ×3 (keys `pill32/pill21/square32/square21/roundsqN-32/
+roundsqN-21`); square LANDSCAPE at 2:1 & 3:2 (`square32w/square21w`). Gradient overlay on ALL shapes; plate
+extension only on portrait-elongated (keeps icon square). Details/defaults in the doc.
+
+**Phase 2 — EFFECTS ACCOUNTING → [docs/EFFECTS-MATRIX.md].** Every Blizzard button visual, pulled from the
+client templates + API-NOTES, mapped to what we do. **Surfaced 3 un-handled GAPS** (square art leaking over
+shaped icons): `SpellHighlightTexture` (pulsing "press this"), `CooldownFlash` (GCD flipbook), `NewActionTexture`
+— plus the known flyout-bg gap. Also documents the DECIDED multi-part glow architecture (below).
+
+**★ Multi-part glow architecture (Jason's design, validated).** Every glow = the SAME 3 parts, differing only
+by tint + trigger: **outer glow** (a texture UNDER the icon → perfect outward falloff, the icon hides the
+solid centre), **inner glow** (OVER the gradient → tints the interior edge, fades to a clean centre),
+**border recolour** (the Border decoration adopts the glow colour). SUPERSEDES the old single soft-bloom +
+the separate state ring. One tintable WHITE pair per shape does procs / hover / cast / finish.
+
+**★ Hand-authored assets (Jason makes them in Figma; ALL 21 done, imported to `Media/art/hand/`).** Spec +
+naming in [docs/ART-SPEC.md]: per shape, 3 files `<key>-base/-outer/-inner.png`, greyscale/white on
+transparent (engine tints). Canvas = a 256-short-side icon reference rect centred in a 128px-margin-all-sides
+canvas (1:1 → 512², 3:2 portrait → 512×640, 2:1 → 512×768, landscape swapped). `base` = the icon MASK,
+`outer/inner` = the glow. Border + cooldown swipe are engine-derived from the base; state ring is gone.
+Jason's originals live at `~/Desktop/gb_assets`; imported+keyed copies in `Media/art/hand/` (63 files).
+
+**★★ HARD-WON LEARNINGS this session (do NOT rediscover):**
+- **Mask textures need WHITE rgb, not just alpha.** Figma exports transparent regions as BLACK rgb (0,0,0,0);
+  the SDF masks are (255,255,255,0). WoW's `CLAMPTOBLACKADDITIVE` mask reads luminance, so a black-matted base
+  **won't clip**. Fix applied: a script forced RGB→255 (alpha untouched) on all `Media/art/hand/*-base.png`.
+  If Jason re-exports a base, re-whiten its RGB.
+- **The border + gradient were masking to the OLD shape and HID the correctly-clipped icon** — this cost ~6
+  debug rounds (everything looked "square" because the border/gradient still drew square). The mask worked all
+  along. Lesson: when a hand shape is active, EVERYTHING masked (icon, gradient plate, border) must route to
+  the hand base — which is now what `handShapeKey` does.
+- **Non-square shapes need PER-AXIS mask/glow growth.** The base's silhouette fills a different FRACTION of the
+  canvas per axis (short 0.5, long long/(long+256)), so a uniform border/glow margin flattens a pill's caps.
+  `hgAnchor(tex, icon, grow)` compensates per axis (short adds 2·grow, long adds grow·(aspect+1)/aspect) so the
+  edge lands exactly `grow` px out on every side; caps stay round. Used for icon (grow 0), border (grow=t), and
+  the outer glow grows by the border thickness so a thick border can't bury it.
+
+**Engine wiring (all in this commit):**
+- `Skin.lua`: `handShapeKey` (module state) → `maskPlan` sources `hand\<key>-base.png`; `AnchorConstructionMask`
+  + `AnchorBorderMask` defer to `hgAnchor` while it's set, so icon + plate + border all mask to the hand shape
+  through the PROVEN ApplyDecor rebuild. `Skin:SetHandShape(key)` = set key + ReapplyDecor. `Skin:AnchorHandGrown`
+  / `Skin:BorderGrow` expose the anchor + border thickness to the glow engine. `Skin:RecolorBorders(color)` =
+  border adopts the glow colour.
+- `Glows.lua`: `Glows:HandPreview(shape, color)` draws the multi-part glow (outer BACKGROUND-2 under icon; inner
+  on its own frame btn+5 ABOVE the gradient; both BLEND, tinted, pixel-snap off; outer grows by BorderGrow,
+  inner +2px to hide the hard-edge seam) + calls RecolorBorders. `Glows:ForceTest`/`SetTestArt` are the older
+  glow-bake-off harness (kept).
+- `Core.lua`: `/gb handshape <key|off>` (mask icon+border+gradient to the hand shape + glow on — the main
+  preview), `/gb handglow <key|off>` (glow only), `/gb glowtest`, `/gb glowstyle 0|A|B|C` (bake-off leftovers).
+  `HAND_KEYS` lists the 21.
+- `tools/generate-art.py`: `gen_test` + `glow_A/B/C` (the bake-off candidate profiles; `Media/art/gbtest-glow-*`
+  — dev scaffolding, can be deleted once the hand glows are wired to triggers).
+
+**Current state:** `/gb handshape <key>` is a full dev preview of the finished look for any of the 21 shapes.
+It is NOT yet: (a) wired to real triggers (glow is force-on), (b) selectable in Config, (c) persistent
+(handShapeKey is session-only, not saved to db). The old SDF/aspect shape system is still in place underneath;
+hand shapes ride ON TOP via handShapeKey.
+
+## ▶▶ NEXT (session 9) — in priority order
+1. **Wire the multi-part glow to REAL triggers** — replace the old single-bloom (`Glows.lua` proc engine) +
+   the state ring so the outer+inner+border-recolour glow fires on procs (gold), hover/selected (tinted, from
+   the state highlight paths), cast (lime), and the finish flash. Currently it's force-on via `HandPreview`;
+   make it event-driven and per-shape. This is the payoff (shaped glow on a real proc).
+2. **Real shape selection + persistence** — make `handShapeKey` come from `GB.db` (a real setting, applied at
+   skin/decor time, surviving /reload), Config picker lists the 21 presets, REMOVE the free width/height
+   sliders, add the uniform size scale. Retire/replace the SDF shape path for the icon where it's superseded.
+3. **Animation layer** — the rotating-shine chase (Jason misses it): a bright comet masked to the shape's rim,
+   rotating; works on any silhouette, cheap (one shared shine texture + a rim mask). Layers on the static glow.
+4. **Close the effects-matrix GAPS** — suppress/shape `SpellHighlightTexture`, `CooldownFlash` (GCD flipbook),
+   `NewActionTexture`; flyout background (long-deferred).
+- Cleanup anytime: delete the `gbtest-glow-*` bake-off assets + `/gb glowstyle`/`glowtest` once triggers are
+  wired; the per-axis border assumes the icon aspect matches the shape aspect (true once the shape picker sets
+  the aspect — for the dev preview Jason sets a matching icon size by hand).
 
 ## ✔ SETTLED (session 7): Blizzard's cooldown EDGE + finish BLING can't be shaped — don't re-attempt.
 The cooldown SWEEP follows the shape via its swipe-texture alpha (works). But the rotating EDGE line and the

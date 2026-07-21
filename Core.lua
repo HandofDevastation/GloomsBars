@@ -767,6 +767,14 @@ end
 -- ---------------------------------------------------------------------------
 SLASH_GLOOMSBARS1 = "/gb"
 SLASH_GLOOMSBARS2 = "/gloomsbars"
+local glowTestOn = false   -- /gb glowtest force-preview state (session 8 glow bake-off)
+-- The 21 hand-authored silhouette keys (docs/ART-SPEC.md) for the Phase 3 previews.
+local HAND_KEYS = {}
+for _, k in ipairs({
+  "circle", "square", "roundsq1", "roundsq2", "roundsq3", "hexagon", "diamond", "tombstone", "tombstone-inv",
+  "pill32", "pill21", "square32", "square21", "square32w", "square21w",
+  "roundsq1-32", "roundsq1-21", "roundsq2-32", "roundsq2-21", "roundsq3-32", "roundsq3-21",
+}) do HAND_KEYS[k] = true end
 SlashCmdList.GLOOMSBARS = function(input)
   local cmd, arg = (input or ""):lower():match("^%s*(%S*)%s*(%S*)")
   if cmd == "" or cmd == "config" or cmd == "ui" then
@@ -799,6 +807,46 @@ SlashCmdList.GLOOMSBARS = function(input)
     HotkeyInfo()
   elseif cmd == "glowinfo" then
     GlowInfo()
+  elseif cmd == "glowtest" then
+    glowTestOn = not glowTestOn
+    if GB.Glows then GB.Glows:ForceTest(glowTestOn) end
+    msg(("proc-glow force-preview %s%s"):format(glowTestOn and "|cff59ff59ON|r" or "|cffff5555OFF|r",
+      glowTestOn and " — now run /gb glowstyle 0|A|B|C to compare (off = real art)" or ""))
+  elseif cmd == "handshape" then
+    local key = (arg or ""):lower()
+    if key == "" or key == "off" then
+      if GB.Skin then GB.Skin:SetHandShape(nil) end
+      if GB.Glows then GB.Glows:HandPreview(nil) end
+      msg("hand-shape preview OFF (/reload for an exact restore).")
+    elseif HAND_KEYS[key] then
+      if GB.Skin then GB.Skin:SetHandShape(key) end
+      if GB.Glows then GB.Glows:HandPreview(key) end
+      msg(("hand-shape '%s' — icon, border & gradient all masked to it + glow on."):format(key))
+    else
+      msg("unknown key '" .. key .. "'. See docs/ART-SPEC.md for the 21 keys (e.g. diamond, tombstone, roundsq2-32).")
+    end
+  elseif cmd == "handglow" then
+    local key = (arg or ""):lower()
+    if key == "" or key == "off" then
+      if GB.Glows then GB.Glows:HandPreview(nil) end
+      msg("hand-glow preview OFF.")
+    elseif HAND_KEYS[key] then
+      if GB.Glows then GB.Glows:HandPreview(key) end
+      msg(("hand-glow '%s' ON (glow only; use handshape to also mask the icon)."):format(key))
+    else
+      msg("unknown key. See docs/ART-SPEC.md for the 21 keys.")
+    end
+  elseif cmd == "glowstyle" then
+    local key = (arg or ""):upper()
+    if key == "" or key == "OFF" or key == "NONE" then
+      if GB.Glows then GB.Glows:SetTestArt(nil) end
+      msg("glow art restored to the real shape art.")
+    elseif key == "0" or key == "A" or key == "B" or key == "C" then
+      if GB.Glows then GB.Glows:SetTestArt(key) end
+      msg(("glow candidate '%s' applied  (0 = current · A = radiant · B = nova · C = aura)"):format(key))
+    else
+      msg("usage: /gb glowstyle 0|A|B|C|off")
+    end
   elseif cmd == "shape" then
     if arg ~= "" and GB.SHAPES[arg] then
       GB.db.shape = arg
@@ -826,6 +874,8 @@ SlashCmdList.GLOOMSBARS = function(input)
   else
     msg("v" .. GB:Version() .. " — commands:")
     print("  /gb skin — toggle the skin on all 8 action bars (persists)")
+    print("  /gb glowtest — force the proc glow ON to study it out of combat (toggle)")
+    print("  /gb glowstyle 0|A|B|C|off — swap proc-glow candidate profiles to compare")
     print("  /gb shape <name> — pick the icon shape (circle, roundrect, …); applies on /reload")
     print("  /gb style <name> — pick a decoration style (none, plate, …); applies live")
     print("  /gb sweep <px> — tune how far the cooldown sweep overshoots the icon edge")

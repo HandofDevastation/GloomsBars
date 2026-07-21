@@ -283,14 +283,59 @@ local function fontFlyoutFrame()
   fly:SetFrameStrata("FULLSCREEN_DIALOG"); fly:SetSize(210, 300)
   skinPlate(fly); addEdges(fly, COLOR.rim, 1)
   local scroll = CreateFrame("ScrollFrame", nil, fly)
-  scroll:SetPoint("TOPLEFT", 5, -5); scroll:SetPoint("BOTTOMRIGHT", -5, 5)
+  scroll:SetPoint("TOPLEFT", 5, -5); scroll:SetPoint("BOTTOMRIGHT", -13, 5)
   scroll:EnableMouseWheel(true)
-  local child = CreateFrame("Frame", nil, scroll); child:SetSize(200, 10)
+  local child = CreateFrame("Frame", nil, scroll); child:SetSize(190, 10)
   scroll:SetScrollChild(child)
+
+  -- Custom thin scrollbar on the right edge (family look — no Blizzard widget).
+  local sb = CreateFrame("Frame", nil, fly)
+  sb:SetPoint("TOPRIGHT", -5, -6); sb:SetPoint("BOTTOMRIGHT", -5, 6); sb:SetWidth(4)
+  local track = sb:CreateTexture(nil, "BACKGROUND"); track:SetAllPoints(); track:SetColorTexture(1, 1, 1, 0.06)
+  local thumb = CreateFrame("Button", nil, sb); thumb:SetWidth(4); thumb:SetHeight(24); thumb:SetPoint("TOP", 0, 0)
+  local thumbTex = thumb:CreateTexture(nil, "ARTWORK"); thumbTex:SetAllPoints()
+  thumbTex:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 0.55)
+
+  -- Geometry from fly's EXPLICIT height (set on open) — never read anchor-derived
+  -- heights before layout resolves. Returns viewport height, track height.
+  local function metrics() local h = fly:GetHeight(); return h - 10, h - 12 end
+  local function updateThumb()
+    local sh, trackH = metrics()
+    local ch = child:GetHeight()
+    local range = math.max(0, ch - sh)
+    if range <= 0.5 or ch <= 0 then thumb:Hide(); return end
+    thumb:Show()
+    local th = math.max(24, trackH * (sh / ch))
+    thumb:SetHeight(th)
+    local scrolled = math.min(range, math.max(0, scroll:GetVerticalScroll()))
+    thumb:ClearAllPoints(); thumb:SetPoint("TOP", sb, "TOP", 0, -(scrolled / range) * (trackH - th))
+  end
+  fly.updateThumb = updateThumb
+
   scroll:SetScript("OnMouseWheel", function(self, delta)
     local range = math.max(0, child:GetHeight() - self:GetHeight())
     self:SetVerticalScroll(math.max(0, math.min(range, self:GetVerticalScroll() - delta * 34)))
+    updateThumb()
   end)
+
+  -- Drag the thumb to scroll.
+  thumb:SetScript("OnMouseDown", function(self)
+    local _, cy = GetCursorPosition()
+    self.grabY, self.grabScroll, self.grabbing = cy, scroll:GetVerticalScroll(), true
+  end)
+  thumb:SetScript("OnMouseUp", function(self) self.grabbing = false end)
+  thumb:SetScript("OnUpdate", function(self)
+    if not self.grabbing then return end
+    local _, cy = GetCursorPosition()
+    local sh, trackH = metrics()
+    local usable = trackH - self:GetHeight()
+    local range = math.max(0, child:GetHeight() - sh)
+    if usable <= 0 or range <= 0 then return end
+    local dy = (self.grabY - cy) / sb:GetEffectiveScale()
+    scroll:SetVerticalScroll(math.max(0, math.min(range, self.grabScroll + (dy / usable) * range)))
+    updateThumb()
+  end)
+
   catcher:SetScript("OnClick", function() catcher:Hide() end)
   fly.catcher, fly.scroll, fly.child, fly.rows = catcher, scroll, child, {}
   fontFlyout = fly
@@ -327,7 +372,14 @@ local function openFontFlyout(anchor, current, onPick)
   fly.child:SetHeight(math.max(10, #names * ROW_H + 4))
   fly:SetHeight(math.min(300, #names * ROW_H + 10))   -- snug for short lists, scroll past ~13
   fly:ClearAllPoints(); fly:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, -2)
-  fly.scroll:SetVerticalScroll(0)
+  -- Open scrolled so the CURRENT font sits mid-view (not always the top of a long list).
+  local sel = 1
+  for i, name in ipairs(names) do if name == current then sel = i; break end end
+  local sh = fly:GetHeight() - 10
+  local range = math.max(0, fly.child:GetHeight() - sh)
+  local target = (sel - 1) * ROW_H - (sh - ROW_H) / 2
+  fly.scroll:SetVerticalScroll(math.max(0, math.min(range, target)))
+  fly.updateThumb()
   fly.catcher:Show()
 end
 
@@ -636,9 +688,13 @@ end
 local function hotkeyData() local st = GB.db and GB.db.styleData; return st and st.hotkey end
 local function ensureHotkey()
   local st = GB.db and GB.db.styleData; if not st then return nil end
-  st.hotkey = st.hotkey or { zone = "extension", offsetX = 0, offsetY = 0, size = 13, font = "GeneralSans SemiBold", flags = "OUTLINE", color = { 1, 1, 1 } }
+  st.hotkey = st.hotkey or { enabled = true, zone = "extension", offsetX = 0, offsetY = 0, size = 13, font = "GeneralSans SemiBold", flags = "OUTLINE", color = { 1, 1, 1 } }
   return st.hotkey
 end
+-- Custom-keybind ON = the table exists AND enabled ~= false. Toggling off keeps
+-- the styling table (enabled=false) so the user's font/size/color/position all
+-- persist and come back when re-enabled. Legacy tables (no `enabled`) read as on.
+local function hotkeyOn() local h = hotkeyData(); return h ~= nil and h.enabled ~= false end
 
 -- Construction — the extension zone below the icon (extra plate real estate). A
 -- lighter re-anchor (ReapplyDecor) applies it; no mask recreation needed.
@@ -808,8 +864,8 @@ local function buildTextSection(bf, s)
 
   local lab = newText(bf, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 18, -14); lab:SetText("Custom keybind")
   local en = makeToggle(bf,
-    function() return hotkeyData() ~= nil end,
-    function(v) local st = GB.db.styleData; if v then ensureHotkey() elseif st then st.hotkey = nil end; reapply(); s.refresh() end)
+    hotkeyOn,
+    function(v) local h = ensureHotkey(); if h then h.enabled = v and true or false end; reapply(); if GB.Skin then GB.Skin:RefreshHotkeyText() end; s.refresh() end)
   en:SetPoint("TOPRIGHT", -18, -12)
 
   local clab = newText(bf, FONT.body, 12, TEXT, "LEFT"); clab:SetPoint("TOPLEFT", 18, -46); clab:SetText("Color")
@@ -854,9 +910,10 @@ local function buildTextSection(bf, s)
     function(v) local h = ensureHotkey(); h.offsetY = v; reapply() end,
     function(v) return v .. "px" end)
 
-  -- Modifiers — INDEPENDENT of the styling override above: swap the keybind's
-  -- modifier prefixes (m-/s-/c-/a-) for Mac symbols (⌘⇧⌃⌥), hyphen removed.
-  -- Works whether or not Custom keybind is on; stored per style (keybindMods).
+  -- Modifiers — a SUB-feature of Custom keybind: swap the keybind's modifier
+  -- prefixes (m-/s-/c-/a-) for Mac symbols (⌘⇧⌃⌥), hyphen removed. Only renders
+  -- while Custom keybind is on (greyed + inert when off); stored per style
+  -- (keybindMods) so the choice persists across the master toggle.
   local mhdr = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); mhdr:SetPoint("TOPLEFT", 18, -306); mhdr:SetText("MODIFIERS")
   local mlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); mlab:SetPoint("TOPLEFT", 18, -336); mlab:SetText("Mac symbol icons")
   local modTog = makeToggle(bf,
@@ -869,17 +926,18 @@ local function buildTextSection(bf, s)
 
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
   hint:SetPoint("TOPLEFT", 18, -366); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("Color/size/font/position need Custom keybind on. Mac symbol icons work on their own — ⌘/⇧/⌥/⌃ replace m-/s-/… (macOS binds).")
+  hint:SetText("Everything here needs Custom keybind on. Mac symbol icons replace m-/s-/c-/a- prefixes with ⌘/⇧/⌃/⌥ (macOS binds).")
   bf:SetHeight(404)
   s.refresh = function()
     local h = hotkeyData()
-    local on = h ~= nil
+    local on = hotkeyOn()
     en:refresh(); cs:refresh(); sizeRow:refresh(); oxRow:refresh(); oyRow:refresh()
     fontBtn:refresh(); modTog:refresh()
-    -- Grey the styling controls when the override is off (Mac symbols stay live).
+    -- Grey the styling controls when the override is off (Mac symbols gate on it too now).
     cs.swatch:EnableMouse(on); cs.swatch:SetAlpha(on and 1 or 0.35)
     sizeRow:setEnabled(on); oxRow:setEnabled(on); oyRow:setEnabled(on)
     fontBtn:SetEnabled(on)
+    modTog:SetEnabled(on); modTog:SetAlpha(on and 1 or 0.35)
     for _, e in ipairs(zoneBtns) do e.b:SetActive(on and (h.zone or "extension") == e.z); e.b:SetEnabled(on) end
   end
 end
