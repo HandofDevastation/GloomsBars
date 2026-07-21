@@ -244,23 +244,30 @@ end
 -- hand shape is active (the norm), else the old single soft-bloom fallback.
 local PULSING = { assist = true, gold = true, flash = true, test = true }
 local STATE_KEY = { flash = true, selected = true, hover = true }
+-- Cast/channel glow tints (gold cast / lime channel), matching the old inner glow.
+local CAST_TINT_G = { cast = { 1, 0.85, 0.4 }, channel = { 0.6, 1, 0.4 } }
+-- Resolve the current tint/pulse/peak for a button's winning source. `cast` carries
+-- its type ("cast"/"channel") so its tint is picked here rather than via tintFor.
+local function resolveGlow(s, tintKey)
+  if tintKey == "cast" then
+    return (CAST_TINT_G[s.cast] or CAST_TINT_G.cast), false, glowPeak()   -- steady halo; fill shows progress
+  end
+  local peak = STATE_KEY[tintKey] and ((GB.db and GB.db.stateIntensity) or 1) or glowPeak()
+  return tintFor(tintKey), PULSING[tintKey], peak
+end
 local function Refresh(btn)
   local s = sources[btn]
-  local tintKey = s and ((s.assist and "assist") or s.alert or (s.flash and "flash")
-    or (s.selected and "selected") or (s.hover and "hover") or s.test) or nil
+  local tintKey = s and ((s.assist and "assist") or s.alert or (s.cast and "cast")
+    or (s.flash and "flash") or (s.selected and "selected") or (s.hover and "hover") or s.test) or nil
   if GB.db and GB.db.handShape then
-    if tintKey then
-      local peak = STATE_KEY[tintKey] and ((GB.db and GB.db.stateIntensity) or 1) or glowPeak()
-      applyHandGlow(btn, tintFor(tintKey), PULSING[tintKey], peak)
-    else
-      hideHandGlow(btn)
-    end
+    if tintKey then applyHandGlow(btn, resolveGlow(s, tintKey))
+    else hideHandGlow(btn) end
     return
   end
   local g = GetGlow(btn)
   if not g then return end
   if tintKey then
-    local tint = tintFor(tintKey)
+    local tint = resolveGlow(s, tintKey)
     g.tex:SetVertexColor(tint[1], tint[2], tint[3])
     if not g.frame:IsShown() then g.frame:Show(); g.anim:Play() end
   elseif g.frame:IsShown() then
@@ -452,6 +459,13 @@ function Glows:RefreshState()
   for btn, s in pairs(sources) do
     if isOurs(btn) and (s.hover or s.selected or s.flash) then Refresh(btn) end
   end
+end
+
+-- Cast/channel shaped glow: set from the PlaySpellCastAnim hook (castType =
+-- "cast"/"channel") and cleared (nil) when the cast ends. A steady lime/gold
+-- casting halo; the drain fill (Skin) shows progress separately.
+function Glows:SetCast(btn, castType)
+  if isOurs(btn) then SetSource(btn, "cast", castType) end
 end
 function Glows:SetIntensity(v) if GB.db then GB.db.glowIntensity = v end; self:ApplyStyle() end
 function Glows:SetSize(v) if GB.db then GB.db.glowScale = v end; self:ApplyStyle() end

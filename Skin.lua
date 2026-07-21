@@ -508,6 +508,7 @@ end
 
 local function CastFillOnUpdate(f, elapsed)
   if f.blizzFill then f.blizzFill:SetAlpha(0) end
+  if f.innerGlow then f.innerGlow:SetAlpha(0) end   -- hand shape: shaped glow replaces the rounded-square inner glow
   -- InterruptDisplay (the red rounded-square cancel flash, atlas UI-HUD-ActionBar-
   -- Interrupt) plays right at cast-cancel — inside the grace below — so keep it
   -- suppressed each frame too. Its anim re-drives alpha, hence per-frame.
@@ -523,6 +524,9 @@ local function CastFillOnUpdate(f, elapsed)
     if hs then s, e, channel = hs, he, true end
   end
   if not (s and e and e > s) then
+    -- Cast ended: clear the shaped casting glow (success or cancel — the burst,
+    -- below, is a separate one-shot).
+    if f.gbBtn and GB.Glows and GB.Glows.SetCast then GB.Glows:SetCast(f.gbBtn, nil) end
     -- Cast ended BEFORE completing (interrupted/cancelled)? Replay Blizzard's real
     -- completion burst, red. A clean finish (lastP ≈ 1) does nothing here — its own
     -- (gold) EndBurst already played.
@@ -607,7 +611,12 @@ local function styleCast(btn, rec, icon, castType)
   f.tex:SetVertexColor(col[1], col[2], col[3], a)
   f.dir = (GB.db and GB.db.castDrainDir) or "up"
   f.cast = cast                                    -- for the cancel → red EndBurst replay
+  f.gbBtn = btn                                    -- for clearing the "cast" shaped glow at cast end
   f.blizzFill = cast.Fill and cast.Fill.CastFill   -- OnUpdate force-suppresses this each frame
+  -- Hand shape: the shaped multi-part glow (Glows "cast" source) replaces Blizzard's
+  -- inner glow, so suppress it EACH FRAME too (its cast anim re-drives the alpha, so
+  -- the one-shot in StyleCastInnerGlow alone leaves a rounded-square overlay).
+  f.innerGlow = hk and cast.Fill and cast.Fill.InnerGlowTexture or nil
   f.interrupt = btn.InterruptDisplay               -- and Blizzard's red square (we replay EndBurst instead)
   f.grace, f.lastP, f.flashed, f.bursting = nil, nil, nil, nil   -- fresh cast (clear prior interrupt state)
   f:Show()                                    -- OnUpdate polls the live cast/channel + hides at the end
@@ -921,9 +930,17 @@ local function StyleCastInnerGlow(btn, castType)
   local fill = btn.SpellCastAnimFrame and btn.SpellCastAnimFrame.Fill
   local glow = fill and fill.InnerGlowTexture
   if not (icon and glow) then return end
+  local isChannel = ActionButtonCastType and castType == ActionButtonCastType.Channel
+  -- Hand shape: suppress Blizzard's inner glow and drive the multi-part SHAPED glow
+  -- (lime channel / gold cast) via the "cast" source; the drain fill shows progress.
+  -- Cleared when the cast ends (CastFillOnUpdate). SDF fallback keeps the shaped ring.
+  if handKey() then
+    glow:SetAlpha(0)
+    if GB.Glows and GB.Glows.SetCast then GB.Glows:SetCast(btn, isChannel and "channel" or "cast") end
+    return
+  end
   glow:SetTexture(shapeArt(icon).ring)   -- construction-aspect ring
   AnchorConstruction(glow, icon, (RING_FIT - 1) / 2)
-  local isChannel = ActionButtonCastType and castType == ActionButtonCastType.Channel
   local tint = isChannel and CAST_TINT.channel or CAST_TINT.cast
   glow:SetVertexColor(tint[1], tint[2], tint[3])
   -- The ring art was made BOLDER for state highlights (peak ~0.65 → 1.0 alpha,
