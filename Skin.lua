@@ -1426,11 +1426,10 @@ local function ApplyButton(btn)
   -- so the ring rim coincides with the icon circle.
   if not rec.stateArt then
     local ring = shapeArt(icon).ring
-    -- Hand shape (the norm): hover + selected are driven by the multi-part glow
-    -- (Glows.lua), so SUPPRESS Blizzard's square hover/checked rings (alpha 0).
-    -- Flash stays on its SDF ring for now (not yet glow-wired — keep the low-mana/
-    -- can't-use cue rather than drop it). SDF fallback shows all three. Ring rim sits
-    -- inset from the shape edge → oversize so it reaches/spreads past the edge.
+    -- Hand shape (the norm): hover / selected / flash are ALL driven by the multi-
+    -- part glow (Glows.lua), so SUPPRESS Blizzard's square hover/checked/flash rings
+    -- (alpha 0). SDF fallback shows all three. Ring rim sits inset from the shape
+    -- edge → oversize so it reaches/spreads past the edge.
     local sa = handKey() and 0 or stateIntensity()
     local function fit(tex) AnchorConstruction(tex, icon, stateWidthRatio()) end
     if btn.SetHighlightTexture and btn.GetHighlightTexture then
@@ -1450,6 +1449,17 @@ local function ApplyButton(btn)
       btn.Flash:SetTexture(ring)
       btn.Flash:SetVertexColor(unpack(stateColor("flash"))); btn.Flash:SetAlpha(sa)   -- hand shape → glow drives it
       fit(btn.Flash)
+    end
+    -- Blizzard's UpdateFlash re-drives GetCheckedTexture():SetAlpha(1.0) on the
+    -- auto-attacking (flashing) button (ActionButton.lua:1306) — defeating our one-
+    -- time alpha-0 above and un-hiding the square checked ring over the shaped glow.
+    -- Re-assert alpha 0 AFTER Blizzard's call for hand shapes (the glow owns the look).
+    if btn.UpdateFlash then
+      hooksecurefunc(btn, "UpdateFlash", function(b)
+        if Skin.enabled and handKey() and b.GetCheckedTexture then
+          local c = b:GetCheckedTexture(); if c then c:SetAlpha(0) end
+        end
+      end)
     end
     rec.stateArt = true
   end

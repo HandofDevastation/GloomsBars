@@ -970,80 +970,132 @@ local function buildCastSection(bf, s)
   s.refresh = function() for _, r in ipairs(rows) do r:refresh() end end
 end
 
--- Proc glow — THE differentiator: the shaped halo Blizzard's procs/assist drive.
--- Colour (proc + assist), Brightness (peak glow alpha) and Pulse speed, all live
--- via GB.Glows. (Size was retired with the shaped-glow rebuild — the glow size is
--- baked into each silhouette's art + the border grow.) Opening the section flips
--- the preview to its Proc chip so you can tune the gold glow without being in combat.
-local function buildGlowSection(bf, s)
+-- Glows — the unified shaped-glow matrix (session 10). Every button state that
+-- drives the multi-part glow is ONE row: on-toggle · colour · layers (both / inner /
+-- outer) · opacity, plus a global Pulse speed. Supersedes the old separate Proc glow
+-- + State highlights sections (one engine now — GB.db.triggers). Cast fill/burst stay
+-- in Cast & channel; only the cast/channel HALO colour+opacity live here.
+local function trig(key) return GB.db and GB.db.triggers and GB.db.triggers[key] end
+
+-- Layer cycle cell: a compact button showing the trigger's current layers
+-- ("Both"/"Inner"/"Outer"); click cycles Both → Inner → Outer. onChange() lets the
+-- caller reflect it in the preview. Returns { btn, refresh, setEnabled }.
+local LAYER_LABEL = { both = "Both", inner = "Inner", outer = "Outer" }
+local LAYER_NEXT  = { both = "inner", inner = "outer", outer = "both" }
+local function layersCell(bf, x, yTop, key, onChange)
+  local b = flatButton(bf, 50, 20, COLOR.heroic, "Both", 11)
+  b:SetPoint("TOPLEFT", x, yTop)
+  local function cur() local t = trig(key); return (t and t.layers) or "both" end
+  local function paint() b.text:SetText(LAYER_LABEL[cur()] or "Both") end
+  b:SetScript("OnClick", function()
+    if GB.Glows then GB.Glows:SetTriggerLayers(key, LAYER_NEXT[cur()] or "both") end
+    paint(); if onChange then onChange() end
+  end)
+  paint()
+  local cell = { btn = b }
+  function cell:refresh() paint() end
+  function cell:setEnabled(on) b:SetEnabled(on) end
+  return cell
+end
+
+-- Compact inline opacity slider for a matrix row (0–100%). Shares the sliders'
+-- click/drag-anywhere-to-seek QOL. onChange() refreshes the preview. { refresh, setEnabled }.
+local function opacityCell(bf, xLeft, yTop, key, onChange)
+  local val = newText(bf, FONT.label, 11, TEXT, "RIGHT"); val:SetPoint("TOPRIGHT", -12, yTop - 3)
+  local sl = CreateFrame("Slider", nil, bf)
+  sl:SetPoint("TOPLEFT", xLeft, yTop - 4); sl:SetPoint("TOPRIGHT", -46, yTop - 4); sl:SetHeight(16)
+  sl:EnableMouse(true); sl:SetOrientation("HORIZONTAL"); sl:SetMinMaxValues(0, 1); sl:SetValueStep(0.05); sl:SetObeyStepOnDrag(true)
+  local track = sl:CreateTexture(nil, "BACKGROUND"); track:SetPoint("LEFT"); track:SetPoint("RIGHT"); track:SetHeight(6)
+  track:SetColorTexture(COLOR.heroic.r, COLOR.heroic.g, COLOR.heroic.b, 0.20)
+  local thumb = sl:CreateTexture(nil, "ARTWORK"); thumb:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 1)
+  thumb:SetSize(5, 18); sl:SetThumbTexture(thumb)
+  local applying = false
+  local function show(v) val:SetText(math.floor(v * 100 + 0.5) .. "%") end
+  sl:SetScript("OnValueChanged", function(_, v)
+    if not applying then if GB.Glows then GB.Glows:SetTriggerOpacity(key, v) end; if onChange then onChange() end end
+    show(v)
+  end)
+  local function seek(self)
+    local left, w = self:GetLeft(), self:GetWidth()
+    if not (left and w and w > 0) then return end
+    local frac = (GetCursorPosition() / self:GetEffectiveScale() - left) / w
+    frac = math.max(0, math.min(1, frac))
+    self:SetValue(math.floor(frac / 0.05 + 0.5) * 0.05)
+  end
+  sl:SetScript("OnMouseDown", function(self) if self:IsEnabled() then self._seek = true; seek(self) end end)
+  sl:SetScript("OnMouseUp", function(self) self._seek = false end)
+  sl:SetScript("OnUpdate", function(self)
+    if self._seek then
+      if self:IsEnabled() and IsMouseButtonDown("LeftButton") then seek(self) else self._seek = false end
+    end
+  end)
+  local cell = {}
+  function cell:refresh() applying = true; local t = trig(key); sl:SetValue((t and t.opacity) or 1); show((t and t.opacity) or 1); applying = false end
+  function cell:setEnabled(on) sl:SetEnabled(on); sl:SetAlpha(on and 1 or 0.35) end
+  cell:refresh()
+  return cell
+end
+
+-- The triggers, in priority (display) order. Third field = the preview chip to flip
+-- to on edit (cast/channel/assist have no chip, so they leave the preview as-is).
+local GLOW_ROWS = {
+  { "proc", "Proc", "proc" }, { "cast", "Cast" }, { "channel", "Channel" },
+  { "hover", "Hover", "hover" }, { "selected", "Selected", "selected" },
+  { "flash", "Flash", "flash" }, { "assist", "Assist" },
+}
+local GX_TOG, GX_SW, GX_LAY, GX_SLIDE = 92, 142, 180, 236
+local function buildGlowsSection(bf, s)
   local rows = {}
-  local function showGlow() C:SetPreviewState("proc") end   -- reflect the change in the preview
+  local function showPrev(prev) if prev then C:SetPreviewState(prev) end end
 
-  local pl = newText(bf, FONT.body, 12, TEXT, "LEFT"); pl:SetPoint("TOPLEFT", 18, -14); pl:SetText("Proc color")
-  local pcs = colorSwatch(bf,
-    function() return GB.db and GB.db.glowColor end,
-    function(c) if GB.Glows then GB.Glows:SetColor("proc", c) end; showGlow() end)
-  pcs.swatch:SetPoint("TOPRIGHT", -18, -12); rows[#rows + 1] = pcs
-
-  local al = newText(bf, FONT.body, 12, TEXT, "LEFT"); al:SetPoint("TOPLEFT", 18, -42); al:SetText("Assist color")
-  local acs = colorSwatch(bf,
-    function() return GB.db and GB.db.glowAssistColor end,
-    function(c) if GB.Glows then GB.Glows:SetColor("assist", c) end end)
-  acs.swatch:SetPoint("TOPRIGHT", -18, -40); rows[#rows + 1] = acs
-
-  local intRow = sliderRow(bf, -74, "Brightness", 0.2, 1, 0.05,
-    function() return (GB.db and GB.db.glowIntensity) or 0.9 end,
-    function(v) if GB.Glows then GB.Glows:SetIntensity(v) end; showGlow() end,
-    function(v) return math.floor(v * 100 + 0.5) .. "%" end)
-  rows[#rows + 1] = intRow
-
-  local spRow = sliderRow(bf, -118, "Pulse speed", 0.3, 2, 0.1,
+  -- Global: pulse speed (applies to every pulsing trigger — proc / assist / flash).
+  rows[#rows + 1] = sliderRow(bf, -14, "Pulse speed", 0.3, 2, 0.1,
     function() return (GB.db and GB.db.glowPulseSpeed) or 1 end,
     function(v) if GB.Glows then GB.Glows:SetPulseSpeed(v) end end,
     function(v) return string.format("%.1fx", v) end)
-  rows[#rows + 1] = spRow
 
-  local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -158); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("The preview Proc chip is static; in-game the glow pulses. Assist color = the blue assisted-rotation glow.")
-  bf:SetHeight(190)
-  s.refresh = function()
-    for _, r in ipairs(rows) do r:refresh() end
-    C:SetPreviewState("proc")   -- show the glow while this section is open
-  end
-end
+  -- Column headers.
+  local function head(x, txt) local h = newText(bf, FONT.body, 10.5, MUTE, "LEFT"); h:SetPoint("TOPLEFT", x, -52); h:SetText(txt) end
+  head(GX_TOG, "on"); head(GX_SW, "colour"); head(GX_LAY, "layers"); head(GX_SLIDE + 8, "opacity")
 
--- State highlights — hover / selected / flash tints + intensity. Live-safe
--- (SetVertexColor / SetAlpha); the preview's state chips show each one.
-local function buildStateSection(bf, s)
-  local rows = {}
-  local function colorRow(yTop, label, which)
+  local y = -72
+  for _, r in ipairs(GLOW_ROWS) do
+    local key, label, prev = r[1], r[2], r[3]
+    local yTop = y
     local lab = newText(bf, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 18, yTop); lab:SetText(label)
+
     local cs = colorSwatch(bf,
-      function() return GB.db and GB.db.stateColors and GB.db.stateColors[which] end,
-      function(c) if GB.Skin then GB.Skin:SetStateColor(which, c) end; C:SetPreviewState(previewState) end)
-    cs.swatch:SetPoint("TOPRIGHT", -18, yTop + 2)
-    rows[#rows + 1] = cs
+      function() local t = trig(key); return t and t.color end,
+      function(c) if GB.Glows then GB.Glows:SetTriggerColor(key, c) end; showPrev(prev) end)
+    cs.swatch:SetPoint("TOPLEFT", GX_SW, yTop - 1)
+
+    local lay = layersCell(bf, GX_LAY, yTop - 1, key, function() showPrev(prev) end)
+    local op = opacityCell(bf, GX_SLIDE, yTop, key, function() showPrev(prev) end)
+
+    -- Enable toggle greys the row's controls when off.
+    local function applyEnabled()
+      local t = trig(key); local on = t and t.enabled ~= false
+      cs.swatch:SetEnabled(on); cs.swatch:SetAlpha(on and 1 or 0.4)
+      lay:setEnabled(on); op:setEnabled(on)
+    end
+    local tog = makeToggle(bf,
+      function() local t = trig(key); return t and t.enabled ~= false end,
+      function(on) if GB.Glows then GB.Glows:SetTriggerEnabled(key, on) end; applyEnabled(); showPrev(prev) end)
+    tog:SetPoint("TOPLEFT", GX_TOG, yTop - 1)
+
+    rows[#rows + 1] = { refresh = function() cs:refresh(); lay:refresh(); op:refresh(); tog:refresh(); applyEnabled() end }
+    y = y - 30
   end
-  colorRow(-14, "Hover", "hover")
-  colorRow(-42, "Selected", "selected")
-  colorRow(-70, "Flash", "flash")
-  local widthRow = sliderRow(bf, -104, "Glow width", 0, 1, 0.02,
-    function() return GB.db and GB.db.stateWidth end,
-    function(v) if GB.Skin then GB.Skin:SetStateWidth(v) end; C:RefreshPreview(); C:SetPreviewState(previewState) end,
-    function(v) return math.floor(v * 100 + 0.5) .. "%" end,
-    "how far the highlight spreads")
-  rows[#rows + 1] = widthRow
-  local intRow = sliderRow(bf, -152, "Intensity", 0, 1, 0.05,
-    function() return GB.db and GB.db.stateIntensity end,
-    function(v) if GB.Skin then GB.Skin:SetStateIntensity(v) end; C:SetPreviewState(previewState) end,
-    function(v) return math.floor(v * 100 + 0.5) .. "%" end)
-  rows[#rows + 1] = intRow
+
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -190); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("Use the Hover / Selected / Flash preview chips to see each color.")
-  bf:SetHeight(220)
-  s.refresh = function() for _, r in ipairs(rows) do r:refresh() end end
+  hint:SetPoint("TOPLEFT", 18, y - 6); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Click a Layers cell to cycle Both / Inner / Outer. Cast fill/burst live in Cast & channel.")
+  bf:SetHeight(-y + 40)
+
+  s.refresh = function()
+    for _, rw in ipairs(rows) do rw:refresh() end
+    C:SetPreviewState("proc")
+  end
 end
 
 -- Cooldown & availability — cooldown sweep tint / opacity, our shape-masked finish
@@ -1422,14 +1474,13 @@ function C:SetPreviewState(st)
   if previewGlow then
     previewGlow:SetShown(previewState == "proc")
     if previewState == "proc" and previewIcon then
-      -- Mirror the engine: proc tint, bloom scaled by glowScale, alpha = the
-      -- resting (pulse-min) level so the Brightness slider shows here (in-game it
-      -- pulses up to full).
-      local c = (GB.db and GB.db.glowColor) or { 1, 0.85, 0.35 }
+      -- Mirror the engine: the Proc trigger's tint/opacity, bloom scaled by glowScale.
+      local pt = (GB.db and GB.db.triggers and GB.db.triggers.proc) or {}
+      local c = pt.color or { 1, 0.85, 0.35 }
       local sc = (GB.db and GB.db.glowScale) or (128 / 80)
       anchorPreviewOverlay(previewGlow, (sc - 1) / 2)   -- bloom spans the whole construction, like the bars
       previewGlow:SetVertexColor(c[1], c[2], c[3])
-      previewGlow:SetAlpha(math.max(0.35, (GB.db and GB.db.glowIntensity) or 0.9))
+      previewGlow:SetAlpha(math.max(0.35, pt.opacity or 0.9))
     end
   end
   if previewCD then
@@ -1445,10 +1496,10 @@ function C:SetPreviewState(st)
   if previewRing then
     previewRing:SetShown(isRing)
     if isRing then
-      local sc = GB.db and GB.db.stateColors
-      local c = (sc and sc[previewState]) or RING_TINT[previewState]
+      local rt = GB.db and GB.db.triggers and GB.db.triggers[previewState]
+      local c = (rt and rt.color) or RING_TINT[previewState]
       previewRing:SetVertexColor(c[1], c[2], c[3])
-      previewRing:SetAlpha((GB.db and GB.db.stateIntensity) or 1)
+      previewRing:SetAlpha((rt and rt.opacity) or 1)
     end
   end
   for s2, chip in pairs(previewChips) do chip:SetActive(s2 == previewState) end
@@ -1587,9 +1638,8 @@ local function BuildPanel()
   makeSection("Construction", buildConstructionSection)
   makeSection("Decoration layers", buildDecorSection)
   makeSection("Text", buildTextSection)
-  makeSection("Proc glow", buildGlowSection)
+  makeSection("Glows", buildGlowsSection)
   makeSection("Cast & channel", buildCastSection)
-  makeSection("State highlights", buildStateSection)
   makeSection("Cooldown & availability", buildCooldownSection)
   makeSection("Bar layout", stubBody)
   makeSection("Apply to bars", stubBody)

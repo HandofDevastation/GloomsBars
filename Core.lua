@@ -380,6 +380,39 @@ loader:SetScript("OnEvent", function(_, event, arg1)
       elseif legacy:match("^corner%-%d%d%d%d%-r%d$") then seed = "roundsq2" end
       GB.db.handShape = seed
     end
+    -- Per-trigger glow model (session 10): every button state that drives the
+    -- multi-part shaped glow — proc / assist / cast / channel / hover / selected /
+    -- flash — is now ONE uniform record { enabled, color, opacity, layers }, so each
+    -- can be tuned (and its outer/inner layers toggled) independently. Seeded ONCE
+    -- from the previous scattered fields (glowColor/glowIntensity/glowAssistColor +
+    -- stateColors/stateIntensity) so the current look carries over exactly. The old
+    -- fields are kept (dormant SDF fallback + preview) but no longer the source.
+    do
+      local sc = GB.db.stateColors or {}
+      local gi = GB.db.glowIntensity or 0.9   -- proc/assist/cast/channel peak
+      local si = GB.db.stateIntensity or 1    -- hover/selected/flash peak
+      local seedT = {
+        proc     = { enabled = true, color = GB.db.glowColor or { 1, 0.85, 0.35 },      opacity = gi, layers = "both" },
+        assist   = { enabled = true, color = GB.db.glowAssistColor or { 0.4, 0.75, 1 }, opacity = gi, layers = "both" },
+        cast     = { enabled = true, color = { 1, 0.85, 0.4 },                          opacity = gi, layers = "both" },
+        channel  = { enabled = true, color = { 0.6, 1, 0.4 },                           opacity = gi, layers = "both" },
+        hover    = { enabled = true, color = sc.hover or { 1, 0.82, 0.35 },             opacity = si, layers = "both" },
+        selected = { enabled = true, color = sc.selected or { 0.45, 0.75, 1 },          opacity = si, layers = "both" },
+        flash    = { enabled = true, color = sc.flash or { 1, 0.25, 0.25 },             opacity = si, layers = "both" },
+      }
+      GB.db.triggers = GB.db.triggers or {}
+      for key, def in pairs(seedT) do
+        local t = GB.db.triggers[key]
+        if not t then
+          GB.db.triggers[key] = def
+        else                      -- fill any missing field (forward-compat with partial saves)
+          if t.enabled == nil then t.enabled = true end
+          if t.color == nil then t.color = def.color end
+          if t.opacity == nil then t.opacity = def.opacity end
+          if t.layers == nil then t.layers = def.layers end
+        end
+      end
+    end
   elseif event == "PLAYER_LOGIN" then
     PreloadFonts()
     RegisterMedia()

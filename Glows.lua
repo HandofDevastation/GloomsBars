@@ -164,9 +164,12 @@ local pulseDriver = CreateFrame("Frame")
 pulseDriver:Hide()
 pulseDriver:SetScript("OnUpdate", function(_, dt)
   pulsePhase = pulsePhase + dt * glowSpeed()
-  local peak = glowPeak()
-  local a = peak * (PULSE_DEPTH + (1 - PULSE_DEPTH) * (0.5 + 0.5 * math.cos(pulsePhase * 5.7)))
-  for hg in pairs(activeGlows) do hg.outer:SetAlpha(a); hg.inner:SetAlpha(a) end
+  local wave = PULSE_DEPTH + (1 - PULSE_DEPTH) * (0.5 + 0.5 * math.cos(pulsePhase * 5.7))
+  for hg in pairs(activeGlows) do
+    local a = (hg.peak or glowPeak()) * wave    -- each active glow pulses about ITS trigger's opacity
+    if hg.showOuter then hg.outer:SetAlpha(a) end
+    if hg.showInner then hg.inner:SetAlpha(a) end
+  end
 end)
 local function setGlowActive(hg, on)
   if on then activeGlows[hg] = true; pulseDriver:Show()
@@ -211,9 +214,10 @@ local function anchorHandGlow(hg, icon)
   end
 end
 
--- Show the multi-part glow on one button, tinted `tint` ({r,g,b}); recolours its
--- border to match. Returns false when there's no hand shape (caller falls back).
-local function applyHandGlow(btn, tint, pulse, peak)
+-- Show the multi-part glow on one button, tinted `tint` ({r,g,b}) at `peak` opacity;
+-- `layers` ("both"/"inner"/"outer") gates which of the two glow textures show, and
+-- recolours its border to match. Returns false when there's no hand shape (fallback).
+local function applyHandGlow(btn, tint, pulse, peak, layers)
   if not isOurs(btn) then return false end
   local outerArt, innerArt = handGlowArt()
   if not outerArt then return false end
@@ -223,8 +227,11 @@ local function applyHandGlow(btn, tint, pulse, peak)
   hg.outer:SetTexture(outerArt); hg.inner:SetTexture(innerArt)
   hg.outer:SetVertexColor(tint[1], tint[2], tint[3]); hg.inner:SetVertexColor(tint[1], tint[2], tint[3])
   peak = peak or glowPeak()
-  hg.outer:SetAlpha(peak); hg.inner:SetAlpha(peak)     -- Brightness/intensity; the driver pulses it if `pulse`
-  hg.outer:Show(); hg.inner:Show()
+  local showOuter = layers ~= "inner"                  -- per-trigger layer choice
+  local showInner = layers ~= "outer"
+  hg.peak, hg.showOuter, hg.showInner = peak, showOuter, showInner
+  hg.outer:SetAlpha(peak); hg.inner:SetAlpha(peak)     -- Opacity; the driver pulses it if `pulse`
+  hg.outer:SetShown(showOuter); hg.inner:SetShown(showInner)
   setGlowActive(hg, pulse and true or false)           -- only pulsing sources join the driver (static otherwise)
   if GB.Skin and GB.Skin.RecolorBorder then GB.Skin:RecolorBorder(btn, tint) end
   return true
@@ -237,37 +244,48 @@ local function hideHandGlow(btn)
 end
 
 -- One shaped glow per button; sources set flags and this reconciles visibility +
--- tint + pulse. Priority (highest first): assist highlight > proc > flash >
--- selected (toggled) > hover > dev test. Procs/assist/flash/test PULSE; the steady
--- states (selected/hover) are static. State highlights take stateIntensity for
--- brightness, procs take the proc Brightness. Routes to the multi-part glow when a
--- hand shape is active (the norm), else the old single soft-bloom fallback.
-local PULSING = { assist = true, gold = true, flash = true, test = true }
-local STATE_KEY = { flash = true, selected = true, hover = true }
--- Cast/channel glow tints (gold cast / lime channel), matching the old inner glow.
-local CAST_TINT_G = { cast = { 1, 0.85, 0.4 }, channel = { 0.6, 1, 0.4 } }
--- Resolve the current tint/pulse/peak for a button's winning source. `cast` carries
--- its type ("cast"/"channel") so its tint is picked here rather than via tintFor.
-local function resolveGlow(s, tintKey)
-  if tintKey == "cast" then
-    return (CAST_TINT_G[s.cast] or CAST_TINT_G.cast), false, glowPeak()   -- steady halo; fill shows progress
-  end
-  local peak = STATE_KEY[tintKey] and ((GB.db and GB.db.stateIntensity) or 1) or glowPeak()
-  return tintFor(tintKey), PULSING[tintKey], peak
+-- tint + opacity + layers + pulse. Each button state is a TRIGGER record in
+-- GB.db.triggers { enabled, color, opacity, layers }; the winning trigger is chosen
+-- by priority (highest first): assist highlight > proc > cast/channel > flash >
+-- selected (toggled) > hover > dev test — SKIPPING any the user disabled, so turning
+-- off e.g. Hover still lets a checked button show its Selected glow. Procs/assist/
+-- flash pulse; cast/channel/hover/selected are steady. Routes to the multi-part glow
+-- when a hand shape is active (the norm), else the old single soft-bloom fallback.
+local PULSING = { proc = true, assist = true, flash = true }   -- which triggers pulse
+local function trig(key) return GB.db and GB.db.triggers and GB.db.triggers[key] end
+local function enabledTrig(key) local t = trig(key); if t and t.enabled ~= false then return t end end
+
+-- The winning trigger key + record for a button's live sources, in priority order,
+-- skipping disabled triggers. Returns (triggerKey, record) or nil.
+local function winningTrigger(s)
+  if not s then return nil end
+  if s.assist then local t = enabledTrig("assist"); if t then return "assist", t end end
+  if s.alert == "assist" then local t = enabledTrig("assist"); if t then return "assist", t end
+  elseif s.alert == "gold" then local t = enabledTrig("proc"); if t then return "proc", t end end
+  if s.cast then local t = enabledTrig(s.cast); if t then return s.cast, t end end   -- s.cast = "cast"|"channel"
+  if s.flash then local t = enabledTrig("flash"); if t then return "flash", t end end
+  if s.selected then local t = enabledTrig("selected"); if t then return "selected", t end end
+  if s.hover then local t = enabledTrig("hover"); if t then return "hover", t end end
+  if s.test then local t = enabledTrig("proc"); if t then return "proc", t end end   -- dev preview → proc styling
+  return nil
+end
+-- Resolve a winning trigger's tint / pulse / peak / layers from its record.
+local function resolveGlow(triggerKey, t)
+  return (t.color or { 1, 1, 1 }), (PULSING[triggerKey] and true or false), (t.opacity or 1), (t.layers or "both")
 end
 local function Refresh(btn)
   local s = sources[btn]
-  local tintKey = s and ((s.assist and "assist") or s.alert or (s.cast and "cast")
-    or (s.flash and "flash") or (s.selected and "selected") or (s.hover and "hover") or s.test) or nil
+  local triggerKey, t = winningTrigger(s)
   if GB.db and GB.db.handShape then
-    if tintKey then applyHandGlow(btn, resolveGlow(s, tintKey))
+    if triggerKey then applyHandGlow(btn, resolveGlow(triggerKey, t))   -- (tint, pulse, peak, layers)
     else hideHandGlow(btn) end
     return
   end
+  -- SDF soft-bloom fallback (dormant once a hand shape is set — the norm).
   local g = GetGlow(btn)
   if not g then return end
-  if tintKey then
-    local tint = resolveGlow(s, tintKey)
+  if triggerKey then
+    local tint = resolveGlow(triggerKey, t)
     g.tex:SetVertexColor(tint[1], tint[2], tint[3])
     if not g.frame:IsShown() then g.frame:Show(); g.anim:Play() end
   elseif g.frame:IsShown() then
@@ -456,6 +474,35 @@ function Glows:SetColor(which, c)
   if which == "assist" then GB.db.glowAssistColor = c else GB.db.glowColor = c end
   for btn in pairs(glows) do Refresh(btn) end
   for btn in pairs(handGlows) do Refresh(btn) end   -- re-tint an active multi-part glow live
+end
+
+-- ---------------------------------------------------------------------------
+-- Per-trigger live setters (Config → Glows matrix). Each writes the trigger's
+-- record in GB.db.triggers and re-applies to the buttons currently showing it.
+-- Colour/opacity/layers only affect a shown glow of that trigger; enable can change
+-- the WINNER on any button (a disabled trigger drops to the next), so it refreshes all.
+-- ---------------------------------------------------------------------------
+function Glows:RefreshTrigger(key)
+  for btn, s in pairs(sources) do
+    if isOurs(btn) and winningTrigger(s) == key then Refresh(btn) end
+  end
+end
+function Glows:SetTriggerColor(key, c)
+  local t = trig(key); if not (t and c) then return end
+  t.color = c; self:RefreshTrigger(key)
+end
+function Glows:SetTriggerOpacity(key, v)
+  local t = trig(key); if not t then return end
+  t.opacity = v; self:RefreshTrigger(key)
+end
+function Glows:SetTriggerLayers(key, mode)
+  local t = trig(key); if not t then return end
+  t.layers = mode; self:RefreshTrigger(key)
+end
+function Glows:SetTriggerEnabled(key, on)
+  local t = trig(key); if not t then return end
+  t.enabled = on and true or false
+  for btn in pairs(sources) do if isOurs(btn) then Refresh(btn) end end   -- winner may change on any button
 end
 
 -- Re-tint/re-brighten any ACTIVE state glow (hover/selected/flash) after a State-
