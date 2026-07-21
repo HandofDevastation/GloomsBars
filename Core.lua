@@ -232,9 +232,30 @@ local DB_DEFAULTS = {
   iconAspect = 1,          -- the locked height/width ratio (captured when lock is enabled)
   iconFill = "fill",       -- "fill" (cover: keep art aspect, crop) or "stretch"
   sweepOvershoot = 0.75,   -- px the cooldown sweep extends past the icon circle
-  -- State-highlight tints (hover/selected/flash) + intensity — Config-editable.
+  -- Cooldown sweep appearance (Config → Cooldown & availability).
+  swipeColor = { 0, 0, 0 },        -- cooldown sweep tint (SetSwipeColor rgb)
+  swipeAlpha = 0.8,                -- cooldown sweep opacity (SetSwipeColor alpha; template default)
+  -- Finish flash: OUR OWN shape-masked burst on cooldown-end (Blizzard's square
+  -- edge/bling are suppressed — they can't follow a non-square shape). Fired from
+  -- the Cooldown's OnCooldownDone event (no secret read); GCD skipped by timing.
+  finishFlash = false,             -- enable the shaped finish flash
+  finishFlashColor = { 1, 0.9, 0.5 },   -- its tint
+  -- Availability: restyle Blizzard's usable/unusable/out-of-mana icon tint. We
+  -- REACT to the vertex colour Blizzard's UpdateUsable sets (usable 1,1,1 / OOM
+  -- 0.5,0.5,1 / unusable 0.4,0.4,0.4) — never reading IsUsableAction ourselves.
+  -- Defaults = Blizzard's own values, so nothing changes until edited.
+  availDesaturate = false,         -- desaturate (grey out) unusable abilities
+  availUnusable = { 0.4, 0.4, 0.4 },   -- icon tint when unusable
+  availOOM = { 0.5, 0.5, 1 },          -- icon tint when out of mana/power
+  -- Out-of-range: tint the icon to match Blizzard's red out-of-range keybind. We
+  -- REACT to ActionButton_UpdateRangeIndicator (Blizzard passes us inRange) — no
+  -- IsActionInRange call. Off by default; default tint ≈ Blizzard's RED_FONT_COLOR.
+  rangeTint = false,
+  rangeColor = { 1, 0.2, 0.2 },
+  -- State-highlight tints (hover/selected/flash) + intensity + spread — Config-editable.
   stateColors = { hover = { 1, 0.82, 0.35 }, selected = { 0.45, 0.75, 1 }, flash = { 1, 0.25, 0.25 } },
   stateIntensity = 1,
+  stateWidth = 0.5,        -- "Glow width": how far the highlight ring spreads (0..1 → anchor grow)
   -- Custom cast/channel fill (replaces Blizzard's square drain — pill-shaped).
   castFillColor = { 1, 0.85, 0.4 },   -- tint
   castFillAlpha = 0.55,               -- opacity

@@ -126,10 +126,15 @@ def glow_alpha(d):
 
 
 def ring_alpha(d):
+    # State-highlight rim glow (hover/selected/flash), drawn ADD. BOLD profile
+    # (Jason 2026-07-20): the rim peaks at FULL alpha over a wider band with a
+    # stronger interior wash, so at 100% Intensity it's a punchy additive glow
+    # instead of a faint overlay. The old profile topped out ~0.65 alpha → faint.
+    # Still fully INSIDE the shape (d < 0) so it never bleeds past the padded edge.
     if d >= 0:
         return 0.0
-    fill = 0.20 if d <= -14 else max(0.0, 0.20 * (-d - 6) / 8)
-    ring = 0.60 * math.exp(-((d + 8) / 5.0) ** 2)
+    fill = 0.35 if d <= -16 else max(0.0, 0.35 * (-d - 5) / 11)
+    ring = 1.0 * math.exp(-((d + 9) / 7.0) ** 2)
     return min(1.0, fill + ring)
 
 
@@ -235,10 +240,32 @@ def gen_glows():
         write_png(f"Media/art/{name}-glow.png", render(glow_sdf, glow_alpha))
 
 
+def gen_rings():
+    # Re-render ONLY the state-highlight rings — every shape + every aspect pill
+    # (one render each; skips masks/swipes/glows). Use after editing ring_alpha.
+    for name, sdf in SHAPES.items():
+        write_png(f"Media/art/{name}-ring.png", render(sdf, ring_alpha))
+    S, pad = 256, 1 - 2 * PILL_PAD_RATIO
+    for ai, ratio in enumerate(PILL_RATIOS):
+        longd = round(PILL_SHORT * ratio)
+        long_half = longd / 2.0 * pad
+        for lvl, frac in enumerate(RADII):
+            r = frac * PILL_SHORT_HALF
+            for orient, W, H, hw, hh in (
+                ("t", PILL_SHORT, longd, PILL_SHORT_HALF, long_half),
+                ("w", longd, PILL_SHORT, long_half, PILL_SHORT_HALF),
+            ):
+                rr = min(r, hw, hh)
+                sdf = lambda px, py, hw=hw, hh=hh, rr=rr: sd_roundrect_wh(px, py, hw, hh, rr)
+                write_png(f"Media/art/pill-{orient}-a{ai}-r{lvl}-ring.png", render(sdf, ring_alpha, W, H), W, H)
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "glows":
         gen_glows()   # fast: only the proc-glow halos (after a glow_alpha edit)
+    elif len(sys.argv) > 1 and sys.argv[1] == "rings":
+        gen_rings()   # fast: only the state-highlight rings (after a ring_alpha edit)
     elif len(sys.argv) > 1 and sys.argv[1] == "pills":
         gen_pills()   # fast: only the aspect masks, not the ~384 corner PNGs
     elif len(sys.argv) > 1 and sys.argv[1] in SHAPES:

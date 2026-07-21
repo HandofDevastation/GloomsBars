@@ -112,14 +112,23 @@ end
 -- A labelled slider row: label (left) + value (right) over a thin purple-bar
 -- thumb on a heroic-20 track (the family look). get/set drive it live; fmt
 -- renders the value text. Returns { refresh } for C:Refresh.
-local function sliderRow(parent, yTop, labelText, minV, maxV, step, get, set, fmt)
+local function sliderRow(parent, yTop, labelText, minV, maxV, step, get, set, fmt, sub)
   local lab = newText(parent, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 18, yTop); lab:SetText(labelText)
   local val = newText(parent, FONT.label, 11, TEXT, "RIGHT"); val:SetPoint("TOPRIGHT", -18, yTop)
+  -- Optional muted sub-label under the title (mock detail, e.g. "how far the
+  -- highlight spreads") — when present the slider drops below it (taller row).
+  local subLab
+  local sliderY = yTop - 15
+  if sub then
+    subLab = newText(parent, FONT.body, 10.5, MUTE, "LEFT")
+    subLab:SetPoint("TOPLEFT", 18, yTop - 15); subLab:SetText(sub)
+    sliderY = yTop - 30
+  end
   -- The Slider FRAME is a tall, full-width hit area (easy to grab); the visible
   -- track is a thin bar centered in it, so the look is unchanged but the grab
   -- target isn't just the 5px thumb (Jason QA 2026-07-19).
   local sl = CreateFrame("Slider", nil, parent)
-  sl:SetPoint("TOPLEFT", 18, yTop - 15); sl:SetPoint("TOPRIGHT", -18, yTop - 15); sl:SetHeight(16)
+  sl:SetPoint("TOPLEFT", 18, sliderY); sl:SetPoint("TOPRIGHT", -18, sliderY); sl:SetHeight(16)
   sl:EnableMouse(true)
   sl:SetOrientation("HORIZONTAL"); sl:SetMinMaxValues(minV, maxV); sl:SetValueStep(step); sl:SetObeyStepOnDrag(true)
   local track = sl:CreateTexture(nil, "BACKGROUND")
@@ -151,7 +160,7 @@ local function sliderRow(parent, yTop, labelText, minV, maxV, step, get, set, fm
   local row = {}
   function row:refresh() applying = true; local v = get() or minV; sl:SetValue(v); show(v); applying = false end
   function row:setEnabled(on) sl:SetEnabled(on); sl:SetAlpha(on and 1 or 0.35) end
-  function row:SetShown(on) lab:SetShown(on); val:SetShown(on); sl:SetShown(on) end
+  function row:SetShown(on) lab:SetShown(on); val:SetShown(on); sl:SetShown(on); if subLab then subLab:SetShown(on) end end
   row:refresh()
   return row
 end
@@ -221,11 +230,23 @@ local PREVIEW_W = 210            -- left preview pane width
 local TITLE_DIV_Y = -48          -- title bar divider
 local FOOTER_H = 52              -- footer strip height (divider sits here above bottom)
 local SECTION_HDR_H = 36
+-- Padding-compensation for our masks (matches Skin.lua GROW_RATIO / the 240/256
+-- edge-padding rule) + the state-ring inset fit; kept local so the preview uses
+-- exactly the engine's geometry.
+local GROW_RATIO = (256 / 240 - 1) / 2
+-- The construction (icon + extension) is centered vertically at this pane-Y so a
+-- plate growing above OR below stays put and never rides into the state chips or
+-- the caption (max construction ≈ 104 + 0.9·104 ≈ 198px, so ±99 clears both).
+local PREVIEW_CENTER_Y = -220
 
 local panel, bodyContainer
 local sections = {}
 local previewFrame, previewIcon, previewMask, previewGlow, previewRing, previewCD
-local previewBorder, previewBorderMask
+local previewBorder, previewBorderMask, previewCaption
+local previewFlashFrame, previewFlash, previewFlashAnim   -- finish-flash preview
+local previewPlates = {}                 -- pooled gradient-plate textures (created lazily)
+local previewPlateFresh, previewRetryPending
+local previewExtH, previewExtT, previewExtB = 0, 0, 0   -- live extension px (magnitude + top/bottom split)
 local previewChips, previewState = {}, "idle"
 
 -- --------------------------------------------------------------------------
@@ -633,12 +654,26 @@ local function buildConstructionSection(bf, s)
     if c.extendPct ~= nil then return c.extendPct end
     return c.extendBottomPct or 0   -- legacy below-only key
   end
+  local function side(x) return x > 0 and 1 or (x < 0 and -1 or 0) end
   local row = sliderRow(bf, -14, "Extend plate", -0.9, 0.9, 0.05, get,
     function(v)
       if isHex() then return end
       local st = GB.db.styleData; st.construction = st.construction or {}
+      local prev = st.construction.extendPct
+      if prev == nil then prev = st.construction.extendBottomPct or 0 end   -- legacy below-only key
       st.construction.extendPct = v
       st.construction.extendBottomPct = nil   -- superseded by the signed key
+      -- Auto-flip the gradient to keep filling the plate when its SIDE changes
+      -- (below ⇄ above): a vertical fill points at the plate (below → solid at
+      -- bottom "up", above → solid at top "down"). Only a genuine side change
+      -- re-syncs, so a manual Direction pick survives same-side tweaks; a
+      -- horizontal (left/right) gradient is orthogonal → never auto-flipped.
+      if side(v) ~= 0 and side(v) ~= side(prev) then
+        local l = gradLayer()
+        if l and (l.dir == nil or l.dir == "up" or l.dir == "down") then
+          l.dir = (v < 0) and "down" or "up"
+        end
+      end
       if GB.Skin then GB.Skin:ReapplyDecor() end
       C:RefreshPreview()
     end,
@@ -960,16 +995,98 @@ local function buildStateSection(bf, s)
   colorRow(-14, "Hover", "hover")
   colorRow(-42, "Selected", "selected")
   colorRow(-70, "Flash", "flash")
-  local intRow = sliderRow(bf, -104, "Intensity", 0, 1, 0.05,
+  local widthRow = sliderRow(bf, -104, "Glow width", 0, 1, 0.02,
+    function() return GB.db and GB.db.stateWidth end,
+    function(v) if GB.Skin then GB.Skin:SetStateWidth(v) end; C:RefreshPreview(); C:SetPreviewState(previewState) end,
+    function(v) return math.floor(v * 100 + 0.5) .. "%" end,
+    "how far the highlight spreads")
+  rows[#rows + 1] = widthRow
+  local intRow = sliderRow(bf, -152, "Intensity", 0, 1, 0.05,
     function() return GB.db and GB.db.stateIntensity end,
     function(v) if GB.Skin then GB.Skin:SetStateIntensity(v) end; C:SetPreviewState(previewState) end,
     function(v) return math.floor(v * 100 + 0.5) .. "%" end)
   rows[#rows + 1] = intRow
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -142); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetPoint("TOPLEFT", 18, -190); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
   hint:SetText("Use the Hover / Selected / Flash preview chips to see each color.")
-  bf:SetHeight(166)
+  bf:SetHeight(220)
   s.refresh = function() for _, r in ipairs(rows) do r:refresh() end end
+end
+
+-- Cooldown & availability — cooldown sweep tint / opacity, our shape-masked finish
+-- flash, and the availability tint (usable / unusable / out-of-mana). All
+-- combat-safe: we react to Blizzard's rendered output, never reading secret values.
+local function buildCooldownSection(bf, s)
+  local rows = {}
+  local function showCD() C:SetPreviewState("cooldown") end   -- reflect sweep edits on the Cooldown chip
+
+  local cl = newText(bf, FONT.body, 12, TEXT, "LEFT"); cl:SetPoint("TOPLEFT", 18, -14); cl:SetText("Sweep color")
+  local cs = colorSwatch(bf,
+    function() return GB.db and GB.db.swipeColor end,
+    function(c) if GB.Skin then GB.Skin:SetSwipeColor(c) end; showCD() end)
+  cs.swatch:SetPoint("TOPRIGHT", -18, -12); rows[#rows + 1] = cs
+
+  local opRow = sliderRow(bf, -46, "Sweep opacity", 0, 1, 0.05,
+    function() return (GB.db and GB.db.swipeAlpha) or 0.8 end,
+    function(v) if GB.Skin then GB.Skin:SetSwipeAlpha(v) end; showCD() end,
+    function(v) return math.floor(v * 100 + 0.5) .. "%" end)
+  rows[#rows + 1] = opRow
+
+  -- Finish flash: toggle + its colour (colour greyed while off). Both replay the
+  -- flash on the preview so you can tune it without waiting for a real cooldown.
+  local fl = newText(bf, FONT.body, 12, TEXT, "LEFT"); fl:SetPoint("TOPLEFT", 18, -92); fl:SetText("Finish flash")
+  local fTog = makeToggle(bf,
+    function() return GB.db and GB.db.finishFlash end,
+    function(v) if GB.Skin then GB.Skin:SetFinishFlash(v) end; s.refresh(); C:PlayPreviewFlash() end)
+  fTog:SetPoint("TOPRIGHT", -18, -90); rows[#rows + 1] = fTog
+  local fcl = newText(bf, FONT.body, 12, TEXT, "LEFT"); fcl:SetPoint("TOPLEFT", 30, -122); fcl:SetText("Flash color")
+  local fcs = colorSwatch(bf,
+    function() return GB.db and GB.db.finishFlashColor end,
+    function(c) if GB.Skin then GB.Skin:SetFinishFlashColor(c) end; C:PlayPreviewFlash() end)
+  fcs.swatch:SetPoint("TOPRIGHT", -18, -120); rows[#rows + 1] = fcs
+
+  -- AVAILABILITY — restyle Blizzard's usable/unusable/out-of-mana icon tint.
+  local avlab = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); avlab:SetPoint("TOPLEFT", 18, -164); avlab:SetText("AVAILABILITY")
+  local dl = newText(bf, FONT.body, 12, TEXT, "LEFT"); dl:SetPoint("TOPLEFT", 18, -194); dl:SetText("Desaturate unusable")
+  local dTog = makeToggle(bf,
+    function() return GB.db and GB.db.availDesaturate end,
+    function(v) if GB.Skin then GB.Skin:SetAvailDesaturate(v) end end)
+  dTog:SetPoint("TOPRIGHT", -18, -192); rows[#rows + 1] = dTog
+  local ul = newText(bf, FONT.body, 12, TEXT, "LEFT"); ul:SetPoint("TOPLEFT", 18, -226); ul:SetText("Unusable tint")
+  local ucs = colorSwatch(bf,
+    function() return GB.db and GB.db.availUnusable end,
+    function(c) if GB.Skin then GB.Skin:SetAvailUnusable(c) end end)
+  ucs.swatch:SetPoint("TOPRIGHT", -18, -224); rows[#rows + 1] = ucs
+  local ml = newText(bf, FONT.body, 12, TEXT, "LEFT"); ml:SetPoint("TOPLEFT", 18, -256); ml:SetText("Out-of-mana tint")
+  local mcs = colorSwatch(bf,
+    function() return GB.db and GB.db.availOOM end,
+    function(c) if GB.Skin then GB.Skin:SetAvailOOM(c) end end)
+  mcs.swatch:SetPoint("TOPRIGHT", -18, -254); rows[#rows + 1] = mcs
+
+  -- Out of range: tint the icon to match Blizzard's red out-of-range keybind.
+  local rl = newText(bf, FONT.body, 12, TEXT, "LEFT"); rl:SetPoint("TOPLEFT", 18, -288); rl:SetText("Tint out-of-range")
+  local rTog = makeToggle(bf,
+    function() return GB.db and GB.db.rangeTint end,
+    function(v) if GB.Skin then GB.Skin:SetRangeTint(v) end; s.refresh() end)
+  rTog:SetPoint("TOPRIGHT", -18, -286); rows[#rows + 1] = rTog
+  local rcl = newText(bf, FONT.body, 12, TEXT, "LEFT"); rcl:SetPoint("TOPLEFT", 30, -318); rcl:SetText("Range color")
+  local rcs = colorSwatch(bf,
+    function() return GB.db and GB.db.rangeColor end,
+    function(c) if GB.Skin then GB.Skin:SetRangeColor(c) end end)
+  rcs.swatch:SetPoint("TOPRIGHT", -18, -316); rows[#rows + 1] = rcs
+
+  local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
+  hint:SetPoint("TOPLEFT", 18, -354); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Availability tints react to Blizzard's own checks (no preview — test on the bars). Out-of-range matches the red keybind; unusable/mana fire for wrong form, missing resources, etc.")
+  bf:SetHeight(394)
+  s.refresh = function()
+    for _, r in ipairs(rows) do if r.refresh then r:refresh() end end
+    local flashOn = GB.db and GB.db.finishFlash
+    fcl:SetAlpha(flashOn and 1 or 0.35); fcs.swatch:EnableMouse(flashOn and true or false); fcs.swatch:SetAlpha(flashOn and 1 or 0.35)
+    local rangeOn = GB.db and GB.db.rangeTint
+    rcl:SetAlpha(rangeOn and 1 or 0.35); rcs.swatch:EnableMouse(rangeOn and true or false); rcs.swatch:SetAlpha(rangeOn and 1 or 0.35)
+    C:SetPreviewState("cooldown")   -- show the sweep while this section is open
+  end
 end
 
 -- --------------------------------------------------------------------------
@@ -992,9 +1109,49 @@ local PREVIEW_STATES = {
 }
 local RING_TINT = { hover = { 1, 0.82, 0.35 }, selected = { 0.45, 0.75, 1 }, flash = { 1, 0.25, 0.25 } }
 
+-- Live extension % (mirror Skin.lua ExtensionPct: hexagon is a fixed shape → no
+-- plate; signed key with a legacy below-only fallback). Drives the preview's
+-- plate/mask/overlay geometry exactly like the bars.
+local function previewExtendPct()
+  if (GB.db and GB.db.shape) == "hexagon" then return 0 end
+  local c = GB.db and GB.db.styleData and GB.db.styleData.construction
+  if not c then return 0 end
+  if c.extendPct ~= nil then return c.extendPct end
+  return c.extendBottomPct or 0
+end
+
+-- Anchor an overlay (state ring / cooldown / proc glow) over the whole preview
+-- construction (icon + extension), mirroring Skin.AnchorConstruction so overlays
+-- follow the full pill and not just the icon. `ratio` = padding grow per axis,
+-- `extra` = extra px overshoot.
+local function anchorPreviewOverlay(tex, ratio, extra)
+  extra = extra or 0
+  local gx = previewIcon:GetWidth() * ratio + extra
+  local gy = (previewIcon:GetHeight() + previewExtH) * ratio + extra
+  tex:ClearAllPoints()
+  tex:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -gx, gy + previewExtT)
+  tex:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", gx, -(gy + previewExtB))
+end
+
+-- Pooled gradient-plate texture (textures can't be freed, only reused/hidden).
+-- A brand-new texture flags `previewPlateFresh` so RefreshPreview retries its
+-- mask next frame (never-rendered textures reject AddMaskTexture — API-NOTES §2).
+local function getPreviewPlate(idx)
+  local p = previewPlates[idx]
+  if not p then
+    local tex = previewFrame:CreateTexture(nil, "ARTWORK", nil, 1)   -- sublevel 1 = above the icon
+    tex:SetTexture("Interface\\Buttons\\WHITE8X8")
+    p = { tex = tex }
+    previewPlates[idx] = p
+    previewPlateFresh = true
+  end
+  return p
+end
+
 function C:RefreshPreview()
   if not previewIcon then return end
   local shp = GB:GetShape()
+  local style = GB:GetStyle()
   -- Reflect the icon's aspect ratio, fit within a ~104px box.
   local iw, ih = (GB.db and GB.db.iconW) or 1, (GB.db and GB.db.iconH) or 1
   local base = 104
@@ -1003,33 +1160,127 @@ function C:RefreshPreview()
     if iw >= ih then pw, ph = base, base * ih / iw else pw, ph = base * iw / ih, base end
   end
   previewFrame:SetSize(pw, ph)
+
+  -- Construction = icon + extension (a plate above/below). Mirror the engine:
+  -- extendPct is signed (< 0 = above), the hexagon has none, and Continuous-OFF
+  -- only bites with a plate on a straight-sided shape — force it ON with no
+  -- extension or a circle (else the plate loses its mask → an unmasked square).
+  local extPct = previewExtendPct()
+  local ext = ph * math.abs(extPct)
+  local above = extPct < 0
+  local continuous = not (style.construction and style.construction.continuous == false)
+  if ext == 0 or (GB.db and GB.db.shape) == "circle" then continuous = true end
+  local maskExt = continuous and ext or 0
+  previewExtH = ext
+  previewExtT, previewExtB = (above and ext or 0), (above and 0 or ext)   -- overlays span the real ext
+  local mExtT, mExtB = (above and maskExt or 0), (above and 0 or maskExt)  -- masks span only when continuous
+
+  -- Center the whole construction in the stage; the icon shifts so a plate
+  -- growing either way keeps the construction visually centered (never rides
+  -- into the state chips above or the caption below).
+  previewFrame:ClearAllPoints()
+  previewFrame:SetPoint("CENTER", previewFrame:GetParent(), "TOP", 0,
+    PREVIEW_CENTER_Y + (above and -ext / 2 or ext / 2))
+
   previewIcon:SetTexture(sampleIconTexture())
+  -- Icon mask spans the construction when continuous (one pill wrapping icon +
+  -- plate), else just the icon (a rounded icon on a crisp square plate). Same
+  -- aspect source the engine uses (maskPlan → the construction's aspect).
+  local maskSrc = GB.Skin:AspectMask(pw, ph + maskExt)
+  local growX = pw * GROW_RATIO
+  local growY = (ph + maskExt) * GROW_RATIO
   if previewMask then previewIcon:RemoveMaskTexture(previewMask) end
   previewMask = previewFrame:CreateMaskTexture()
-  -- Match the engine: use the aspect-correct mask for a non-square preview.
-  local aSrc = GB.Skin:AspectMask(pw, ph)
-  previewMask:SetTexture(aSrc or shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-  local growX = pw * (256 / 240 - 1) / 2
-  local growY = ph * (256 / 240 - 1) / 2
+  previewMask:SetTexture(maskSrc or shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
   previewMask:ClearAllPoints()
-  previewMask:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -growX, growY)
-  previewMask:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", growX, -growY)
+  previewMask:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -growX, growY + mExtT)
+  previewMask:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", growX, -(growY + mExtB))
   previewIcon:AddMaskTexture(previewMask)
   -- Same cover-fit crop as the engine so the preview matches the bars (part a).
   previewIcon:SetTexCoord(GB.Skin:TexCoordFor(previewIcon:GetWidth(), previewIcon:GetHeight()))
-  previewGlow:SetTexture(shp.glow)   -- proc glow not aspect-varied yet (matches the bars)
-  previewRing:SetTexture(GB.Skin:AspectRing(pw, ph) or shp.ring)
-  if previewCD.SetSwipeTexture then previewCD:SetSwipeTexture(GB.Skin:AspectSwipe(pw, ph) or shp.swipe) end
-  -- Border preview — the engine's shape-backing (a shape copy behind the icon,
-  -- peeking out by the thickness). Fresh mask per refresh (cheap; dodges the
-  -- live-mask re-render quirk).
-  local bd = GB.db and GB.db.styleData and GB.db.styleData.border
+
+  -- Overlay art + span follow the construction shape/aspect, like the bars.
+  previewGlow:SetTexture(GB.Skin:GlowArt() or shp.glow)   -- continuous-OFF picks the mixed-corner glow, etc.
+  previewRing:SetTexture(GB.Skin:AspectRing(pw, ph + maskExt) or shp.ring)
+  anchorPreviewOverlay(previewRing, GB.Skin:StateWidthRatio())   -- spread tracks the Glow width control
+  anchorPreviewOverlay(previewCD, 0, 0)                    -- swipe covers the whole pill
+  if previewCD.SetSwipeTexture then previewCD:SetSwipeTexture(GB.Skin:AspectSwipe(pw, ph + maskExt) or shp.swipe) end
+
+  -- Gradient plate layers — mirror Skin.ApplyDecor's directional renderer. Each
+  -- layer is a shape-masked (continuous) or square (off) fade; when an extension
+  -- lies on the solid edge, a flat SOLID zone is drawn through it first (the
+  -- "plate" look), then the fade travels from that edge across the icon.
+  previewPlateFresh = false
+  local function plateMask(plate)
+    if plate.mask then plate.tex:RemoveMaskTexture(plate.mask); plate.mask = nil end
+    if not continuous then return end                     -- square plate (crisp junction)
+    local m = previewFrame:CreateMaskTexture()
+    m:SetTexture(maskSrc or shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    m:ClearAllPoints()
+    m:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -growX, growY + mExtT)
+    m:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", growX, -(growY + mExtB))
+    plate.tex:AddMaskTexture(m)
+    plate.mask = m
+  end
+  local used = 0
+  for _, layer in ipairs(style.layers or {}) do
+    if layer.enabled ~= false and layer.kind == "gradient" then
+      local c = layer.color or { 1, 1, 1 }
+      local fromC = CreateColor(c[1], c[2], c[3], layer.fromAlpha or 1)
+      local toC = CreateColor(c[1], c[2], c[3], layer.toAlpha or 0)
+      local dir = layer.dir or "up"
+      local reach = layer.bleedPct or 0.5                 -- fraction of the icon the fade spans
+      if dir == "left" or dir == "right" then
+        local solidRight = (dir == "left")                -- fades left ⇒ solid on the right
+        local edge = solidRight and "RIGHT" or "LEFT"
+        used = used + 1
+        local fade = getPreviewPlate(used); plateMask(fade)
+        fade.tex:ClearAllPoints()
+        fade.tex:SetPoint("TOP" .. edge, previewIcon, "TOP" .. edge, 0, previewExtT)
+        fade.tex:SetPoint("BOTTOM" .. edge, previewIcon, "BOTTOM" .. edge, 0, -previewExtB)
+        fade.tex:SetWidth(math.max(0.01, pw * reach))
+        if solidRight then fade.tex:SetGradient("HORIZONTAL", toC, fromC)
+        else fade.tex:SetGradient("HORIZONTAL", fromC, toC) end
+        fade.tex:Show()
+      else
+        local solidBottom = (dir == "up")
+        local edge = solidBottom and "BOTTOM" or "TOP"
+        local extAligned = ext > 0 and ((solidBottom and not above) or (not solidBottom and above))
+        if extAligned then
+          used = used + 1
+          local solid = getPreviewPlate(used); plateMask(solid)
+          local outward = solidBottom and -ext or ext
+          solid.tex:ClearAllPoints()
+          solid.tex:SetPoint(edge .. "LEFT", previewIcon, edge .. "LEFT", 0, outward)
+          solid.tex:SetPoint(edge .. "RIGHT", previewIcon, edge .. "RIGHT", 0, outward)
+          solid.tex:SetHeight(ext)
+          solid.tex:SetGradient("VERTICAL", fromC, fromC)
+          solid.tex:Show()
+        end
+        used = used + 1
+        local fade = getPreviewPlate(used); plateMask(fade)
+        fade.tex:ClearAllPoints()
+        fade.tex:SetPoint(edge .. "LEFT", previewIcon, edge .. "LEFT", 0, 0)
+        fade.tex:SetPoint(edge .. "RIGHT", previewIcon, edge .. "RIGHT", 0, 0)
+        fade.tex:SetHeight(math.max(0.01, ph * reach))
+        if solidBottom then fade.tex:SetGradient("VERTICAL", fromC, toC)
+        else fade.tex:SetGradient("VERTICAL", toC, fromC) end
+        fade.tex:Show()
+      end
+    end
+  end
+  for i = used + 1, #previewPlates do previewPlates[i].tex:Hide() end
+
+  -- Border — a colored shape-copy behind the icon, oversized by `thickness` and
+  -- (like the engine) framing the whole masked construction. Fresh mask per
+  -- refresh (cheap; dodges the live-mask re-render quirk).
+  local bd = style.border
   if bd and bd.enabled and (bd.thickness or 0) > 0 then
     local t, col = bd.thickness, bd.color or { 0, 0, 0 }
-    previewBorder:ClearAllPoints()
-    previewBorder:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -t, t)
-    previewBorder:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", t, -t)
     local a = bd.alpha or 1
+    previewBorder:ClearAllPoints()
+    previewBorder:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -t, t + mExtT)
+    previewBorder:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", t, -(mExtB + t))
     if bd.color2 then
       local c2 = bd.color2
       local orient = (bd.gradDir == "left" or bd.gradDir == "right") and "HORIZONTAL" or "VERTICAL"
@@ -1042,15 +1293,35 @@ function C:RefreshPreview()
     end
     if previewBorderMask then previewBorder:RemoveMaskTexture(previewBorderMask) end
     previewBorderMask = previewFrame:CreateMaskTexture()
-    previewBorderMask:SetTexture(GB.Skin:AspectMask(pw + 2 * t, ph + 2 * t) or shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-    local bgx, bgy = (pw + 2 * t) * (256 / 240 - 1) / 2, (ph + 2 * t) * (256 / 240 - 1) / 2
+    previewBorderMask:SetTexture(maskSrc or shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    local gx, gy = (pw + 2 * t) * GROW_RATIO, (ph + maskExt + 2 * t) * GROW_RATIO
     previewBorderMask:ClearAllPoints()
-    previewBorderMask:SetPoint("TOPLEFT", previewBorder, "TOPLEFT", -bgx, bgy)
-    previewBorderMask:SetPoint("BOTTOMRIGHT", previewBorder, "BOTTOMRIGHT", bgx, -bgy)
+    previewBorderMask:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -(t + gx), (t + gy) + mExtT)
+    previewBorderMask:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", (t + gx), -(mExtB + t + gy))
     previewBorder:AddMaskTexture(previewBorderMask)
     previewBorder:Show()
   else
     previewBorder:Hide()
+  end
+
+  -- Caption tucks just below the construction (below the plate when it extends
+  -- downward) so it never sits under the plate.
+  if previewCaption then
+    previewCaption:ClearAllPoints()
+    previewCaption:SetPoint("TOP", previewFrame, "BOTTOM", 0, -(previewExtB + 14))
+    previewCaption:SetPoint("LEFT", previewFrame:GetParent(), "LEFT", 10, 0)
+    previewCaption:SetPoint("RIGHT", previewFrame:GetParent(), "RIGHT", -10, 0)
+  end
+
+  -- A plate texture created THIS frame hasn't rendered, so its first
+  -- AddMaskTexture silently failed (never-rendered quirk, API-NOTES §2) → retry
+  -- once next frame, by when it has drawn and accepts the mask.
+  if previewPlateFresh and not previewRetryPending then
+    previewRetryPending = true
+    C_Timer.After(0, function()
+      previewRetryPending = nil
+      if panel and panel:IsShown() then C:RefreshPreview() end
+    end)
   end
 end
 
@@ -1058,6 +1329,20 @@ function C:PreviewZoom(v)
   if previewIcon then
     previewIcon:SetTexCoord(GB.Skin:TexCoordFor(previewIcon:GetWidth(), previewIcon:GetHeight()))
   end
+end
+
+-- Replay the shaped finish flash on the preview (so its colour/shape is visible
+-- without waiting for a real cooldown to end). Uses the same art + sizing as the
+-- engine's playFinishFlash. No-op when the flash is disabled.
+function C:PlayPreviewFlash()
+  if not (previewFlash and previewIcon) then return end
+  if not (GB.db and GB.db.finishFlash) then return end
+  previewFlash:SetTexture(GB.Skin:GlowArt())
+  local c = GB.db.finishFlashColor or { 1, 0.9, 0.5 }
+  previewFlash:SetVertexColor(c[1], c[2], c[3])
+  anchorPreviewOverlay(previewFlashFrame, (128 / 80 - 1) / 2)   -- anchor the FRAME so the scale bursts from centre
+  previewFlashFrame:SetAlpha(1)
+  previewFlashAnim:Stop(); previewFlashAnim:Play()
 end
 
 function C:SetPreviewState(st)
@@ -1070,16 +1355,18 @@ function C:SetPreviewState(st)
       -- pulses up to full).
       local c = (GB.db and GB.db.glowColor) or { 1, 0.85, 0.35 }
       local sc = (GB.db and GB.db.glowScale) or (128 / 80)
-      local ox, oy = previewIcon:GetWidth() * (sc - 1) / 2, previewIcon:GetHeight() * (sc - 1) / 2
-      previewGlow:ClearAllPoints()
-      previewGlow:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -ox, oy)
-      previewGlow:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", ox, -oy)
+      anchorPreviewOverlay(previewGlow, (sc - 1) / 2)   -- bloom spans the whole construction, like the bars
       previewGlow:SetVertexColor(c[1], c[2], c[3])
       previewGlow:SetAlpha(math.max(0.35, (GB.db and GB.db.glowIntensity) or 0.9))
     end
   end
   if previewCD then
-    if previewState == "cooldown" then previewCD:Show(); previewCD:SetCooldown(GetTime(), 12) else previewCD:Hide() end
+    if previewState == "cooldown" then
+      -- Reflect the sweep tint / opacity / edge+colour / bling+colour via the same
+      -- engine path the bars use, so the preview stays in sync.
+      if GB.Skin and GB.Skin.StyleCooldown then GB.Skin:StyleCooldown(previewCD) end
+      previewCD:Show(); previewCD:SetCooldown(GetTime(), 12)
+    else previewCD:Hide() end
   end
   if previewIcon then previewIcon:SetDesaturated(previewState == "cooldown") end
   local isRing = RING_TINT[previewState] ~= nil
@@ -1113,8 +1400,11 @@ local function buildPreviewPane(parent)
     previewChips[st[1]] = chip
   end
 
-  -- sample construction (icon at 104px; grows when decorations get wired)
-  local frame = CreateFrame("Frame", nil, pane); frame:SetSize(104, 104); frame:SetPoint("TOP", 0, -132)
+  -- Sample construction. The icon is 104px; the whole construction (icon +
+  -- plate) is centered at PREVIEW_CENTER_Y and RefreshPreview re-anchors it as
+  -- the extension grows, so nothing floats. (Initial anchor is overwritten there.)
+  local frame = CreateFrame("Frame", nil, pane); frame:SetSize(104, 104)
+  frame:SetPoint("CENTER", pane, "TOP", 0, PREVIEW_CENTER_Y)
   previewFrame = frame
   previewGlow = frame:CreateTexture(nil, "BACKGROUND"); previewGlow:SetPoint("TOPLEFT", -16, 16); previewGlow:SetPoint("BOTTOMRIGHT", 16, -16)
   previewGlow:SetBlendMode("ADD"); previewGlow:SetVertexColor(1, 0.77, 0.30); previewGlow:Hide()
@@ -1125,10 +1415,27 @@ local function buildPreviewPane(parent)
   previewRing:SetBlendMode("ADD"); previewRing:Hide()
   previewBorder = frame:CreateTexture(nil, "BACKGROUND", nil, -2)   -- behind the icon; peeks out as the border
   previewBorder:SetTexture("Interface\\Buttons\\WHITE8X8"); previewBorder:Hide()
+  -- Finish-flash preview: an expanding shape-glow burst that fades out, mirroring
+  -- the engine's setupFinishFlash so the flash colour/shape is visible without a
+  -- real cooldown. Frame is anchored over the construction at play time (so the
+  -- scale bursts from centre); the texture fills the frame.
+  previewFlashFrame = CreateFrame("Frame", nil, frame)
+  previewFlashFrame:SetFrameLevel(frame:GetFrameLevel() + 5); previewFlashFrame:SetAlpha(0)
+  previewFlash = previewFlashFrame:CreateTexture(nil, "OVERLAY"); previewFlash:SetBlendMode("ADD")
+  previewFlash:SetAllPoints(previewFlashFrame)
+  previewFlashAnim = previewFlashFrame:CreateAnimationGroup()
+  local fa = previewFlashAnim:CreateAnimation("Alpha")
+  fa:SetFromAlpha(1); fa:SetToAlpha(0); fa:SetDuration(0.45); fa:SetSmoothing("OUT")
+  local fsc = previewFlashAnim:CreateAnimation("Scale")
+  fsc:SetScaleFrom(0.85, 0.85); fsc:SetScaleTo(1.5, 1.5); fsc:SetOrigin("CENTER", 0, 0)
+  fsc:SetDuration(0.45); fsc:SetSmoothing("OUT")
+  if previewFlashAnim.SetToFinalAlpha then previewFlashAnim:SetToFinalAlpha(true) end
+  previewFlashAnim:SetScript("OnFinished", function() previewFlashFrame:SetAlpha(0) end)
 
   local cap = newText(pane, FONT.body, 10, MUTE, "CENTER")
   cap:SetPoint("TOP", frame, "BOTTOM", 0, -16); cap:SetPoint("LEFT", 10, 0); cap:SetPoint("RIGHT", -10, 0)
   cap:SetJustifyH("CENTER"); cap:SetText("Sample of the visible skin. Your clickable hit area stays Edit Mode's size.")
+  previewCaption = cap   -- RefreshPreview re-anchors it below the construction (below the plate)
 end
 
 local function BuildPanel()
@@ -1197,7 +1504,7 @@ local function BuildPanel()
   bodyContainer:SetSize(PANEL_W - PREVIEW_W - 9, 10)
   scroll:SetScrollChild(bodyContainer)
 
-  -- Sections (mockup order). Shape & icon is wired; the rest are stubbed.
+  -- Sections (mockup order). Bar layout + Apply to bars are still stubs.
   makeSection("Shape & icon", buildShapeSection)
   makeSection("Construction", buildConstructionSection)
   makeSection("Decoration layers", buildDecorSection)
@@ -1205,11 +1512,12 @@ local function BuildPanel()
   makeSection("Proc glow", buildGlowSection)
   makeSection("Cast & channel", buildCastSection)
   makeSection("State highlights", buildStateSection)
-  makeSection("Cooldown & availability", stubBody)
+  makeSection("Cooldown & availability", buildCooldownSection)
   makeSection("Bar layout", stubBody)
   makeSection("Apply to bars", stubBody)
 
-  sections[1].open = true
+  -- All sections start CLOSED (Jason 2026-07-20 — easier to find the one you want
+  -- than scrolling past a large open panel).
   relayout()
 
   tinsert(UISpecialFrames, "GloomsBarsConfig")   -- Escape closes it

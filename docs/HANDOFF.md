@@ -1,15 +1,23 @@
 # Gloom's Bars — Session Handoff
-**Last updated: end of session 6 (2026-07-19). Base commit: `829a96f` (session 5, committed). ALL
-session-6 work is UNCOMMITTED — 5 modified files (`Core.lua` `Skin.lua` `Glows.lua` `Config.lua`
-`tools/generate-art.py`), ~100 regenerated `Media/art/*-glow.png`, + NEW `tools/generate-modglyphs.py`
-and `Media/ui/{cmd,shift,ctrl,opt}.png`. Offer Jason a commit. Git history holds the older narrative;
-this file is the current-state snapshot. ⇒ Read SESSION 6 first (the big Config-wiring + proc-glow +
-continuous-OFF session), then SESSION 5 (hexagon/border/construction), then 4/3/2.**
+**Last updated: end of session 7 (2026-07-20). Base: `5b7e8c7` (session 6, committed). Session-7 work is
+committed in THIS commit — modified `Core.lua` `Skin.lua` `Config.lua` `tools/generate-art.py` + 196
+regenerated `Media/art/*-ring.png` (bolder highlight rings). Git history holds the older narrative; this
+file is the current-state snapshot. ⇒ Read SESSION 7 first (preview plate/extension + Glow width + the
+whole Cooldown & availability section), then SESSION 6 (Config wiring/proc-glow), then 5/4/3/2.**
 
 ## ▶ FIRST THING NEXT SESSION: nothing is mid-flight — pick from the ▶▶ NEXT list.
-Session 6 ended clean (Jason: "I think we're good"). Everything built this session was QA'd in-game and
-is listed under SESSION 6. The continuous-shape toggle (session 5's open item) is now QA'd AND reworked
-(circle/hexagon force it ON; see SESSION 6). No un-verified builds are pending. Start from ▶▶ NEXT.
+Session 7 ended clean (Jason: "That's much better"). Everything built this session was QA'd in-game and is
+listed under SESSION 7. NEXT #1 from session 6 (render plate/extension in the preview) is DONE. The whole
+"Cooldown & availability" section is built + QA'd. No un-verified builds are pending. Start from ▶▶ NEXT.
+
+## ✔ SETTLED (session 7): Blizzard's cooldown EDGE + finish BLING can't be shaped — don't re-attempt.
+The cooldown SWEEP follows the shape via its swipe-texture alpha (works). But the rotating EDGE line and the
+finish BLING (star) are drawn INTERNALLY by Blizzard's Cooldown widget to the SQUARE frame bounds — no
+maskable handle, and `SetEdgeTexture`/`SetBlingTexture` colour args only MULTIPLY their baked gold/blue
+textures (never a clean recolour). We also can't draw our own versions: both need the cooldown's REMAINING
+TIME (the secret wall). So: edge + bling are SUPPRESSED, and our own shape-masked **finish flash** (fired on
+the `OnCooldownDone` event, GCD-filtered by the game clock — never reading the secret duration) replaces the
+bling. Decision with Jason: drop the edge, shape the flash. Do NOT re-add Blizzard's edge/bling.
 
 ## ✔ SETTLED: per-corner MIXING stays cut for the ICON, but mixed-corner ART is used for OVERLAYS.
 Session 5 cut per-corner mixing for the ICON MASK (9-slice had a ~44px short-side floor; do NOT re-attempt
@@ -86,6 +94,26 @@ geometry); bars 1–8 (pet/stance/extra later); standalone (no Masque); slash `/
   true)`; we register our bundled fonts into it. Guaranteed present on Jason's client (BugSack et al.
   embed it). Embedding via `.pkgmeta` is a future hardening step for standalone release robustness.
 
+**Settled decisions (2026-07-20, session 7 — do not reopen):**
+- **Cooldown edge + finish bling can't be shaped → suppressed; shaped finish flash replaces the bling.**
+  (See the ✔ SETTLED block at top.) Drop the edge entirely; the flash is OUR OWN burst on `OnCooldownDone`.
+- **The cooldown SWEEP fills the icon; NO overshoot slider.** The old `sweepOvershoot` was really fixing
+  Blizzard's UNDERSHOOT (Blizzard insets the cooldown). It's baked at +0.75px (kills the AA rim leak); the
+  user slider was removed (`/gb sweep` dev command + db field stay). **Charge cooldowns are now styled too**
+  (`btn.chargeCooldown` was edge-only → `SetDrawSwipe(true)` forces the shaped recharge sweep).
+- **Availability + range tint = REACT to Blizzard's rendered output, never read the secret.** `UpdateUsable`
+  sets the icon vertex (usable 1,1,1 / OOM 0.5,0.5,1 / unusable 0.4,0.4,0.4) → we read THAT (not
+  `IsUsableAction`). `ActionButton_UpdateRangeIndicator(self, checksRange, inRange)` HANDS us `inRange` → we
+  react (not `IsActionInRange`). Out-of-range = **desaturate then tint** (a clean wash, not a multiply) on the
+  icon AND recolour Blizzard's red keybind to the same colour. `computeIconTint` layers them (range > oom >
+  unusable > usable). "Unusable" is NARROW: not target/cooldown/range — only wrong form/stance, silence,
+  missing secondary resource (untalented = Blizzard-desaturated separately).
+- **State-highlight rings: bolder ADD art + a Glow-width (spread) slider.** `ring_alpha` rim now peaks at
+  full (1.0) alpha (was ~0.65 → faint); `db.stateWidth` drives the ring's spread via `stateWidthRatio` (was
+  the fixed `RING_FIT`). Jason chose the bolder-glow direction (not an opaque ring). The cast inner glow
+  SHARES the ring art → its alpha is scaled to 0.65 to keep the QA'd cast look. "Too subtle" is RESOLVED.
+- **Config accordion opens ALL-CLOSED** (no default-open section — easier to find the one you want).
+
 ## ★★ NORTH STAR (Jason, 2026-07-18): USER-AUTHORED styles via a style editor
 Jason: "I wanted to build this via the UI myself — not a baked-in recipe. Define the
 height and width of the icons (via the UI), overlay a gradient and position it, decide
@@ -149,7 +177,7 @@ probes), `Skin.lua` (skin + decoration engine), `Glows.lua` (proc glow engine),
 | 1 | 8 bars' button globals = Dragonflight-era names, 12 each | ✅ VERIFIED |
 | 2 | Subregions `.icon/.HotKey/.Name/.Count/.cooldown` (+anatomy in API-NOTES §1) | ✅ VERIFIED |
 | 3 | MaskTexture renders in Midnight (with the fresh-mask + edge-padding rules, API-NOTES §2) | ✅ VERIFIED |
-| 4 | `IsActionInRange`/`IsUsableAction` readable in Midnight combat (custom range tint) | ⚠ UNVERIFIED — not needed so far; Blizzard's own indicators kept working |
+| 4 | `IsActionInRange`/`IsUsableAction` readable in Midnight combat (custom range tint) | ✅ SIDESTEPPED (session 7) — we never CALL them; we react to `UpdateUsable`'s icon vertex + `UpdateRangeIndicator`'s `inRange` arg (Blizzard's rendered output). No secret read; usable/OOM/unusable/out-of-range tints all work in combat |
 | 5 | Blizzard hook points (UpdateButtonArt, alert manager, cast anim, hotkeys…) | ✅ SOURCE-VERIFIED @ exact client build + confirmed in-game via the working hooks (API-NOTES §3) |
 | 6 | Proc glows hookable without secret reads | ✅ VERIFIED IN COMBAT — the differentiator is proven |
 
@@ -410,29 +438,89 @@ enough," but true `pill-*-glow` art (like the ring/mask) is the clean fix if he 
 for continuous-OFF (still deferred). (c) preview still doesn't render the plate/extension or the fill
 gradient direction (shape/border/glow only). (d) custom family-styled color picker (still Blizzard's).
 
-## ▶▶ NEXT (session 7) — in priority order
-1. **Render the decoration plate/extension in the preview pane** (currently shape/zoom/state/border/glow) —
-   so Direction/Fade-start/extension preview matches the bars. Biggest remaining preview gap.
-2. **Apply to bars** (per-bar enable/disable) — the last major stub section; needs engine per-bar support.
-3. **Aspect proc-glow art** (`pill-*-glow`) if Jason wants tall-shape glows even (follow-up a above).
+## ★ SESSION 7 (2026-07-20) — PREVIEW PLATE/EXTENSION + GLOW WIDTH/BOLDER RINGS + COOLDOWN & AVAILABILITY (COMMITTED, ALL QA'd)
+A long session. Closed NEXT #1 (preview plate), fixed the "too subtle" highlights, and built the ENTIRE
+"Cooldown & availability" Config section. Everything below QA'd in-game (Jason: "That's much better").
+
+**Preview now renders the decoration plate/extension (Config.lua — NEXT #1 DONE, QA'd).** The preview pane
+mirrors `Skin.ApplyDecor`: the gradient plate, extension (above/below), directional gradient + fade-start,
+continuous ON/OFF, and the border span the whole construction — so Direction/Fade-start/extension now match
+the bars. The construction is CENTERED at `PREVIEW_CENTER_Y` (icon shifts as the plate grows, so nothing
+floats into the state chips or caption); overlays (ring/cooldown/glow/border) + the caption follow it. Plate
+masks use the never-rendered-texture retry (`previewPlateFresh` → `C_Timer.After(0)`), same as the engine.
+`anchorPreviewOverlay` + `getPreviewPlate` + `previewExtendPct` are the new preview helpers. `sliderRow`
+gained an optional `sub` sub-label param.
+
+**Gradient AUTO-FLIPS with the plate side (Config.lua, QA'd).** Moving the plate across centre (below⇄above)
+flips a VERTICAL gradient (up↔down) to keep filling the plate — but ONLY on a genuine side change, so a manual
+Direction pick survives same-side tweaks; a horizontal (left/right) gradient is never auto-flipped.
+
+**State Highlights — Glow width + bolder rings (all three files, QA'd; matched Jason's mock screenshot).**
+The mock had a **Glow width** slider we were missing (only colours + Intensity existed). `db.stateWidth`
+drives `stateWidthRatio` (spread of the hover/selected/flash rings; replaced the fixed `RING_FIT` for state
+rings). And the ring ART was too faint at 100% — `ring_alpha` in generate-art.py now peaks at FULL 1.0 alpha
+(was ~0.65) over a wider band, so full Intensity is a punchy ADD glow. New fast `gen_rings` regen path;
+**196 `-ring.png` regenerated**. The cast inner glow SHARES the ring art → its alpha scaled to 0.65 to keep
+its QA'd look. (Jason chose "bolder glow", not an opaque ring. "Finish flash is fine, leave it.")
+
+**Green ground-target reticle suppressed (Skin.lua `Suppress`, QA'd).** The green square that appears while a
+ground-target spell is on the cursor = `btn.TargetReticleAnimFrame` (atlas `UI-HUD-ActionBar-Target`, fired by
+`UNIT_SPELLCAST_RETICLE_TARGET`). Its `Setup` only `Show()`s + plays a ROTATE anim (never touches alpha), so
+`SetAlpha(0)` sticks — sibling of the red `InterruptDisplay`. (NOTE: a gold PULSING glow on a cooldown ability
+is a real Blizzard proc — e.g. "Hogstrider" — NOT us; confirmed on default bars.)
+
+**★ Cooldown & availability section — BUILT (was a stub; all QA'd). See the session-7 SETTLED block.**
+- **Sweep**: fills the icon shape (baked +0.75px; overshoot slider REMOVED). Sweep colour + opacity. Charge
+  cooldowns styled too (`SetDrawSwipe(true)`). `applySwipe`/`Skin:StyleCooldown` (preview reuses it). A
+  `ActionButton_UpdateCooldown` hook re-asserts the custom swipe colour after casts (Blizzard resets it).
+- **Finish flash**: OUR shape-masked EXPANDING burst (alpha fade + scale-out of the shape glow) on
+  `OnCooldownDone`. GCD skipped by the GAME CLOCK — `SetCooldown` hook stamps `GetTime()` (never the secret
+  duration), `OnCooldownDone` checks elapsed ≥ `FLASH_MIN_CD` (2.0s); a `gbRunning` flag stops
+  `SPELL_UPDATE_COOLDOWN` re-sets from resetting the timer. Hooks BOTH `btn.cooldown` and `chargeCooldown`.
+  Toggle + colour; previews via `C:PlayPreviewFlash`. (`setupFinishFlash`/`playFinishFlash`/`hookFlashCooldown`.)
+- **Availability**: react to `UpdateUsable`'s icon vertex (`refreshAvailability` reads it, NOT
+  `IsUsableAction`). Desaturate-unusable toggle, Unusable tint, Out-of-mana tint. `computeIconTint` is the
+  unified tinter (rec.gbDesat tracks OUR desaturation only).
+- **Out-of-range**: `ActionButton_UpdateRangeIndicator` hook (Blizzard passes `inRange`) → `refreshRange`.
+  Out-of-range = **desaturate then tint** the icon + recolour Blizzard's red keybind to the range colour.
+  Toggle + Range colour. Out-of-range wins the priority in `computeIconTint`.
+
+**Accordion opens ALL-CLOSED (Config.lua).** Removed the default-open first section.
+
+**★★ Blizzard source is IN THE CLIENT** (huge for hook research this session): `/Applications/World of
+Warcraft/_retail_/BlizzardInterfaceCode` — full FrameXML `.lua`/`.xml` + `Blizzard_APIDocumentationGenerated`
+(exact method signatures). Used it to verify `OnCooldownDone`, `SetDrawSwipe`, `SetScaleFrom/To`,
+`UpdateUsable`, `UpdateRangeIndicator`, the Cooldown template (edge/bling textures), `TargetReticleAnimFrame`.
+
+📌 **Open follow-ups from session 7:** (a) availability has NO preview (icon-state; tested on real bars) —
+could add unusable/OOM/range preview but the chip grid would overflow the construction; (b) charge-cooldown
+sweep now DARKENS a still-usable ability (1/2 charges) — Jason accepted it; dial opacity if it bugs him; (c)
+out-of-range keybind recolour is a VERTEX override → blends with a custom keybind text colour (fine for
+default white); (d) "on cooldown" tint was deliberately SKIPPED (the sweep already shows it).
+
+## ▶▶ NEXT (session 8) — in priority order
+1. **Apply to bars** (per-bar enable/disable) — the last major stub Config section; needs engine per-bar
+   support. Highest-value remaining capability.
+2. **Custom family-styled color picker** — replaces Blizzard's default `ColorPickerFrame`, used by EVERY
+   colour control in the editor (a design-language violation that's everywhere). Self-contained UI work.
+3. **Aspect proc-glow art** (`pill-*-glow`) for tall icons (soft bloom forgives it; Jason said "good enough").
 4. **Two-piece border** for continuous-OFF (frame icon + square plate as one outline).
-5. **State highlights too subtle** (deferred feedback below) + custom **color picker** (family-styled).
-6. **Bar-layout / geometry-fork scope** decision (out-of-combat; taint).
+5. **Bar-layout / geometry-fork scope** decision (out-of-combat; taint).
 - Anytime: densify `PILL_RATIOS` if nearest-aspect snapping stretches caps; assist-frame border still base
-  art (low priority, Jason: don't iterate); embed LSM via `.pkgmeta` for standalone release robustness.
+  art (low priority, Jason: don't iterate); embed LSM via `.pkgmeta` for standalone release robustness;
+  coexistence QA with ArcUI/EQOL re-enabled (our `UpdateUsable`/range/icon-vertex work now touches the icon
+  tint — watch for conflicts with other button decorators).
 
 ## Config UI — deferred feedback (Jason, 2026-07-18, in-game QA of the editor)
 Jason chose to defer these to keep wiring the sub-panels; revisit after breadth:
 - ✅ **DONE (session 4): overlays now match the pill SHAPE + span the construction** (hover/checked/flash
-  ring, cooldown sweep, cast fill/ring/interrupt). Still-open: per-overlay **size/width sliders** (the mock
-  had them) are not built; state highlights still soft (below).
-- **State highlights too subtle** — the ring art is a soft rim; reads as a color
-  overlay, not a bold highlight. Needs bolder art (fuller radial) or a spread/opacity
-  control that can exceed the base art's intensity (current intensity slider only dims).
+  ring, cooldown sweep, cast fill/ring/interrupt).
+- ✅ **DONE (session 7): the "size/width slider" + "state highlights too subtle"** — State Highlights got a
+  **Glow width** slider AND the ring art was made bolder (full-alpha ADD rim). Both resolved.
 - **Flyout buttons (pet/stance/etc.) keep a square Blizzard background border** at the
   default size — `Suppress()` misses the flyout background art. Identify + suppress it.
 - **Color picker is the Blizzard default ColorPickerFrame** — clashes with the family
-  look. Build a custom family-styled picker (swatch grid + sliders/wheel).
+  look. Build a custom family-styled picker (swatch grid + sliders/wheel). **(NEXT #2.)**
 
 ## Smaller anytime-items
 - Aspect-correct mask art for stretched constructions (corner distortion on tall shapes).

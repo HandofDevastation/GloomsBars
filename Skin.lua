@@ -72,6 +72,18 @@ local function stateColor(role)
   return (sc and sc[STATE_KEY[role]]) or STATE_TINT[role]
 end
 local function stateIntensity() return (GB.db and GB.db.stateIntensity) or 1 end
+-- "Glow width": how far the state-highlight ring spreads past the icon, as a
+-- per-axis anchor grow (AnchorConstruction ratio). db.stateWidth (0..1) maps into
+-- [MIN..MAX]; the default (~0.5) lands a touch wider than the old fixed RING_FIT
+-- rim so the highlight reads bolder (fixes the "too subtle" note), 0 hugs tight,
+-- 1 blooms into a wide halo.
+local STATE_WIDTH_MIN, STATE_WIDTH_MAX = 0.02, 0.26
+local function stateWidthRatio()
+  local w = (GB.db and GB.db.stateWidth) or 0.5
+  if w < 0 then w = 0 elseif w > 1 then w = 1 end
+  return STATE_WIDTH_MIN + w * (STATE_WIDTH_MAX - STATE_WIDTH_MIN)
+end
+function Skin:StateWidthRatio() return stateWidthRatio() end
 
 -- Reskin the assisted-rotation helper (the persistent blue square): its
 -- ActiveFrame.Border is a 128px square-ish atlas → our ring, tinted; the
@@ -123,6 +135,13 @@ local function Suppress(btn)
   -- Equipped-item green border (rounded-square, mismatched on a pill) — suppress
   -- via alpha-0 (Blizzard toggles it Show/Hide, so alpha sticks). API-NOTES §1.
   if btn.Border then btn.Border:SetAlpha(0) end
+  -- Ground-target reticle: the green square `UI-HUD-ActionBar-Target` glow shown
+  -- while a ground-target spell is on the cursor (event UNIT_SPELLCAST_RETICLE_
+  -- TARGET → TargetReticleAnimFrame:Setup). Setup only Show()s + plays a ROTATE
+  -- anim (never touches alpha), so alpha-0 sticks like the equipped border. Its
+  -- square art clashes with our shape; our Selected (checked) ring conveys the
+  -- pending state instead. (Sibling of the red InterruptDisplay we also suppress.)
+  if btn.TargetReticleAnimFrame then btn.TargetReticleAnimFrame:SetAlpha(0) end
 end
 
 -- ---------------------------------------------------------------------------
@@ -808,6 +827,10 @@ local function StyleCastInnerGlow(btn, castType)
   local isChannel = ActionButtonCastType and castType == ActionButtonCastType.Channel
   local tint = isChannel and CAST_TINT.channel or CAST_TINT.cast
   glow:SetVertexColor(tint[1], tint[2], tint[3])
+  -- The ring art was made BOLDER for state highlights (peak ~0.65 → 1.0 alpha,
+  -- 2026-07-20); this glow SHARES that texture, so scale its alpha back to the
+  -- old effective peak to keep the QA'd cast/channel look unchanged.
+  glow:SetAlpha(0.65)
 end
 
 -- Make the round sweep circle coincide with the icon circle: anchor the
@@ -822,11 +845,185 @@ local function AlignCooldowns(btn)
   -- icon's anti-aliased rim leaks full brightness at the edge (QA-observed).
   -- A sub-pixel dark fringe on the outside is invisible; a bright rim isn't.
   -- Live-tunable via /gb sweep <px> for pixel-perfect QA.
-  local os = (GB.db and GB.db.sweepOvershoot or 0.75)
-  for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
-    if cd then AnchorConstruction(cd, icon, GROW_RATIO, os) end
+  -- Fill the icon exactly: GROW_RATIO compensates the art padding so the shape
+  -- edge lands ON the icon edge, and a fixed +0.75px kills the anti-aliased rim
+  -- leak (QA 2026-07-18). This was the whole point of the old "overshoot" — it
+  -- fixed Blizzard's undershoot — so it's baked, not a user slider (Jason 2026-07-20).
+  for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown, btn.chargeCooldown }) do
+    if cd then AnchorConstruction(cd, icon, GROW_RATIO, 0.75) end
   end
 end
+
+-- Cooldown-sweep appearance: tint (SetSwipeColor rgb) + opacity (its alpha, on top
+-- of the 0.8 baked into the swipe art). Blizzard's rotating EDGE and finish BLING
+-- are SUPPRESSED here (SetDrawEdge/Bling false): they're drawn to the square frame
+-- bounds and can't follow a circle/hex, and can't be recoloured cleanly — our own
+-- shaped finish flash (below) replaces the bling. Blizzard resets the sweep colour
+-- to (0,0,0,1) after a cast (ActionButton OnHide → ActionButton_UpdateCooldown),
+-- so a custom colour is re-asserted in a hook of that global (installed once).
+local function applySwipe(cd)
+  if not cd then return end
+  local db = GB.db or {}
+  local c = db.swipeColor or { 0, 0, 0 }
+  if cd.SetDrawSwipe then cd:SetDrawSwipe(true) end    -- charge recharge is edge-only by default → force the shaped swipe
+  if cd.SetSwipeColor then cd:SetSwipeColor(c[1], c[2], c[3], db.swipeAlpha or 0.8) end
+  if cd.SetDrawEdge then cd:SetDrawEdge(false) end     -- can't be shaped → off
+  if cd.SetDrawBling then cd:SetDrawBling(false) end   -- replaced by our shaped flash
+end
+-- Public: style an arbitrary Cooldown frame (the Config preview reuses this so it
+-- stays in sync with the bars — one source of truth for the sweep look).
+function Skin:StyleCooldown(cd) applySwipe(cd) end
+local function applySwipeAll()
+  if not Skin.enabled then return end
+  GB:ForEachButton(function(btn)
+    local rec = records[btn]
+    if rec and rec.active then applySwipe(btn.cooldown); applySwipe(btn.lossOfControlCooldown); applySwipe(btn.chargeCooldown) end
+  end)
+end
+function Skin:SetSwipeColor(c) if GB.db then GB.db.swipeColor = c end; applySwipeAll() end
+function Skin:SetSwipeAlpha(v) if GB.db then GB.db.swipeAlpha = v end; applySwipeAll() end
+function Skin:SetFinishFlash(b) if GB.db then GB.db.finishFlash = b end end
+function Skin:SetFinishFlashColor(c) if GB.db then GB.db.finishFlashColor = c end end
+
+-- ---------------------------------------------------------------------------
+-- Finish flash — OUR OWN shape-masked burst when a real cooldown ends (replaces
+-- Blizzard's square bling, which can't follow a non-square shape). Fired from the
+-- Cooldown's OnCooldownDone script (a plain event — never reads secret timing).
+-- The GCD (~1.5s) also fires OnCooldownDone, so it's filtered by the GAME CLOCK:
+-- a SetCooldown hook stamps rec.cdStart = GetTime() (we ignore the secret duration
+-- arg), and we only flash when the elapsed wall-time clears FLASH_MIN_CD. The
+-- flash reuses the shape's soft glow bloom (already shape-following), tinted +
+-- anchored fresh each play so it tracks the live shape / size / construction.
+-- ---------------------------------------------------------------------------
+local FLASH_MIN_CD = 2.0        -- seconds of real cooldown below which we skip (≈ GCD)
+local FLASH_DURATION = 0.45
+local FLASH_SCALE = 128 / 80    -- same bloom sizing as the proc glow (art edge at 80/128)
+local function playFinishFlash(btn)
+  local db = GB.db or {}
+  if not db.finishFlash then return end
+  local rec = records[btn]
+  local icon = btn.icon or btn.Icon
+  if not (rec and rec.active and icon and rec.flashFrame) then return end
+  rec.flashTex:SetTexture(Skin:GlowArt())
+  local c = db.finishFlashColor or { 1, 0.9, 0.5 }
+  rec.flashTex:SetVertexColor(c[1], c[2], c[3])
+  AnchorConstruction(rec.flashFrame, icon, (FLASH_SCALE - 1) / 2)   -- frame spans the construction; texture fills it
+  rec.flashFrame:SetAlpha(1)
+  rec.flashAnim:Stop(); rec.flashAnim:Play()
+end
+-- Hook ONE cooldown frame for the flash. Timing lives on the cd frame (gbStart/
+-- gbRunning) so the normal + charge cooldowns each keep their own clock. We stamp
+-- the GAME clock, never the (secret) duration; SPELL_UPDATE_COOLDOWN re-runs
+-- SetCooldown with the SAME values whenever ANY other ability fires, so gbRunning
+-- ignores those re-sets until OnCooldownDone clears it (else the timer resets and
+-- the GCD filter breaks).
+local function hookFlashCooldown(btn, cd)
+  if not (cd and cd.HookScript) then return end
+  cd:HookScript("OnCooldownDone", function()
+    local elapsed = cd.gbStart and (GetTime() - cd.gbStart)
+    cd.gbRunning = false
+    if elapsed and elapsed >= FLASH_MIN_CD then playFinishFlash(btn) end
+  end)
+  hooksecurefunc(cd, "SetCooldown", function()
+    if not cd.gbRunning then cd.gbStart = GetTime(); cd.gbRunning = true end
+  end)
+end
+-- One-time per-button setup: the flash frame/texture + an EXPANDING burst (alpha
+-- fade + scale-out, so it reads as a shaped burst, not a static glow) + the flash
+-- hooks on both the normal and charge cooldowns.
+local function setupFinishFlash(btn, rec)
+  if rec.flashFrame then return end
+  local f = CreateFrame("Frame", nil, btn)
+  f:SetFrameLevel(btn:GetFrameLevel() + 5)   -- above the cooldown + text
+  local tex = f:CreateTexture(nil, "OVERLAY")
+  tex:SetBlendMode("ADD"); tex:SetAllPoints(f)
+  local ag = f:CreateAnimationGroup()
+  local a = ag:CreateAnimation("Alpha")
+  a:SetFromAlpha(1); a:SetToAlpha(0); a:SetDuration(FLASH_DURATION); a:SetSmoothing("OUT")
+  local sc = ag:CreateAnimation("Scale")
+  sc:SetScaleFrom(0.85, 0.85); sc:SetScaleTo(1.5, 1.5); sc:SetOrigin("CENTER", 0, 0)
+  sc:SetDuration(FLASH_DURATION); sc:SetSmoothing("OUT")
+  if ag.SetToFinalAlpha then ag:SetToFinalAlpha(true) end
+  ag:SetScript("OnFinished", function() f:SetAlpha(0) end)
+  f:SetAlpha(0)
+  rec.flashFrame, rec.flashTex, rec.flashAnim = f, tex, ag
+  hookFlashCooldown(btn, btn.cooldown)
+  hookFlashCooldown(btn, btn.chargeCooldown)
+end
+
+-- ---------------------------------------------------------------------------
+-- Availability restyle — Blizzard's UpdateUsable sets the icon vertex colour
+-- (usable 1,1,1 / out-of-mana 0.5,0.5,1 / unusable 0.4,0.4,0.4). We REACT to that
+-- rendered colour — never calling IsUsableAction — and swap in the user's tint +
+-- optional desaturation. The detected state is stashed on rec so a live settings
+-- change can re-apply without re-reading (our own tint would misread as the
+-- state). Only OUR desaturation is cleared (rec.gbDesat) so Blizzard's level-link
+-- desaturation is left intact.
+-- ---------------------------------------------------------------------------
+-- Apply the icon tint from the two REACTED-TO signals stashed on rec: availState
+-- (from UpdateUsable's vertex colour) and outOfRange (from UpdateRangeIndicator's
+-- inRange arg). Out-of-range wins (it's the actionable one, matching Blizzard's red
+-- keybind); else usable/oom/unusable. Only OUR desaturation is cleared (rec.gbDesat).
+local function computeIconTint(btn)
+  local rec = records[btn]
+  local icon = btn.icon or btn.Icon
+  if not (rec and rec.active and icon) then return end
+  local db = GB.db or {}
+  -- Track OUR desaturation on rec.gbDesat so we only ever clear what we set (leaves
+  -- Blizzard's level-link desaturation alone).
+  local function setDesat(on)
+    if on then icon:SetDesaturated(true); rec.gbDesat = true
+    elseif rec.gbDesat then icon:SetDesaturated(false); rec.gbDesat = nil end
+  end
+  if db.rangeTint and rec.outOfRange then
+    -- Desaturate FIRST, then tint → a clean red wash over greyscale (not a multiply
+    -- that lets the icon's own colours bleed through). Jason 2026-07-20.
+    local c = db.rangeColor or { 1, 0.2, 0.2 }
+    setDesat(true); icon:SetVertexColor(c[1], c[2], c[3])
+    -- Recolour Blizzard's red out-of-range keybind to match (it sets the HotKey
+    -- VERTEX colour; ours overrides it. In range, Blizzard restores the default —
+    -- our range hook doesn't fire the else, so we leave the keybind to Blizzard).
+    if btn.HotKey then btn.HotKey:SetVertexColor(c[1], c[2], c[3]) end
+  elseif rec.availState == "oom" then
+    local c = db.availOOM or { 0.5, 0.5, 1 }; setDesat(false); icon:SetVertexColor(c[1], c[2], c[3])
+  elseif rec.availState == "unusable" then
+    local c = db.availUnusable or { 0.4, 0.4, 0.4 }; icon:SetVertexColor(c[1], c[2], c[3])
+    setDesat(db.availDesaturate and true or false)
+  else   -- usable / in range: reset to full colour (the range hook doesn't touch the
+    setDesat(false); icon:SetVertexColor(1, 1, 1)   -- icon, so we must clear our own tint here)
+  end
+end
+-- Post-hook of UpdateUsable: the icon vertex is Blizzard's fresh state → read it to
+-- detect the state (never our own tint: Blizzard re-sets the canonical colour at the
+-- top of UpdateUsable, before this runs), then re-apply our combined tint.
+local function refreshAvailability(btn)
+  local rec = records[btn]
+  local icon = btn.icon or btn.Icon
+  if not (rec and rec.active and icon) then return end
+  local r, _, b = icon:GetVertexColor()
+  rec.availState = (r and r >= 0.9) and "usable" or ((b and b >= 0.9) and "oom" or "unusable")
+  computeIconTint(btn)
+end
+-- Post-hook of ActionButton_UpdateRangeIndicator: Blizzard hands us checksRange +
+-- inRange (we never call IsActionInRange), so just stash + recompute.
+local function refreshRange(btn, checksRange, inRange)
+  local rec = records[btn]
+  if not (rec and rec.active) then return end
+  rec.outOfRange = checksRange and not inRange and true or false
+  computeIconTint(btn)
+end
+local function applyAvailabilityAll()
+  if not Skin.enabled then return end
+  GB:ForEachButton(function(btn)
+    local rec = records[btn]
+    if rec and rec.active then computeIconTint(btn) end
+  end)
+end
+function Skin:SetAvailDesaturate(b) if GB.db then GB.db.availDesaturate = b end; applyAvailabilityAll() end
+function Skin:SetAvailUnusable(c) if GB.db then GB.db.availUnusable = c end; applyAvailabilityAll() end
+function Skin:SetAvailOOM(c) if GB.db then GB.db.availOOM = c end; applyAvailabilityAll() end
+function Skin:SetRangeTint(b) if GB.db then GB.db.rangeTint = b end; applyAvailabilityAll() end
+function Skin:SetRangeColor(c) if GB.db then GB.db.rangeColor = c end; applyAvailabilityAll() end
 
 -- Resize the VISIBLE icon to db.iconW/iconH (centered on the button). The secure
 -- button's hit area is untouched (textures aren't protected). "auto" (nil) leaves
@@ -841,11 +1038,13 @@ local function applyIconSize(btn)
   icon:SetSize(w, h)
 end
 
-function Skin:SetSweepOvershoot(px)
+-- `silent` = suppress the chat message (the Config slider calls this every tick;
+-- only the /gb sweep slash command wants the feedback line).
+function Skin:SetSweepOvershoot(px, silent)
   if px then
     GB.db.sweepOvershoot = px
-    GB.msg(("sweep overshoot set to %.2f px."):format(px))
-  else
+    if not silent then GB.msg(("sweep overshoot set to %.2f px."):format(px)) end
+  elseif not silent then
     GB.msg(("sweep overshoot is %.2f px (usage: /gb sweep 1.25)"):format(GB.db.sweepOvershoot or 0.75))
   end
   if self.enabled then
@@ -929,6 +1128,23 @@ function Skin:SetStateIntensity(v)
   end)
 end
 
+-- Live "Glow width": re-anchor the three state rings (hover/checked/flash) to the
+-- new spread. Pure re-anchor (no art swap, no mask) → safe live, no secret reads.
+function Skin:SetStateWidth(v)
+  GB.db.stateWidth = v
+  if not self.enabled then return end
+  local r = stateWidthRatio()
+  GB:ForEachButton(function(btn)
+    local rec = records[btn]
+    local icon = btn.icon or btn.Icon
+    if not (rec and rec.active and icon) then return end
+    local function fit(tex) if tex then AnchorConstruction(tex, icon, r) end end
+    if btn.GetHighlightTexture then fit(btn:GetHighlightTexture()) end
+    if btn.GetCheckedTexture then fit(btn:GetCheckedTexture()) end
+    fit(btn.Flash)
+  end)
+end
+
 -- Live icon resize: re-anchor the visible icon, then everything that follows it
 -- (state art, cooldowns, and mask + plates + hotkey via ApplyDecor). All plain
 -- re-anchors — the secure hit area is never touched.
@@ -942,7 +1158,7 @@ function Skin:SetIconSize(w, h)
     applyIconSize(btn)
     applyTexCoord(icon)   -- cover-fit crop follows the new aspect (no art stretch)
     applyShapeArt(btn, icon)   -- swap overlay art to the new aspect (ring/swipe)
-    local function fit(tex) if tex then AnchorConstruction(tex, icon, (RING_FIT - 1) / 2) end end
+    local function fit(tex) if tex then AnchorConstruction(tex, icon, stateWidthRatio()) end end
     if btn.GetHighlightTexture then fit(btn:GetHighlightTexture()) end
     if btn.GetCheckedTexture then fit(btn:GetCheckedTexture()) end
     fit(btn.Flash)
@@ -997,6 +1213,11 @@ local function ApplyButton(btn)
         if records[b].hkOverridden then ApplyHotkeyOverride(b) end
       end)
     end
+    if btn.UpdateUsable then
+      hooksecurefunc(btn, "UpdateUsable", function(b)
+        if Skin.enabled and records[b] then refreshAvailability(b) end   -- restyle usable/unusable/OOM
+      end)
+    end
   end
   if btn.IconMask then
     icon:RemoveMaskTexture(btn.IconMask)
@@ -1009,9 +1230,10 @@ local function ApplyButton(btn)
   -- so the ring rim coincides with the icon circle.
   if not rec.stateArt then
     local ring = shapeArt(icon).ring
-    -- Ring rim sits inset from the shape edge → oversize by RING_FIT (not just
-    -- the mask's GROW_RATIO) so the rim reaches the icon/pill edge.
-    local function fit(tex) AnchorConstruction(tex, icon, (RING_FIT - 1) / 2) end
+    -- Ring rim sits inset from the shape edge → oversize it so the rim reaches
+    -- (or, with Glow width, spreads past) the icon/pill edge. stateWidthRatio()
+    -- makes the spread user-tunable (was the fixed (RING_FIT-1)/2).
+    local function fit(tex) AnchorConstruction(tex, icon, stateWidthRatio()) end
     if btn.SetHighlightTexture and btn.GetHighlightTexture then
       btn:SetHighlightTexture(ring, "ADD")
       local hl = btn:GetHighlightTexture()
@@ -1032,22 +1254,42 @@ local function ApplyButton(btn)
     end
     rec.stateArt = true
   end
-  -- Shaped cooldown sweep: the swipe respects its texture's alpha, and
-  -- Blizzard's cooldown path never re-sets swipe textures (only SetCooldown/
-  -- Clear + SetSwipeColor around cast anims — API-NOTES §3), so one-time
-  -- setup persists. chargeCooldown is edge-only by default — left untouched.
+  -- Shaped cooldown sweep: the swipe respects its texture's alpha, and Blizzard's
+  -- cooldown path never re-sets swipe textures (only SetCooldown/Clear +
+  -- SetSwipeColor around cast anims — API-NOTES §3), so one-time setup persists.
+  -- chargeCooldown IS included now (it was edge-only → the recharge showed a bare
+  -- square edge and no shaped sweep); applySwipe forces its swipe on + edge off.
   if not rec.cooldownStyled then
     local swipe = shapeArt(icon).swipe
-    for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown }) do
+    for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown, btn.chargeCooldown }) do
       if cd and cd.SetSwipeTexture then
         cd:SetSwipeTexture(swipe)
-        -- The rotating edge line + finish bling are drawn to the SQUARE frame
-        -- bounds and poke past a round sweep — off for the clean look.
-        if cd.SetDrawEdge then cd:SetDrawEdge(false) end
-        if cd.SetDrawBling then cd:SetDrawBling(false) end
+        -- Sweep tint/opacity, force the swipe on, suppress the square edge/bling.
+        applySwipe(cd)
       end
     end
     rec.cooldownStyled = true
+  end
+  setupFinishFlash(btn, rec)   -- our shaped cooldown-end burst (once per button)
+  -- Re-assert the custom sweep colour after Blizzard resets it to (0,0,0,1) at
+  -- cast-end (ActionButton.lua). One global hook, installed once; gated to our
+  -- skinned buttons. If the global isn't present, a custom colour just reverts
+  -- to black after a cast (graceful) rather than erroring.
+  if not Skin._swipeHook and type(ActionButton_UpdateCooldown) == "function" then
+    Skin._swipeHook = true
+    hooksecurefunc("ActionButton_UpdateCooldown", function(b)
+      local r = b and records[b]
+      if Skin.enabled and r and r.active then applySwipe(b.cooldown) end
+    end)
+  end
+  -- Out-of-range icon tint: react to Blizzard's own range determination (passed as
+  -- inRange), never IsActionInRange. One global hook, installed once.
+  if not Skin._rangeHook and type(ActionButton_UpdateRangeIndicator) == "function" then
+    Skin._rangeHook = true
+    hooksecurefunc("ActionButton_UpdateRangeIndicator", function(b, checksRange, inRange)
+      local r = b and records[b]
+      if Skin.enabled and r and r.active then refreshRange(b, checksRange, inRange) end
+    end)
   end
   if not rec.textStyled then
     StyleText(btn)
