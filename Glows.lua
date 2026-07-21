@@ -38,8 +38,15 @@ local function glowScale() return (GB.db and GB.db.glowScale) or GLOW_SCALE end
 local PULSE_DEPTH = 0.5   -- the pulse always dips to this fraction of the peak, so it stays visible
 local function glowPeak() return (GB.db and GB.db.glowIntensity) or 0.9 end   -- Brightness = PEAK alpha
 local function glowSpeed() return math.max(0.1, (GB.db and GB.db.glowPulseSpeed) or 1) end
+-- State-highlight default tints (mirror Core DB_DEFAULTS.stateColors) for before
+-- the db is populated. hover/selected/flash read GB.db.stateColors.
+local STATE_TINT = { hover = { 1, 0.82, 0.35 }, selected = { 0.45, 0.75, 1 }, flash = { 1, 0.25, 0.25 } }
 local function tintFor(key)
   if key == "assist" then return (GB.db and GB.db.glowAssistColor) or TINT.assist end
+  if STATE_TINT[key] then
+    local sc = GB.db and GB.db.stateColors
+    return (sc and sc[key]) or STATE_TINT[key]
+  end
   return (GB.db and GB.db.glowColor) or TINT.gold
 end
 
@@ -206,7 +213,7 @@ end
 
 -- Show the multi-part glow on one button, tinted `tint` ({r,g,b}); recolours its
 -- border to match. Returns false when there's no hand shape (caller falls back).
-local function applyHandGlow(btn, tint)
+local function applyHandGlow(btn, tint, pulse, peak)
   if not isOurs(btn) then return false end
   local outerArt, innerArt = handGlowArt()
   if not outerArt then return false end
@@ -215,10 +222,10 @@ local function applyHandGlow(btn, tint)
   anchorHandGlow(hg, btn.icon or btn.Icon)
   hg.outer:SetTexture(outerArt); hg.inner:SetTexture(innerArt)
   hg.outer:SetVertexColor(tint[1], tint[2], tint[3]); hg.inner:SetVertexColor(tint[1], tint[2], tint[3])
-  local peak = glowPeak()
-  hg.outer:SetAlpha(peak); hg.inner:SetAlpha(peak)   -- Brightness; the driver then pulses it
+  peak = peak or glowPeak()
+  hg.outer:SetAlpha(peak); hg.inner:SetAlpha(peak)     -- Brightness/intensity; the driver pulses it if `pulse`
   hg.outer:Show(); hg.inner:Show()
-  setGlowActive(hg, true)
+  setGlowActive(hg, pulse and true or false)           -- only pulsing sources join the driver (static otherwise)
   if GB.Skin and GB.Skin.RecolorBorder then GB.Skin:RecolorBorder(btn, tint) end
   return true
 end
@@ -229,21 +236,31 @@ local function hideHandGlow(btn)
   if GB.Skin and GB.Skin.RecolorBorder then GB.Skin:RecolorBorder(btn, nil) end
 end
 
--- One shaped glow per button; sources (alert / assist highlight / dev test) set
--- flags and this reconciles visibility + tint. Assist blue wins when both are
--- active (mirrors Blizzard's own downgrade logic). Routes to the multi-part glow
--- when a hand shape is active (the norm), else the old single soft-bloom.
+-- One shaped glow per button; sources set flags and this reconciles visibility +
+-- tint + pulse. Priority (highest first): assist highlight > proc > flash >
+-- selected (toggled) > hover > dev test. Procs/assist/flash/test PULSE; the steady
+-- states (selected/hover) are static. State highlights take stateIntensity for
+-- brightness, procs take the proc Brightness. Routes to the multi-part glow when a
+-- hand shape is active (the norm), else the old single soft-bloom fallback.
+local PULSING = { assist = true, gold = true, flash = true, test = true }
+local STATE_KEY = { flash = true, selected = true, hover = true }
 local function Refresh(btn)
   local s = sources[btn]
-  local tintKey = s and (s.assist and "assist" or s.alert or s.test) or nil
-  local tint = tintKey and tintFor(tintKey) or nil
+  local tintKey = s and ((s.assist and "assist") or s.alert or (s.flash and "flash")
+    or (s.selected and "selected") or (s.hover and "hover") or s.test) or nil
   if GB.db and GB.db.handShape then
-    if tint then applyHandGlow(btn, tint) else hideHandGlow(btn) end
+    if tintKey then
+      local peak = STATE_KEY[tintKey] and ((GB.db and GB.db.stateIntensity) or 1) or glowPeak()
+      applyHandGlow(btn, tintFor(tintKey), PULSING[tintKey], peak)
+    else
+      hideHandGlow(btn)
+    end
     return
   end
   local g = GetGlow(btn)
   if not g then return end
-  if tint then
+  if tintKey then
+    local tint = tintFor(tintKey)
     g.tex:SetVertexColor(tint[1], tint[2], tint[3])
     if not g.frame:IsShown() then g.frame:Show(); g.anim:Play() end
   elseif g.frame:IsShown() then
@@ -255,7 +272,9 @@ end
 local function SetSource(btn, key, value)
   local s = sources[btn]
   if not s then s = {}; sources[btn] = s end
-  s[key] = value or nil
+  value = value or nil
+  if s[key] == value then return end   -- unchanged → skip the refresh churn (esp. the frequent state event)
+  s[key] = value
   Refresh(btn)
 end
 
@@ -283,6 +302,18 @@ function Glows:Init()
       SetSource(btn, "assist", shown and true or nil)
     end)
   end
+  -- Selected/toggled state (stances, toggled auras): Blizzard updates the checked
+  -- state on ACTIONBAR_UPDATE_STATE. We react to it (reading GetChecked is not a
+  -- secret combat value) and drive the shaped "selected" glow. (Hover is hooked
+  -- per-button in SetEnabled via OnEnter/OnLeave.)
+  local stateWatcher = CreateFrame("Frame")
+  stateWatcher:RegisterEvent("ACTIONBAR_UPDATE_STATE")
+  stateWatcher:SetScript("OnEvent", function()
+    if not Glows.enabled then return end
+    GB:ForEachButton(function(btn)
+      if isOurs(btn) then SetSource(btn, "selected", (btn.GetChecked and btn:GetChecked()) and true or nil) end
+    end)
+  end)
 end
 
 function Glows:SetEnabled(on)
@@ -290,8 +321,15 @@ function Glows:SetEnabled(on)
   self.enabled = on
   ourSet = nil   -- rebuild the action-button set on next use (all buttons exist by now)
   if on then
-    -- Adopt glow state already active at enable time.
+    -- Adopt glow state already active at enable time + hook hover once per button.
     GB:ForEachButton(function(btn)
+      -- Hover → shaped state glow. OnEnter/OnLeave is a safe script hook (we only
+      -- set our own glow source, never a protected action). Hooked once.
+      if not btn.gbHoverHooked then
+        btn.gbHoverHooked = true
+        btn:HookScript("OnEnter", function() if Glows.enabled then SetSource(btn, "hover", true) end end)
+        btn:HookScript("OnLeave", function() if Glows.enabled then SetSource(btn, "hover", nil) end end)
+      end
       if ActionButtonSpellAlertManager and select(1, ActionButtonSpellAlertManager:HasAlert(btn)) then
         Silence(BlizzAlertFor(btn))
         local _, alertType = ActionButtonSpellAlertManager:HasAlert(btn)
@@ -303,6 +341,7 @@ function Glows:SetEnabled(on)
         Silence(hf)
         SetSource(btn, "assist", hf:IsShown() and true or nil)
       end
+      if btn.GetChecked then SetSource(btn, "selected", btn:GetChecked() and true or nil) end
     end)
   else
     for frame in pairs(silenced) do frame:SetAlpha(1) end
@@ -405,6 +444,14 @@ function Glows:SetColor(which, c)
   if which == "assist" then GB.db.glowAssistColor = c else GB.db.glowColor = c end
   for btn in pairs(glows) do Refresh(btn) end
   for btn in pairs(handGlows) do Refresh(btn) end   -- re-tint an active multi-part glow live
+end
+
+-- Re-tint/re-brighten any ACTIVE state glow (hover/selected/flash) after a State-
+-- highlight colour or intensity change in Config. Only touches shown state glows.
+function Glows:RefreshState()
+  for btn, s in pairs(sources) do
+    if isOurs(btn) and (s.hover or s.selected or s.flash) then Refresh(btn) end
+  end
 end
 function Glows:SetIntensity(v) if GB.db then GB.db.glowIntensity = v end; self:ApplyStyle() end
 function Glows:SetSize(v) if GB.db then GB.db.glowScale = v end; self:ApplyStyle() end

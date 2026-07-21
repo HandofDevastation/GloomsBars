@@ -1220,6 +1220,8 @@ function Skin:SetStateColor(which, c)
   GB.db.stateColors = GB.db.stateColors or {}
   GB.db.stateColors[which] = c
   if not (self.enabled and c) then return end
+  -- Hand shape: hover/selected/flash are the multi-part glow → re-tint via Glows.
+  if handKey() then if GB.Glows and GB.Glows.RefreshState then GB.Glows:RefreshState() end; return end
   GB:ForEachButton(function(btn)
     local tex
     if which == "hover" and btn.GetHighlightTexture then tex = btn:GetHighlightTexture()
@@ -1232,6 +1234,7 @@ end
 function Skin:SetStateIntensity(v)
   GB.db.stateIntensity = v
   if not self.enabled then return end
+  if handKey() then if GB.Glows and GB.Glows.RefreshState then GB.Glows:RefreshState() end; return end
   GB:ForEachButton(function(btn)
     local hl = btn.GetHighlightTexture and btn:GetHighlightTexture()
     local ct = btn.GetCheckedTexture and btn:GetCheckedTexture()
@@ -1243,9 +1246,11 @@ end
 
 -- Live "Glow width": re-anchor the three state rings (hover/checked/flash) to the
 -- new spread. Pure re-anchor (no art swap, no mask) → safe live, no secret reads.
+-- (No-op for hand shapes: the multi-part glow's size is baked into the art.)
 function Skin:SetStateWidth(v)
   GB.db.stateWidth = v
   if not self.enabled then return end
+  if handKey() then return end
   local r = stateWidthRatio()
   GB:ForEachButton(function(btn)
     local rec = records[btn]
@@ -1373,21 +1378,24 @@ local function ApplyButton(btn)
   -- so the ring rim coincides with the icon circle.
   if not rec.stateArt then
     local ring = shapeArt(icon).ring
-    -- Ring rim sits inset from the shape edge → oversize it so the rim reaches
-    -- (or, with Glow width, spreads past) the icon/pill edge. stateWidthRatio()
-    -- makes the spread user-tunable (was the fixed (RING_FIT-1)/2).
+    -- Hand shape (the norm): hover + selected are driven by the multi-part glow
+    -- (Glows.lua), so SUPPRESS Blizzard's square hover/checked rings (alpha 0).
+    -- Flash stays on its SDF ring for now (not yet glow-wired — keep the low-mana/
+    -- can't-use cue rather than drop it). SDF fallback shows all three. Ring rim sits
+    -- inset from the shape edge → oversize so it reaches/spreads past the edge.
+    local sa = handKey() and 0 or stateIntensity()
     local function fit(tex) AnchorConstruction(tex, icon, stateWidthRatio()) end
     if btn.SetHighlightTexture and btn.GetHighlightTexture then
       btn:SetHighlightTexture(ring, "ADD")
       local hl = btn:GetHighlightTexture()
-      hl:SetVertexColor(unpack(stateColor("highlight"))); hl:SetAlpha(stateIntensity())
+      hl:SetVertexColor(unpack(stateColor("highlight"))); hl:SetAlpha(sa)
       fit(hl)
     end
     if btn.SetCheckedTexture and btn.GetCheckedTexture then
       btn:SetCheckedTexture(ring)
       local ct = btn:GetCheckedTexture()
       ct:SetBlendMode("ADD")
-      ct:SetVertexColor(unpack(stateColor("checked"))); ct:SetAlpha(stateIntensity())
+      ct:SetVertexColor(unpack(stateColor("checked"))); ct:SetAlpha(sa)
       fit(ct)
     end
     if btn.Flash then
