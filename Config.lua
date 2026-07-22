@@ -2366,13 +2366,13 @@ local function buildPreviewPane(parent)
   -- body. The body lives on its own mouse-enabled frame with hyperlinks on:
   -- section names are |Hgbsec:*|h links (caret orange) that open that accordion
   -- section. RefreshPreview re-anchors both below the construction.
-  local head = newText(pane, FONT.label, 11, TEXT, "CENTER")
-  head:SetJustifyH("CENTER"); head:SetText("")
+  local head = newText(pane, FONT.label, 11, TEXT, "LEFT")
+  head:SetJustifyH("LEFT"); head:SetText("")
   head:SetPoint("TOP", frame, "BOTTOM", 0, -26)
   head:SetPoint("LEFT", pane, "LEFT", 10, 0); head:SetPoint("RIGHT", pane, "RIGHT", -10, 0)
   previewCaptionHead = head
-  local cap = newText(pane, FONT.body, 10, MUTE, "CENTER")
-  cap:SetJustifyH("CENTER"); cap:SetText(PREVIEW_CAPTION_DEFAULT)
+  local cap = newText(pane, FONT.body, 10, MUTE, "LEFT")
+  cap:SetJustifyH("LEFT"); cap:SetText(PREVIEW_CAPTION_DEFAULT)
   cap:SetPoint("TOP", head, "BOTTOM", 0, -3)
   cap:SetPoint("LEFT", pane, "LEFT", 10, 0); cap:SetPoint("RIGHT", pane, "RIGHT", -10, 0)
   previewCaption = cap
@@ -2388,8 +2388,8 @@ local function buildPreviewPane(parent)
     C:OpenSection(title)
     C:SetPreviewState(st)   -- some sections hijack the preview on open (Glows → proc); restore the clicked state
   end)
-  local links = newText(capFrame, FONT.label, 10.5, MUTE, "CENTER")
-  links:SetJustifyH("CENTER"); links:SetSpacing(3); links:SetText("")
+  local links = newText(capFrame, FONT.label, 10.5, MUTE, "LEFT")
+  links:SetJustifyH("LEFT"); links:SetSpacing(3); links:SetText("")
   links:SetPoint("TOP", cap, "BOTTOM", 0, -8)
   links:SetPoint("LEFT", pane, "LEFT", 10, 0); links:SetPoint("RIGHT", pane, "RIGHT", -10, 0)
   previewCaptionLinks = links
