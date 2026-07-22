@@ -314,7 +314,7 @@ local PREVIEW_CENTER_Y = -290    -- pushed down for the 7-row state-chip grid (s
 local panel, bodyContainer
 local sections = {}
 local previewFrame, previewIcon, previewMask, previewGlow, previewRing, previewCD
-local previewBorder, previewBorderMask, previewCaption, previewCaptionHead
+local previewBorder, previewBorderMask, previewCaption, previewCaptionHead, previewCaptionLinks
 local previewCastFillFrame               -- looping cast/channel drain (Cast / Channel chips)
 local previewPlateOn = false             -- plate mode live in the preview (set by RefreshPreview)
 local previewOuter, previewInner          -- multi-part shaped glow (hand shapes; mirrors the bars)
@@ -478,35 +478,52 @@ local PREVIEW_CAPTION_DEFAULT = "Sample of the visible skin. Your clickable hit 
 local function secLink(title)
   return ("|Hgbsec:%s|h|cffFF7729%s|r|h"):format(title, title:upper())
 end
-local L_GLOWS, L_ANIMS = secLink("Glows"), secLink("Animations")
-local L_CDA, L_CAST = secLink("Cooldown & availability"), secLink("Cast & channel")
--- Each entry = { HEADING, body }: the state name (bold GeneralSans-Semibold line)
--- + what triggers it in-game + clickable section links (Jason's copy, session 12).
+-- The "Styled in:" bullet list under a state description (Jason: inline links were
+-- hard to follow). Items: a title string, or { title, note } where the note (in the
+-- muted body colour) marks which PART of the state that section covers.
+local function linkList(items)
+  local out = { "Styled in:" }
+  for _, it in ipairs(items) do
+    local title, note = it, nil
+    if type(it) == "table" then title, note = it[1], it[2] end
+    out[#out + 1] = "• " .. secLink(title) .. (note and (" — " .. note) or "")
+  end
+  return table.concat(out, "\n")
+end
+local LL_GLOW = linkList({ "Glows", "Animations" })
+local LL_CDA = linkList({ "Cooldown & availability" })
+local LL_CAST = linkList({ "Glows", "Animations", { "Cast & channel", "fill & bursts" } })
+-- Each entry = { HEADING, body, links }: the state name (bold Semibold line), what
+-- triggers it in-game (plain prose), then the clickable "Styled in:" bullet list.
 local STATE_DESC = {
-  idle      = { "IDLE", ("The button's resting/default look with nothing active. Styled in %s, %s, %s and %s.")
-                :format(secLink("Shape & icon"), secLink("Plate"), secLink("Decoration layers"), secLink("Text")) },
-  proc      = { "PROC", "Triggered when an ability procs (a free or empowered cast becomes ready). Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
-  highlight = { "HIGHLIGHT", "Indicates the current location (if any) on your action bars when hovering over an ability or talent in your spellbook or talent tree. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
-  assist    = { "ASSIST", "Triggered by Blizzard's Combat Assistant/Assisted Highlight feature to indicate the suggested next rotation ability. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
-  cast      = { "CAST", "Shows while activating an ability with a cast time. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "; the casting fill bar and end burst and canceled/interrupted bursts are styled in " .. L_CAST .. "." },
-  channel   = { "CHANNEL", "Shows while activating a channeled ability. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "; the channel progress drain and end burst and canceled/interrupted bursts are styled in " .. L_CAST .. "." },
-  hover     = { "HOVER", "Shows while hovering your pointer over an icon in your action bars. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
-  selected  = { "SELECTED", "Displays when a button is toggled on (a stance, form or aura). Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
-  flash     = { "FLASH", "Appears when auto-attack or auto-shot is active — typically needs the related auto-attack ability to be on the action bar. Not commonly seen. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
-  cooldown  = { "COOLDOWN", "A swipe animation and finish flash to indicate that an ability is recharging or ready. Styled in " .. L_CDA .. "; the countdown number text in " .. secLink("Text") .. "." },
-  unusable  = { "UNUSABLE", "Indicates an ability is unusable due to wrong talent, form/stance, weapon type, silenced, missing resource, etc. Styled in " .. L_CDA .. "." },
-  oom       = { "OUT OF MANA", "Indicates you have insufficient mana or other resource/power to cast. Styled in " .. L_CDA .. "." },
-  range     = { "OUT OF RANGE", "Shows when the target is too far for the ability to be cast. Tints the icon and recolors the keybind text (if shown). Enabled and styled in " .. L_CDA .. "." },
+  idle      = { "IDLE", "The button's resting/default look with nothing active.",
+                linkList({ "Shape & icon", "Plate", "Decoration layers", "Text" }) },
+  proc      = { "PROC", "Triggered when an ability procs (a free or empowered cast becomes ready).", LL_GLOW },
+  highlight = { "HIGHLIGHT", "Indicates the current location (if any) on your action bars when hovering over an ability or talent in your spellbook or talent tree.", LL_GLOW },
+  assist    = { "ASSIST", "Triggered by Blizzard's Combat Assistant/Assisted Highlight feature to indicate the suggested next rotation ability.", LL_GLOW },
+  cast      = { "CAST", "Shows while activating an ability with a cast time.", LL_CAST },
+  channel   = { "CHANNEL", "Shows while activating a channeled ability.", LL_CAST },
+  hover     = { "HOVER", "Shows while hovering your pointer over an icon in your action bars.", LL_GLOW },
+  selected  = { "SELECTED", "Displays when a button is toggled on (a stance, form or aura).", LL_GLOW },
+  flash     = { "FLASH", "Appears when auto-attack or auto-shot is active — typically needs the related auto-attack ability to be on the action bar. Not commonly seen.", LL_GLOW },
+  cooldown  = { "COOLDOWN", "A swipe animation and finish flash to indicate that an ability is recharging or ready.",
+                linkList({ "Cooldown & availability", { "Text", "countdown numbers" } }) },
+  unusable  = { "UNUSABLE", "Indicates an ability is unusable due to wrong talent, form/stance, weapon type, silenced, missing resource, etc.", LL_CDA },
+  oom       = { "OUT OF MANA", "Indicates you have insufficient mana or other resource/power to cast.", LL_CDA },
+  range     = { "OUT OF RANGE", "Shows when the target is too far for the ability to be cast. Tints the icon and recolors the keybind text (if shown).",
+                linkList({ { "Cooldown & availability", "enable & style" } }) },
 }
--- Set the caption pair: a STATE_DESC entry, or nil → the default explainer (no heading).
+-- Set the caption trio: a STATE_DESC entry, or nil → the default explainer only.
 local function setCaption(entry)
   if not (previewCaption and previewCaptionHead) then return end
   if type(entry) == "table" then
     previewCaptionHead:SetText(entry[1])
     previewCaption:SetText(entry[2])
+    if previewCaptionLinks then previewCaptionLinks:SetText(entry[3] or "") end
   else
     previewCaptionHead:SetText("")
     previewCaption:SetText(PREVIEW_CAPTION_DEFAULT)
+    if previewCaptionLinks then previewCaptionLinks:SetText("") end
   end
 end
 
@@ -1820,6 +1837,12 @@ function C:RefreshPreview()
     previewCaption:SetPoint("TOP", previewCaptionHead, "BOTTOM", 0, -3)
     previewCaption:SetPoint("LEFT", pane2, "LEFT", 10, 0)
     previewCaption:SetPoint("RIGHT", pane2, "RIGHT", -10, 0)
+    if previewCaptionLinks then
+      previewCaptionLinks:ClearAllPoints()
+      previewCaptionLinks:SetPoint("TOP", previewCaption, "BOTTOM", 0, -8)
+      previewCaptionLinks:SetPoint("LEFT", pane2, "LEFT", 10, 0)
+      previewCaptionLinks:SetPoint("RIGHT", pane2, "RIGHT", -10, 0)
+    end
   end
 
   -- A plate texture created THIS frame hasn't rendered, so its first
@@ -2348,6 +2371,13 @@ local function buildPreviewPane(parent)
   head:SetPoint("TOP", frame, "BOTTOM", 0, -26)
   head:SetPoint("LEFT", pane, "LEFT", 10, 0); head:SetPoint("RIGHT", pane, "RIGHT", -10, 0)
   previewCaptionHead = head
+  local cap = newText(pane, FONT.body, 10, MUTE, "CENTER")
+  cap:SetJustifyH("CENTER"); cap:SetText(PREVIEW_CAPTION_DEFAULT)
+  cap:SetPoint("TOP", head, "BOTTOM", 0, -3)
+  cap:SetPoint("LEFT", pane, "LEFT", 10, 0); cap:SetPoint("RIGHT", pane, "RIGHT", -10, 0)
+  previewCaption = cap
+  -- The "Styled in:" bullet list — bold (Semibold), on its own mouse-enabled
+  -- hyperlink frame; clicking an orange section name opens that section.
   local capFrame = CreateFrame("Frame", nil, pane)
   capFrame:SetHyperlinksEnabled(true)
   capFrame:EnableMouse(true)
@@ -2358,12 +2388,12 @@ local function buildPreviewPane(parent)
     C:OpenSection(title)
     C:SetPreviewState(st)   -- some sections hijack the preview on open (Glows → proc); restore the clicked state
   end)
-  local cap = newText(capFrame, FONT.body, 10, MUTE, "CENTER")
-  cap:SetJustifyH("CENTER"); cap:SetText(PREVIEW_CAPTION_DEFAULT)
-  cap:SetPoint("TOP", head, "BOTTOM", 0, -3)
-  cap:SetPoint("LEFT", pane, "LEFT", 10, 0); cap:SetPoint("RIGHT", pane, "RIGHT", -10, 0)
-  previewCaption = cap
-  capFrame:SetAllPoints(cap)   -- the click surface tracks the body text's rect
+  local links = newText(capFrame, FONT.label, 10.5, MUTE, "CENTER")
+  links:SetJustifyH("CENTER"); links:SetSpacing(3); links:SetText("")
+  links:SetPoint("TOP", cap, "BOTTOM", 0, -8)
+  links:SetPoint("LEFT", pane, "LEFT", 10, 0); links:SetPoint("RIGHT", pane, "RIGHT", -10, 0)
+  previewCaptionLinks = links
+  capFrame:SetAllPoints(links)   -- the click surface tracks the list's rect
 end
 
 local function BuildPanel()
