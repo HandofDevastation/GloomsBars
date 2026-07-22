@@ -51,6 +51,7 @@ local function applyTexCoord(icon)
 end
 
 local records = {}   -- [button] = { mask, texCoord, active, iconMaskRemoved }
+local flyoutButtons = {}   -- skinned SpellFlyoutPopupButton1..N (also in records; swept on SpellFlyout:Toggle)
 
 -- Button-state art (hover/checked/flash): REPLACED with our round ring-glow,
 -- not masked — runtime mask attachment failed to clip the highlight in QA
@@ -159,6 +160,10 @@ local function Suppress(btn)
   -- alpha) → durable alpha-0, same mechanism as the reticle above.
   if btn.NewActionTexture then btn.NewActionTexture:SetAlpha(0) end
   if btn.CooldownFlash then btn.CooldownFlash:SetAlpha(0) end
+  -- Flyout-owning bar buttons: the square drop shadow behind an OPEN popup
+  -- (FlyoutButtonTemplate.BorderShadow, hidden by default, Show/Hide-driven →
+  -- durable alpha-0 like the reticle). The Arrow stays (effects-matrix: leave).
+  if btn.BorderShadow then btn.BorderShadow:SetAlpha(0) end
 end
 
 -- ---------------------------------------------------------------------------
@@ -241,7 +246,29 @@ end
 -- (ring/sweep) anchoring is left alone (those are replaced by the hand glow).
 -- Session 8 pivot: the active key is a PERSISTED setting (GB.db.handShape), read
 -- straight from the db here — nil → the legacy SDF shape path.
-local function handKey() return GB.db and GB.db.handShape end
+-- The active shape key. shapeCtx is a PER-BUTTON override context (flyout
+-- members wear the 1:1 SIBLING of the bar shape — Blizzard fixes their size/
+-- spacing to small squares, so portrait/landscape silhouettes overlap): the
+-- per-button entry points (withShapeCtx, below ApplyButton) save/restore it
+-- from the button's record, so every transitive read — mask plan, plate
+-- gating, swipe art, crop/aspect math — resolves to the override with no
+-- per-site threading. nil ctx = the global db shape (bars, preview).
+local shapeCtx
+local function handKey() return shapeCtx or (GB.db and GB.db.handShape) end
+-- The 1:1 sibling of each elongated shape (a pill's square-aspect analog is
+-- the circle; rounded squares keep their curvature). 1:1 keys pass through.
+local FLYOUT_1X1 = {
+  pill32 = "circle", pill21 = "circle",
+  square32 = "square", square21 = "square",
+  square32w = "square", square21w = "square",
+  ["roundsq1-32"] = "roundsq1", ["roundsq1-21"] = "roundsq1",
+  ["roundsq2-32"] = "roundsq2", ["roundsq2-21"] = "roundsq2",
+  ["roundsq3-32"] = "roundsq3", ["roundsq3-21"] = "roundsq3",
+}
+local function flyoutShapeKey()
+  local k = GB.db and GB.db.handShape
+  return k and (FLYOUT_1X1[k] or k) or nil
+end
 
 -- Plate mode (session 11): a 2:1 PORTRAIT hand shape rendered as a SQUARE icon filling
 -- one half + a solid-colour PLATE filling the other half (the colour then fading up over
@@ -1219,6 +1246,10 @@ function Skin:ReapplyDecor()
   GB:ForEachButton(function(btn)
     if records[btn] and records[btn].active then ApplyDecor(btn) end
   end)
+  for _, btn in ipairs(flyoutButtons) do
+    local rec = records[btn]
+    if rec and rec.active then rec.shapeOverride = flyoutShapeKey(); ApplyDecor(btn) end
+  end
   if GB.Glows then GB.Glows:RefreshShape(); GB.Glows:RefreshSize() end   -- glow art + span follow continuous/extension edits
 end
 
@@ -2038,6 +2069,7 @@ local function RestoreButton(btn)
   if btn.Border then btn.Border:SetAlpha(1) end
   if btn.NewActionTexture then btn.NewActionTexture:SetAlpha(1) end
   if btn.CooldownFlash then btn.CooldownFlash:SetAlpha(1) end
+  if btn.BorderShadow then btn.BorderShadow:SetAlpha(1) end
   btn:SetAlpha(1); rec.emptyAlpha = nil   -- undo any empty-slot dim/hide
   if rec.plates then
     for _, plate in ipairs(rec.plates) do plate.tex:Hide() end
@@ -2087,6 +2119,72 @@ local function RestoreButton(btn)
   -- getters — a /reload fully restores them (Disable() says so).
 end
 
+-- Per-button shape-override context: rebind the per-button entry points so
+-- each establishes shapeCtx from the button's record, falling back to the
+-- ENCLOSING ctx (ApplyButton creates the record mid-call — sweepFlyout sets
+-- the outer ctx for that first pass). Lua closures capture the LOCAL variable,
+-- so every internal caller — the UpdateButtonArt hook bodies, the mask-retry
+-- timer, queueFinishFlash — calls the wrapped versions from here on.
+local function withShapeCtx(f)
+  return function(btn, ...)
+    local prev = shapeCtx
+    local rec = records[btn]
+    shapeCtx = (rec and rec.shapeOverride) or prev
+    f(btn, ...)
+    shapeCtx = prev
+  end
+end
+applyIconSize   = withShapeCtx(applyIconSize)
+AlignCooldowns  = withShapeCtx(AlignCooldowns)
+playFinishFlash = withShapeCtx(playFinishFlash)
+ApplyDecor      = withShapeCtx(ApplyDecor)
+ApplyButton     = withShapeCtx(ApplyButton)
+
+-- ---------------------------------------------------------------------------
+-- Flyout member skinning (session 13): SpellFlyoutPopupButton1..N — the popup
+-- buttons of flyout actions, the last square art anywhere. They inherit the
+-- FULL SmallActionButton visual anatomy (icon/cooldown/NormalTexture/text), so
+-- ApplyButton works as-is (its per-button hooks are all guarded on methods the
+-- members lack — no Update/UpdateHotkeys etc.). Blizzard creates them LAZILY
+-- inside SpellFlyout:Toggle and reuses them by global name, so a Toggle
+-- post-hook sweeps: new members get ApplyButton, known ones a cheap ApplyDecor
+-- re-assert — style edits made while the flyout was closed land on the next
+-- open (a closed flyout can't show stale styling). The popup panel's square
+-- nine-slice (SpellFlyout.Background) is suppressed so members float like the
+-- bars; the bar button's BorderShadow is handled in Suppress.
+local function sweepFlyout()
+  if not Skin.enabled then return end
+  local i = 1
+  while true do
+    local btn = _G["SpellFlyoutPopupButton" .. i]
+    if not btn then break end
+    local rec = records[btn]
+    if not rec then flyoutButtons[#flyoutButtons + 1] = btn end
+    if rec and rec.active then
+      rec.shapeOverride = flyoutShapeKey()   -- track shape swaps made since last open
+      ApplyDecor(btn)
+    else
+      -- First skin (or re-enable): the wrapper can't read the override off a
+      -- record that doesn't exist yet, so hand it in via the enclosing ctx;
+      -- the record then carries it for every later hook-driven pass.
+      shapeCtx = flyoutShapeKey()
+      ApplyButton(btn)
+      shapeCtx = nil
+      if records[btn] then records[btn].shapeOverride = flyoutShapeKey() end
+    end
+    i = i + 1
+  end
+  if SpellFlyout and SpellFlyout.Background then SpellFlyout.Background:SetAlpha(0) end
+end
+
+local function hookFlyout()
+  if Skin._flyoutHooked then return end
+  local fly = _G.SpellFlyout
+  if not (fly and fly.Toggle) then return end
+  Skin._flyoutHooked = true
+  hooksecurefunc(fly, "Toggle", sweepFlyout)
+end
+
 function Skin:Enable()
   self.enabled = true
   if GB.db then GB.db.skinEnabled = true end
@@ -2095,6 +2193,8 @@ function Skin:Enable()
     ApplyButton(btn)
     count = count + 1
   end)
+  hookFlyout()
+  sweepFlyout()   -- members that already exist from an earlier open
   GB.msg(("skin ON — %d buttons styled. Persists across /reload; /gb skin to turn off."):format(count))
   if GB.Glows then GB.Glows:SetEnabled(true) end
   self:RefreshEmptySlots()   -- initial empty-slot dim/hide pass
@@ -2118,6 +2218,8 @@ function Skin:Disable()
   self.enabled = false
   if GB.db then GB.db.skinEnabled = false end
   GB:ForEachButton(function(btn) RestoreButton(btn) end)
+  for _, btn in ipairs(flyoutButtons) do RestoreButton(btn) end
+  if SpellFlyout and SpellFlyout.Background then SpellFlyout.Background:SetAlpha(1) end
   if GB.Glows then GB.Glows:SetEnabled(false) end
   GB.msg("skin OFF — Blizzard defaults restored (/reload to also restore cooldown sweep shape).")
 end
