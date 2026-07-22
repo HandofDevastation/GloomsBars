@@ -472,20 +472,22 @@ end
 -- contextual help right in the preview pane. Reset on every section toggle so it never
 -- lingers into a section that has no "state" concept.
 local PREVIEW_CAPTION_DEFAULT = "Sample of the visible skin. Your clickable hit area stays Edit Mode's size."
+-- Each entry: what triggers the state in-game + WHERE its controls live (the
+-- accordion section names, in caps so they read as locations — Jason, session 12).
 local STATE_DESC = {
-  idle     = "Idle: the button's resting look, with nothing active.",
-  cooldown = "Cooldown: while the ability is recharging (the shaped sweep, then a finish flash).",
-  proc     = "Proc: fires when an ability procs (a free or empowered cast becomes ready).",
-  highlight = "Highlight: Blizzard's \"press this\" pulse — where a hovered spellbook/talent spell sits on your bars.",
-  cast     = "Cast: while you're casting a cast-time spell on this button (in-game it also drains a fill).",
-  channel  = "Channel: while you're channeling a spell on this button (in-game it also drains a fill).",
-  hover    = "Hover: while your mouse is over the button.",
-  selected = "Selected: when the button is toggled on (a stance, form, or toggled aura).",
-  flash    = "Flash: during auto-attack or auto-shot (needs the Attack ability on a bar).",
-  assist   = "Assist: Blizzard's suggested-next-ability rotation highlight.",
-  unusable = "Unusable: wrong form/stance, silenced, or missing a resource. Tint in Cooldown & availability.",
-  oom      = "Out of mana: not enough mana/power. Tint in Cooldown & availability.",
-  range    = "Out of range: target too far — icon wash + keybind recolour. Enable in Cooldown & availability.",
+  idle     = "Idle: the button's resting look, with nothing active. Styled in SHAPE & ICON, PLATE, DECORATION LAYERS and TEXT.",
+  cooldown = "Cooldown: while the ability is recharging (the shaped sweep, then a finish flash). Styled in COOLDOWN & AVAILABILITY.",
+  proc     = "Proc: fires when an ability procs (a free or empowered cast becomes ready). Styled in GLOWS and ANIMATIONS.",
+  highlight = "Highlight: Blizzard's \"press this\" pulse — where a hovered spellbook/talent spell sits on your bars. Styled in GLOWS and ANIMATIONS.",
+  cast     = "Cast: while you're casting a cast-time spell on this button. Glow in GLOWS and ANIMATIONS; the drain fill & end bursts in CAST & CHANNEL.",
+  channel  = "Channel: while you're channeling a spell on this button. Glow in GLOWS and ANIMATIONS; the drain fill & end bursts in CAST & CHANNEL.",
+  hover    = "Hover: while your mouse is over the button. Styled in GLOWS and ANIMATIONS.",
+  selected = "Selected: when the button is toggled on (a stance, form, or toggled aura). Styled in GLOWS and ANIMATIONS.",
+  flash    = "Flash: during auto-attack or auto-shot (needs the Attack ability on a bar). Styled in GLOWS and ANIMATIONS.",
+  assist   = "Assist: Blizzard's suggested-next-ability rotation highlight. Styled in GLOWS and ANIMATIONS.",
+  unusable = "Unusable: wrong form/stance, silenced, or missing a resource. Styled in COOLDOWN & AVAILABILITY.",
+  oom      = "Out of mana: not enough mana/power to cast. Styled in COOLDOWN & AVAILABILITY.",
+  range    = "Out of range: the target is too far — icon wash + keybind recolour. Enable & style in COOLDOWN & AVAILABILITY.",
 }
 
 function C:ToggleSection(s)
