@@ -393,6 +393,7 @@ loader:SetScript("OnEvent", function(_, event, arg1)
       local si = GB.db.stateIntensity or 1    -- hover/selected/flash peak
       local seedT = {
         proc     = { enabled = true, color = GB.db.glowColor or { 1, 0.85, 0.35 },      opacity = gi, layers = "both" },
+        highlight = { enabled = true, color = { 1, 0.93, 0.55 },                        opacity = gi, layers = "both" },   -- Blizzard's "press this" pulse (session 12)
         assist   = { enabled = true, color = GB.db.glowAssistColor or { 0.4, 0.75, 1 }, opacity = gi, layers = "both" },
         cast     = { enabled = true, color = { 1, 0.85, 0.4 },                          opacity = gi, layers = "both" },
         channel  = { enabled = true, color = { 0.6, 1, 0.4 },                           opacity = gi, layers = "both" },

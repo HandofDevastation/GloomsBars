@@ -247,12 +247,12 @@ end
 -- One shaped glow per button; sources set flags and this reconciles visibility +
 -- tint + opacity + layers + pulse. Each button state is a TRIGGER record in
 -- GB.db.triggers { enabled, color, opacity, layers }; the winning trigger is chosen
--- by priority (highest first): assist highlight > proc > cast/channel > flash >
+-- by priority (highest first): assist highlight > proc > spell-highlight > cast/channel > flash >
 -- selected (toggled) > hover > dev test — SKIPPING any the user disabled, so turning
 -- off e.g. Hover still lets a checked button show its Selected glow. Procs/assist/
 -- flash pulse; cast/channel/hover/selected are steady. Routes to the multi-part glow
 -- when a hand shape is active (the norm), else the old single soft-bloom fallback.
-local PULSING = { proc = true, assist = true, flash = true }   -- which triggers pulse
+local PULSING = { proc = true, assist = true, flash = true, highlight = true }   -- which triggers pulse
 local function trig(key) return GB.db and GB.db.triggers and GB.db.triggers[key] end
 local function enabledTrig(key) local t = trig(key); if t and t.enabled ~= false then return t end end
 
@@ -263,6 +263,7 @@ local function winningTrigger(s)
   if s.assist then local t = enabledTrig("assist"); if t then return "assist", t end end
   if s.alert == "assist" then local t = enabledTrig("assist"); if t then return "assist", t end
   elseif s.alert == "gold" then local t = enabledTrig("proc"); if t then return "proc", t end end
+  if s.highlight then local t = enabledTrig("highlight"); if t then return "highlight", t end end   -- "press this"
   if s.cast then local t = enabledTrig(s.cast); if t then return s.cast, t end end   -- s.cast = "cast"|"channel"
   if s.flash then local t = enabledTrig("flash"); if t then return "flash", t end end
   if s.selected then local t = enabledTrig("selected"); if t then return "selected", t end end
@@ -336,6 +337,19 @@ function Glows:Init()
       if not (Glows.enabled and isOurs(btn)) then return end
       Silence(btn.AssistedCombatHighlightFrame)
       SetSource(btn, "assist", shown and true or nil)
+    end)
+  end
+  -- Spell highlight ("you should press this", EFFECTS-MATRIX §B gap): Blizzard pulses
+  -- a square mouseover frame via SharedActionButton_RefreshSpellHighlight(button,
+  -- shown). Post-hook: kill the square (STOP the looping alpha anim — it re-drives
+  -- the texture alpha every frame, so a one-shot alpha-0 loses — then hide) and
+  -- route the state to the shaped "highlight" glow trigger instead.
+  if type(SharedActionButton_RefreshSpellHighlight) == "function" then
+    hooksecurefunc("SharedActionButton_RefreshSpellHighlight", function(btn, shown)
+      if not (Glows.enabled and isOurs(btn)) then return end
+      if btn.SpellHighlightAnim then btn.SpellHighlightAnim:Stop() end
+      if btn.SpellHighlightTexture then btn.SpellHighlightTexture:Hide() end
+      SetSource(btn, "highlight", shown and true or nil)
     end)
   end
   -- Selected/toggled state (stances, toggled auras): Blizzard updates the checked

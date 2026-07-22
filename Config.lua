@@ -476,6 +476,7 @@ local STATE_DESC = {
   idle     = "Idle: the button's resting look, with nothing active.",
   cooldown = "Cooldown: while the ability is recharging (the shaped sweep, then a finish flash).",
   proc     = "Proc: fires when an ability procs (a free or empowered cast becomes ready).",
+  highlight = "Highlight: Blizzard's \"press this\" suggestion pulse. Live only; not shown in this preview.",
   cast     = "Cast: while you're casting a cast-time spell here. Live only; not shown in this preview.",
   channel  = "Channel: while you're channeling a spell here. Live only; not shown in this preview.",
   hover    = "Hover: while your mouse is over the button.",
@@ -1085,7 +1086,7 @@ end
 -- The triggers, in priority (display) order. Third field = the preview chip to flip
 -- to on edit (cast/channel/assist have no chip, so they leave the preview as-is).
 local GLOW_ROWS = {
-  { "proc", "Proc", "proc" }, { "cast", "Cast" }, { "channel", "Channel" },
+  { "proc", "Proc", "proc" }, { "highlight", "Highlight" }, { "cast", "Cast" }, { "channel", "Channel" },
   { "hover", "Hover", "hover" }, { "selected", "Selected", "selected" },
   { "flash", "Flash", "flash" }, { "assist", "Assist" },
 }
@@ -1663,8 +1664,8 @@ end
 -- for it. Params are generated from each module's schema, so new modules get a UI for
 -- free. The preview host runs the selected trigger's enabled animations live.
 local ANIM_TRIGGERS = {
-  { "proc", "Proc" }, { "cast", "Cast" }, { "channel", "Channel" }, { "hover", "Hover" },
-  { "selected", "Selected" }, { "flash", "Flash" }, { "assist", "Assist" },
+  { "proc", "Proc" }, { "highlight", "Highlight" }, { "cast", "Cast" }, { "channel", "Channel" },
+  { "hover", "Hover" }, { "selected", "Selected" }, { "flash", "Flash" }, { "assist", "Assist" },
 }
 local animTrigger = "proc"   -- which trigger the section is currently editing
 

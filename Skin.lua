@@ -153,6 +153,12 @@ local function Suppress(btn)
   -- square art clashes with our shape; our Selected (checked) ring conveys the
   -- pending state instead. (Sibling of the red InterruptDisplay we also suppress.)
   if btn.TargetReticleAnimFrame then btn.TargetReticleAnimFrame:SetAlpha(0) end
+  -- "New action" sheen + the GCD flipbook flash — the last square art over shaped
+  -- icons (EFFECTS-MATRIX §A gaps). Both are Show/Hide-driven (NewActionTexture via
+  -- SetShown; CooldownFlash:Setup only Show()s + plays its flipbook — neither touches
+  -- alpha) → durable alpha-0, same mechanism as the reticle above.
+  if btn.NewActionTexture then btn.NewActionTexture:SetAlpha(0) end
+  if btn.CooldownFlash then btn.CooldownFlash:SetAlpha(0) end
 end
 
 -- ---------------------------------------------------------------------------
@@ -1795,6 +1801,8 @@ local function RestoreButton(btn)
   if btn.NormalTexture then btn.NormalTexture:SetAlpha(1) end
   if btn.PushedTexture then btn.PushedTexture:SetAlpha(1) end
   if btn.Border then btn.Border:SetAlpha(1) end
+  if btn.NewActionTexture then btn.NewActionTexture:SetAlpha(1) end
+  if btn.CooldownFlash then btn.CooldownFlash:SetAlpha(1) end
   if rec.plates then
     for _, plate in ipairs(rec.plates) do plate.tex:Hide() end
   end
