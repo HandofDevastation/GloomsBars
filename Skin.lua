@@ -20,8 +20,33 @@ local GB = _G.GloomsBars
 local Skin = { enabled = false }
 GB.Skin = Skin
 
-local ZOOM = 0.08   -- default icon zoom-crop; GB.db.zoom overrides it (live via Skin:SetZoom)
-local function zoomVal() return (GB.db and GB.db.zoom) or ZOOM end
+-- Stage-3 preset resolution (profiles) — hoisted above every reader: presetCtx
+-- is the resolved PRESET SNAPSHOT for the button being processed; nil = the
+-- working copy (GB.db). KEY RULE: bars assigned to the profile's EDIT preset
+-- render the working copy — the live document, so editing stays live — and
+-- only bars assigned to OTHER presets render their snapshots. pv(field) is the
+-- one read funnel for every per-button path; the withPresetCtx wrappers (below
+-- ApplyButton) establish the ctx from rec.barKey → the bar's assignment.
+local records, flyoutButtons   -- assigned below; hoisted so presetFor can see them
+local presetCtx
+local function pv(field)
+  if presetCtx and presetCtx[field] ~= nil then return presetCtx[field] end
+  return GB.db and GB.db[field]
+end
+local function presetFor(btn)
+  local rec = records[btn]
+  local prof = GB.ActiveProfile and GB:ActiveProfile()
+  if not (rec and prof) then return nil end
+  local pname = rec.barKey and prof.bars and prof.bars[rec.barKey]
+  if not pname or pname == prof.edit then return nil end
+  return prof.presets[pname]
+end
+-- The styleData document for the current ctx. Engine paths use this; the
+-- Config keeps editing the working copy via style() (ctx-free).
+local function style() return (presetCtx and presetCtx.styleData) or GB:GetStyle() end
+
+local ZOOM = 0.08   -- default icon zoom-crop; the preset's zoom overrides it (live via Skin:SetZoom)
+local function zoomVal() return pv("zoom") or ZOOM end
 -- The circle art is padded to 240/256 of its canvas (edge-bleed rule,
 -- API-NOTES §2); oversize the mask region so the circle spans the icon.
 local GROW_RATIO = (256 / 240 - 1) / 2
@@ -33,7 +58,7 @@ local GROW_RATIO = (256 / 240 - 1) / 2
 -- "stretch" is Blizzard's default look (distorts). Square frames → identical.
 function Skin:TexCoordFor(w, h)
   local z = zoomVal()
-  local mode = (GB.db and GB.db.iconFill) or "fill"
+  local mode = pv("iconFill") or "fill"
   if mode == "stretch" or not (w and h) or w <= 0 or h <= 0 or math.abs(w - h) < 0.5 then
     return z, 1 - z, z, 1 - z
   end
@@ -50,8 +75,8 @@ local function applyTexCoord(icon)
   icon:SetTexCoord(Skin:TexCoordFor(icon:GetWidth(), icon:GetHeight()))
 end
 
-local records = {}   -- [button] = { mask, texCoord, active, iconMaskRemoved }
-local flyoutButtons = {}   -- skinned SpellFlyoutPopupButton1..N (also in records; swept on SpellFlyout:Toggle)
+records = {}   -- [button] = { mask, texCoord, active, iconMaskRemoved } (declared at top for pv/presetFor)
+flyoutButtons = {}   -- skinned SpellFlyoutPopupButton1..N (also in records; swept on SpellFlyout:Toggle)
 
 -- Button-state art (hover/checked/flash): REPLACED with our round ring-glow,
 -- not masked — runtime mask attachment failed to clip the highlight in QA
@@ -179,12 +204,12 @@ local gridShown = false
 local function applyEmptyAlpha(btn)
   local rec = records[btn]
   if not (rec and rec.active) then return end
-  local mode = (GB.db and GB.db.emptySlots) or "normal"
+  local mode = pv("emptySlots") or "normal"
   local a = 1
   if mode ~= "normal" and not gridShown then
     local icon = btn.icon or btn.Icon
     if not (icon and icon:IsShown()) then
-      a = (mode == "hide") and 0 or ((GB.db and GB.db.emptySlotAlpha) or 0.35)
+      a = (mode == "hide") and 0 or (pv("emptySlotAlpha") or 0.35)
     end
   end
   if rec.emptyAlpha ~= a then
@@ -210,8 +235,8 @@ end
 -- ABOVE, > 0 = BELOW (a centered slider). Legacy extendBottomPct (below-only) is
 -- read as +below. The hexagon is a fixed shape → no extension.
 local function ExtensionPct()
-  if (GB.db and GB.db.shape) == "hexagon" then return 0 end
-  local c = GB:GetStyle().construction
+  if pv("shape") == "hexagon" then return 0 end
+  local c = style().construction
   if not c then return 0 end
   if c.extendPct ~= nil then return c.extendPct end
   return c.extendBottomPct or 0   -- legacy key (below)
@@ -231,9 +256,9 @@ end
 -- mix (continuous ON, no plate, or a non-rounded shape — circle/square/hexagon).
 local function mixedCornerBase()
   if ExtensionPct() == 0 then return nil end
-  local c = GB:GetStyle().construction
+  local c = style().construction
   if not (c and c.continuous == false) then return nil end
-  local pat, r = tostring(GB.db and GB.db.shape):match("^corner%-(%d%d%d%d)%-r(%d)$")
+  local pat, r = tostring(pv("shape")):match("^corner%-(%d%d%d%d)%-r(%d)$")
   if pat ~= "1111" then return nil end
   return ExtensionAbove() and ("corner-0011-r" .. r) or ("corner-1100-r" .. r)
 end
@@ -254,7 +279,7 @@ end
 -- gating, swipe art, crop/aspect math — resolves to the override with no
 -- per-site threading. nil ctx = the global db shape (bars, preview).
 local shapeCtx
-local function handKey() return shapeCtx or (GB.db and GB.db.handShape) end
+local function handKey() return shapeCtx or pv("handShape") end
 -- The 1:1 sibling of each elongated shape (a pill's square-aspect analog is
 -- the circle; rounded squares keep their curvature). 1:1 keys pass through.
 local FLYOUT_1X1 = {
@@ -265,8 +290,11 @@ local FLYOUT_1X1 = {
   ["roundsq2-32"] = "roundsq2", ["roundsq2-21"] = "roundsq2",
   ["roundsq3-32"] = "roundsq3", ["roundsq3-21"] = "roundsq3",
 }
-local function flyoutShapeKey()
-  local k = GB.db and GB.db.handShape
+-- The 1:1 sibling for a SKINNED flyout member: its bar-preset's shape (the
+-- member's rec.barKey resolves through presetFor), mapped through FLYOUT_1X1.
+local function flyoutShapeFor(btn)
+  local p = presetFor(btn)
+  local k = (p and p.handShape) or (GB.db and GB.db.handShape)
   return k and (FLYOUT_1X1[k] or k) or nil
 end
 
@@ -274,7 +302,7 @@ end
 -- one half + a solid-colour PLATE filling the other half (the colour then fading up over
 -- the icon). Only the 2:1 portrait shapes halve into two clean squares, so plate mode is
 -- gated to them. styleData.plate = { enabled, iconSide = "top"|"bottom", color, fadeStart }.
-local function plateStyle() local s = GB:GetStyle(); return s and s.plate end
+local function plateStyle() local s = style(); return s and s.plate end
 local function plateActive()
   local hk = handKey(); if not hk then return false end
   local info = GB.HAND_SHAPES and GB.HAND_SHAPES[hk]
@@ -422,7 +450,7 @@ function Skin:RecolorBorder(btn, color)
   local rec = records[btn]
   if not (rec and rec.border and rec.border.tex and rec.border.tex:IsShown()) then return end
   if color then rec.border.tex:SetVertexColor(color[1], color[2], color[3])
-  else applyBorderColor(rec.border.tex, GB:GetStyle().border or {}) end
+  else applyBorderColor(rec.border.tex, style().border or {}) end
 end
 
 -- Skin:SetHandShape is defined lower, next to SetIconSize, so it can share the
@@ -438,7 +466,7 @@ function Skin:AnchorHandGrown(tex, icon, grow) return hgAnchor(tex, icon, grow) 
 -- The current style's border thickness (0 if no border) — the amount the outer glow
 -- must clear so a thick border can't bury it.
 function Skin:BorderGrow()
-  local bd = GB:GetStyle().border
+  local bd = style().border
   return (bd and bd.enabled and (bd.thickness or 0) > 0) and bd.thickness or 0
 end
 
@@ -470,7 +498,7 @@ local PILL_RATIOS = { 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0 }   -- = generate
 
 -- Current shape → corner pattern ("1111") + radius level. "circle" == all-round, full.
 local function parseShape()
-  local sh = GB.db and GB.db.shape
+  local sh = pv("shape")
   if sh == "circle" then return "1111", 5 end
   local a, b, c, d, r = tostring(sh):match("^corner%-(%d)(%d)(%d)(%d)%-r(%d)$")
   if a then return a .. b .. c .. d, tonumber(r) end
@@ -488,7 +516,7 @@ local function aspectBase(w, h)
   -- Only circle / all-rounded corner shapes have aspect pill masks. Every other
   -- shape — square, mixed corners, AND fixed shapes like hexagon — must use the
   -- plain mask (parseShape's default is "1111", so guard on the real shape name).
-  local sh = GB.db and GB.db.shape
+  local sh = pv("shape")
   if sh ~= "circle" and not tostring(sh):match("^corner%-1111%-r%d$") then return nil end
   local pattern, level = parseShape()
   if pattern ~= "1111" then return nil end
@@ -562,7 +590,7 @@ local function maskPlan(icon, ext)
     return GB:HandAsset(hk, "base"), "hand:" .. hk
   end
   local src = aspectMask(icon:GetWidth(), icon:GetHeight() + (ext or 0))
-  return src, tostring(src or (GB.db and GB.db.shape))
+  return src, tostring(src or pv("shape"))
 end
 
 -- Build a fresh mask from the given source (aspect mask, or the plain shape mask).
@@ -614,8 +642,12 @@ local function PlayEndBurstRed(f)
   local cast = f.cast
   local eb = cast and cast.EndBurst
   if not eb then return end
-  local c = (GB.db and GB.db.castInterruptColor) or { 1, 0.25, 0.25 }
-  setEndBurstSpeed(eb, (GB.db and GB.db.castInterruptSpeed) or 0.6)   -- slower than Blizzard's default
+  -- Fires from the fill's OnUpdate (no wrapped entry) → resolve ctx from the
+  -- owning button ourselves.
+  local prev = presetCtx; presetCtx = presetFor(f.gbBtn) or prev
+  local c = pv("castInterruptColor") or { 1, 0.25, 0.25 }
+  setEndBurstSpeed(eb, pv("castInterruptSpeed") or 0.6)   -- slower than Blizzard's default
+  presetCtx = prev
   f.bursting = true      -- OnUpdate keeps the cast frame shown while this is set
   cast:Show(); cast:SetAlpha(1); eb:Show()
   if eb.GlowRing then eb.GlowRing:SetVertexColor(c[1], c[2], c[3]); eb.GlowRing:Show() end
@@ -719,7 +751,7 @@ local function styleCast(btn, rec, icon, castType)
     if slot.mask then burst.GlowRing:RemoveMaskTexture(slot.mask) end
     slot.mask = buildMask(burst, ref, ext, src)
     burst.GlowRing:AddMaskTexture(slot.mask)
-    local cc = (GB.db and GB.db.castCompleteColor) or { 1, 0.9, 0.5 }
+    local cc = pv("castCompleteColor") or { 1, 0.9, 0.5 }
     burst.GlowRing:SetVertexColor(cc[1], cc[2], cc[3])
     setEndBurstSpeed(burst, 1)   -- normal speed for a real completion (cancel slows it)
   end
@@ -741,10 +773,10 @@ local function styleCast(btn, rec, icon, castType)
   if f.mask then f.tex:RemoveMaskTexture(f.mask) end
   f.mask = buildMask(f, ref, ext, src)        -- fresh shape mask, clips the tint to the silhouette
   f.tex:AddMaskTexture(f.mask)
-  local col = (GB.db and GB.db.castFillColor) or { 1, 0.85, 0.4 }
-  local a = (GB.db and GB.db.castFillAlpha) or 0.55
+  local col = pv("castFillColor") or { 1, 0.85, 0.4 }
+  local a = pv("castFillAlpha") or 0.55
   f.tex:SetVertexColor(col[1], col[2], col[3], a)
-  f.dir = (GB.db and GB.db.castDrainDir) or "up"
+  f.dir = pv("castDrainDir") or "up"
   f.cast = cast                                    -- for the cancel → red EndBurst replay
   f.gbBtn = btn                                    -- for clearing the "cast" shaped glow at cast end
   f.blizzFill = cast.Fill and cast.Fill.CastFill   -- OnUpdate force-suppresses this each frame
@@ -798,14 +830,14 @@ end
 -- Mac symbols are a SUB-feature of it (they only apply when it's on) — turning
 -- Custom keybind off returns the keybind to Blizzard's default, symbols and all.
 local function hotkeyEnabled()
-  local h = GB:GetStyle().hotkey
+  local h = style().hotkey
   return h ~= nil and h.enabled ~= false
 end
 -- Rewrite a button's CURRENT hotkey text if the style opts in. Idempotent: once
 -- rewritten the text leads with "|T", so the [scam]- match no longer fires.
 local function symbolizeButton(btn)
   local hk = btn.HotKey
-  if not hk or not hotkeyEnabled() or (GB:GetStyle().keybindMods) ~= "symbols" then return end
+  if not hk or not hotkeyEnabled() or (style().keybindMods) ~= "symbols" then return end
   local raw = hk:GetText()
   if raw and raw:match("^[scam]%-") then hk:SetText(symbolizeHotkey(raw)) end
 end
@@ -815,7 +847,7 @@ local function ApplyHotkeyOverride(btn)
   local hk = btn.HotKey
   local icon = btn.icon or btn.Icon
   if not (rec and hk and icon) then return end
-  local conf = GB:GetStyle().hotkey
+  local conf = style().hotkey
   if not conf or conf.enabled == false then
     if rec.hkOverridden then
       -- Full revert: restore the pristine font (Blizzard won't) + let Blizzard
@@ -864,7 +896,7 @@ local function ApplyCountOverride(btn)
   local cnt = btn.Count
   local icon = btn.icon or btn.Icon
   if not (rec and cnt and icon) then return end
-  local conf = GB:GetStyle().count
+  local conf = style().count
   if not conf or conf.enabled == false then
     if rec.cntOverridden then
       -- Restore the pristine font/colour + Blizzard's stock anchor (a /reload is exact).
@@ -925,7 +957,7 @@ local function ApplyNameOverride(btn)
   local nm = btn.Name
   local icon = btn.icon or btn.Icon
   if not (rec and nm and icon) then return end
-  local conf = GB:GetStyle().name
+  local conf = style().name
   -- Three modes: default = Blizzard's stock label, custom = the styling below,
   -- hidden = no label at all. Hidden EMPTIES THE TEXT rather than alpha-0:
   -- text addons (NiceDamage restyles HotKey/Count/Name) re-drive the label's
@@ -984,7 +1016,7 @@ local function ApplyDecor(btn)
   local rec = records[btn]
   local icon = btn.icon or btn.Icon
   if not (rec and icon) then return end
-  local style = GB:GetStyle()
+  local style = style()
   local plate = plateActive()   -- 2:1 portrait shape split into a square icon half + a colour plate half
   rec.plates = rec.plates or {}
   rec.plateFresh = false   -- set by getPlate when a plate texture is first created (mask-retry, below)
@@ -1001,7 +1033,7 @@ local function ApplyDecor(btn)
   -- extension — or for a circle (no straight side to meet a square plate) — force
   -- continuous, else getPlate strips the gradient's mask and it draws as an unmasked
   -- square (the hexagon-gradient regression: continuous was toggled off globally).
-  if ext == 0 or (GB.db and GB.db.shape) == "circle" then continuous = true end
+  if ext == 0 or pv("shape") == "circle" then continuous = true end
   local maskExt = continuous and ext or 0
   local mExtT, mExtB = (above and maskExt or 0), (above and 0 or maskExt)
   -- The aspect mask comes from the (masked) construction's aspect; a fresh mask is
@@ -1248,7 +1280,7 @@ function Skin:ReapplyDecor()
   end)
   for _, btn in ipairs(flyoutButtons) do
     local rec = records[btn]
-    if rec and rec.active then rec.shapeOverride = flyoutShapeKey(); ApplyDecor(btn) end
+    if rec and rec.active then rec.shapeOverride = flyoutShapeFor(btn); ApplyDecor(btn) end
   end
   if GB.Glows then GB.Glows:RefreshShape(); GB.Glows:RefreshSize() end   -- glow art + span follow continuous/extension edits
 end
@@ -1335,7 +1367,7 @@ local function cooldownFontString(cd)
 end
 local function styleCooldownText(btn)
   local cd = btn.cooldown
-  local conf = GB:GetStyle().cdtext
+  local conf = style().cdtext
   local rec = records[btn]
   if not (cd and conf and rec) then return end
   if cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(conf.enabled == false) end
@@ -1371,11 +1403,14 @@ end
 function Skin:RefreshHotkeyText()
   if not self.enabled then return end
   -- Symbols only render when Custom keybind is on; otherwise ask Blizzard to
-  -- re-set the plain (un-symbolized) text.
-  local symbols = (GB:GetStyle().keybindMods == "symbols") and hotkeyEnabled()
+  -- re-set the plain (un-symbolized) text. Resolved PER BUTTON — bars can wear
+  -- presets with different keybind settings.
   GB:ForEachButton(function(btn)
     local rec = records[btn]
     if not (rec and rec.active and btn.HotKey) then return end
+    local prev = presetCtx; presetCtx = presetFor(btn) or prev
+    local symbols = (style().keybindMods == "symbols") and hotkeyEnabled()
+    presetCtx = prev
     if symbols then symbolizeButton(btn)
     elseif btn.UpdateHotkeys then btn:UpdateHotkeys(btn.buttonType) end
   end)
@@ -1466,10 +1501,9 @@ end
 -- so a custom colour is re-asserted in a hook of that global (installed once).
 local function applySwipe(cd)
   if not cd then return end
-  local db = GB.db or {}
-  local c = db.swipeColor or { 0, 0, 0 }
+  local c = pv("swipeColor") or { 0, 0, 0 }
   if cd.SetDrawSwipe then cd:SetDrawSwipe(true) end    -- charge recharge is edge-only by default → force the shaped swipe
-  if cd.SetSwipeColor then cd:SetSwipeColor(c[1], c[2], c[3], db.swipeAlpha or 0.8) end
+  if cd.SetSwipeColor then cd:SetSwipeColor(c[1], c[2], c[3], pv("swipeAlpha") or 0.8) end
   if cd.SetDrawEdge then cd:SetDrawEdge(false) end     -- can't be shaped → off
   if cd.SetDrawBling then cd:SetDrawBling(false) end   -- replaced by our shaped flash
 end
@@ -1480,7 +1514,11 @@ local function applySwipeAll()
   if not Skin.enabled then return end
   GB:ForEachButton(function(btn)
     local rec = records[btn]
-    if rec and rec.active then applySwipe(btn.cooldown); applySwipe(btn.lossOfControlCooldown); applySwipe(btn.chargeCooldown) end
+    if rec and rec.active then
+      local prev = presetCtx; presetCtx = presetFor(btn) or prev
+      applySwipe(btn.cooldown); applySwipe(btn.lossOfControlCooldown); applySwipe(btn.chargeCooldown)
+      presetCtx = prev
+    end
   end)
 end
 function Skin:SetSwipeColor(c) if GB.db then GB.db.swipeColor = c end; applySwipeAll() end
@@ -1503,14 +1541,13 @@ local FLASH_MIN_CD = 2.0        -- seconds of real cooldown below which we skip 
 local FLASH_DURATION = 0.45
 local FLASH_SCALE = 128 / 80    -- same bloom sizing as the proc glow (art edge at 80/128)
 local function playFinishFlash(btn)
-  local db = GB.db or {}
-  if not db.finishFlash then return end
+  if not pv("finishFlash") then return end
   local rec = records[btn]
   local icon = btn.icon or btn.Icon
   if not (rec and rec.active and icon and rec.flashFrame) then return end
   local hk = handKey()
   rec.flashTex:SetTexture(hk and GB:HandAsset(hk, "outer") or Skin:GlowArt())
-  local c = db.finishFlashColor or { 1, 0.9, 0.5 }
+  local c = pv("finishFlashColor") or { 1, 0.9, 0.5 }
   rec.flashTex:SetVertexColor(c[1], c[2], c[3])
   -- Hand shape: the outer glow art's silhouette maps to the icon (bloom in the
   -- margin), and the burst's scale-out expands it. Else the SDF construction anchor.
@@ -1598,27 +1635,26 @@ local function computeIconTint(btn)
   local rec = records[btn]
   local icon = btn.icon or btn.Icon
   if not (rec and rec.active and icon) then return end
-  local db = GB.db or {}
   -- Track OUR desaturation on rec.gbDesat so we only ever clear what we set (leaves
   -- Blizzard's level-link desaturation alone).
   local function setDesat(on)
     if on then icon:SetDesaturated(true); rec.gbDesat = true
     elseif rec.gbDesat then icon:SetDesaturated(false); rec.gbDesat = nil end
   end
-  if db.rangeTint and rec.outOfRange then
+  if pv("rangeTint") and rec.outOfRange then
     -- Desaturate FIRST, then tint → a clean red wash over greyscale (not a multiply
     -- that lets the icon's own colours bleed through). Jason 2026-07-20.
-    local c = db.rangeColor or { 1, 0.2, 0.2 }
+    local c = pv("rangeColor") or { 1, 0.2, 0.2 }
     setDesat(true); icon:SetVertexColor(c[1], c[2], c[3])
     -- Recolour Blizzard's red out-of-range keybind to match (it sets the HotKey
     -- VERTEX colour; ours overrides it. In range, Blizzard restores the default —
     -- our range hook doesn't fire the else, so we leave the keybind to Blizzard).
     if btn.HotKey then btn.HotKey:SetVertexColor(c[1], c[2], c[3]) end
   elseif rec.availState == "oom" then
-    local c = db.availOOM or { 0.5, 0.5, 1 }; setDesat(false); icon:SetVertexColor(c[1], c[2], c[3])
+    local c = pv("availOOM") or { 0.5, 0.5, 1 }; setDesat(false); icon:SetVertexColor(c[1], c[2], c[3])
   elseif rec.availState == "unusable" then
-    local c = db.availUnusable or { 0.4, 0.4, 0.4 }; icon:SetVertexColor(c[1], c[2], c[3])
-    setDesat(db.availDesaturate and true or false)
+    local c = pv("availUnusable") or { 0.4, 0.4, 0.4 }; icon:SetVertexColor(c[1], c[2], c[3])
+    setDesat(pv("availDesaturate") and true or false)
   else   -- usable / in range: reset to full colour (the range hook doesn't touch the
     setDesat(false); icon:SetVertexColor(1, 1, 1)   -- icon, so we must clear our own tint here)
   end
@@ -1666,7 +1702,7 @@ local function handIconSize(btn)
   local info = GB:HandShapeInfo(hk)
   local nat = (btn.GetWidth and btn:GetWidth()) or 0
   if not (nat and nat > 0) then nat = 45 end
-  local scale = (GB.db and GB.db.sizeScale) or 1
+  local scale = pv("sizeScale") or 1
   local short = math.max(8, math.floor(nat * scale + 0.5))
   if info.orient == "portrait" then return short, math.floor(short * info.aspect + 0.5)
   elseif info.orient == "landscape" then return math.floor(short * info.aspect + 0.5), short
@@ -1872,7 +1908,7 @@ function Skin:SetSizeScale(v)
   if GB.Glows then GB.Glows:RefreshSize() end
 end
 
-local function ApplyButton(btn)
+local function ApplyButton(btn, bar)
   local icon = btn.icon or btn.Icon
   if not icon then return end
   local rec = records[btn]
@@ -1881,6 +1917,9 @@ local function ApplyButton(btn)
   if not rec then
     rec = {}
     records[btn] = rec
+    -- Which bar owns this button (ForEachButton passes it; flyout members get
+    -- their OWNER's bar in sweepFlyout) → the profile's per-bar preset lookup.
+    if bar then rec.barKey = bar.buttonPrefix end
     local ext0 = ExtensionHeight(icon)
     local src0, key0 = maskPlan(icon, ext0)
     rec.mask = buildMask(btn, icon, ext0, src0)
@@ -2011,7 +2050,9 @@ local function ApplyButton(btn)
     hooksecurefunc("ActionButton_UpdateCooldown", function(b)
       local r = b and records[b]
       if Skin.enabled and r and r.active then
+        local prev = presetCtx; presetCtx = presetFor(b) or prev   -- applySwipe has no btn arg
         applySwipe(b.cooldown)
+        presetCtx = prev
         refreshDimProxy(b)      -- plate dim-on-cooldown tracks every cooldown update
         styleCooldownText(b)    -- countdown numbers: lazy FontString + hidden-state re-assert
       end
@@ -2023,7 +2064,8 @@ local function ApplyButton(btn)
     Skin._cdNumHook = true
     hooksecurefunc("ActionButton_UpdateCooldownNumberHidden", function(b)
       local r = b and records[b]
-      local conf = GB:GetStyle().cdtext
+      local p = presetFor(b)
+      local conf = ((p and p.styleData) or GB:GetStyle()).cdtext
       if Skin.enabled and r and r.active and conf and b.cooldown and b.cooldown.SetHideCountdownNumbers then
         b.cooldown:SetHideCountdownNumbers(conf.enabled == false)
       end
@@ -2119,26 +2161,35 @@ local function RestoreButton(btn)
   -- getters — a /reload fully restores them (Disable() says so).
 end
 
--- Per-button shape-override context: rebind the per-button entry points so
--- each establishes shapeCtx from the button's record, falling back to the
--- ENCLOSING ctx (ApplyButton creates the record mid-call — sweepFlyout sets
--- the outer ctx for that first pass). Lua closures capture the LOCAL variable,
--- so every internal caller — the UpdateButtonArt hook bodies, the mask-retry
--- timer, queueFinishFlash — calls the wrapped versions from here on.
-local function withShapeCtx(f)
+-- Per-button context wrappers: each entry point establishes BOTH ctxs — the
+-- PRESET (rec.barKey → the profile's bar assignment; nil for bars on the edit
+-- preset, which render the live working copy) and the shape override (flyout
+-- members' 1:1 sibling) — falling back to the ENCLOSING ctx (ApplyButton
+-- creates the record mid-call — sweepFlyout sets the outer ctx for that first
+-- pass). Lua closures capture the LOCAL variable, so every internal caller —
+-- the UpdateButtonArt hook bodies, the mask-retry timer, queueFinishFlash —
+-- calls the wrapped versions from here on.
+local function withPresetCtx(f)
   return function(btn, ...)
-    local prev = shapeCtx
+    local prevS, prevP = shapeCtx, presetCtx
     local rec = records[btn]
-    shapeCtx = (rec and rec.shapeOverride) or prev
+    presetCtx = presetFor(btn) or prevP
+    shapeCtx = (rec and rec.shapeOverride) or prevS
     f(btn, ...)
-    shapeCtx = prev
+    shapeCtx, presetCtx = prevS, prevP
   end
 end
-applyIconSize   = withShapeCtx(applyIconSize)
-AlignCooldowns  = withShapeCtx(AlignCooldowns)
-playFinishFlash = withShapeCtx(playFinishFlash)
-ApplyDecor      = withShapeCtx(ApplyDecor)
-ApplyButton     = withShapeCtx(ApplyButton)
+applyIconSize     = withPresetCtx(applyIconSize)
+AlignCooldowns    = withPresetCtx(AlignCooldowns)
+playFinishFlash   = withPresetCtx(playFinishFlash)
+computeIconTint   = withPresetCtx(computeIconTint)
+applyEmptyAlpha   = withPresetCtx(applyEmptyAlpha)
+styleCooldownText = withPresetCtx(styleCooldownText)
+symbolizeButton   = withPresetCtx(symbolizeButton)
+styleCast         = withPresetCtx(styleCast)
+refreshDimProxy   = withPresetCtx(refreshDimProxy)
+ApplyDecor        = withPresetCtx(ApplyDecor)
+ApplyButton       = withPresetCtx(ApplyButton)
 
 -- ---------------------------------------------------------------------------
 -- Flyout member skinning (session 13): SpellFlyoutPopupButton1..N — the popup
@@ -2152,8 +2203,16 @@ ApplyButton     = withShapeCtx(ApplyButton)
 -- open (a closed flyout can't show stale styling). The popup panel's square
 -- nine-slice (SpellFlyout.Background) is suppressed so members float like the
 -- bars; the bar button's BorderShadow is handled in Suppress.
-local function sweepFlyout()
+local function sweepFlyout(_, flyoutButton)
   if not Skin.enabled then return end
+  -- Members render the preset of the bar their flyout POPPED FROM (the owner
+  -- is Toggle's second arg; nil on the direct Enable call → working copy),
+  -- and wear the 1:1 sibling of THAT preset's shape.
+  local ownerRec = flyoutButton and records[flyoutButton]
+  local ownerBar = ownerRec and ownerRec.barKey
+  local ownerPreset = flyoutButton and presetFor(flyoutButton) or nil
+  local base = (ownerPreset and ownerPreset.handShape) or (GB.db and GB.db.handShape)
+  local sibling = base and (FLYOUT_1X1[base] or base) or nil
   local i = 1
   while true do
     local btn = _G["SpellFlyoutPopupButton" .. i]
@@ -2161,16 +2220,17 @@ local function sweepFlyout()
     local rec = records[btn]
     if not rec then flyoutButtons[#flyoutButtons + 1] = btn end
     if rec and rec.active then
-      rec.shapeOverride = flyoutShapeKey()   -- track shape swaps made since last open
+      rec.barKey = ownerBar or rec.barKey
+      rec.shapeOverride = sibling   -- track shape/preset swaps made since last open
       ApplyDecor(btn)
     else
-      -- First skin (or re-enable): the wrapper can't read the override off a
-      -- record that doesn't exist yet, so hand it in via the enclosing ctx;
-      -- the record then carries it for every later hook-driven pass.
-      shapeCtx = flyoutShapeKey()
+      -- First skin (or re-enable): the wrappers can't read overrides off a
+      -- record that doesn't exist yet, so hand BOTH ctxs in via the enclosing
+      -- scope; the record then carries them for later hook-driven passes.
+      shapeCtx, presetCtx = sibling, ownerPreset
       ApplyButton(btn)
-      shapeCtx = nil
-      if records[btn] then records[btn].shapeOverride = flyoutShapeKey() end
+      shapeCtx, presetCtx = nil, nil
+      if records[btn] then records[btn].shapeOverride = sibling; records[btn].barKey = ownerBar end
     end
     i = i + 1
   end
