@@ -1831,11 +1831,8 @@ function C:PlayPreviewFlash()
   if not (GB.db and GB.db.finishFlash) then return end
   playPreviewBurst(GB.db.finishFlashColor or { 1, 0.9, 0.5 })
 end
--- The cast/channel drain loop calls this at each wrap — the completion burst a
--- successful cast plays on the bars (Cast & channel → Complete color).
-function C:PlayPreviewCastBurst()
-  playPreviewBurst((GB.db and GB.db.castCompleteColor) or { 1, 0.9, 0.5 })
-end
+-- (No cast-complete burst in the preview: the real one is Blizzard's EndBurst
+-- animation replayed inside their widget — not reproducible faithfully here.)
 
 -- Multi-part preview glow: for a hand shape, every glow-trigger chip (proc /
 -- highlight / assist / cast / channel / hover / selected / flash) shows the real
@@ -1891,7 +1888,6 @@ function C:SetPreviewState(st)
     if previewState == "cast" or previewState == "channel" then
       local f = previewCastFillFrame
       f.channel = (previewState == "channel")
-      f.lastP = nil   -- fresh loop — no completion burst from a stale wrap on chip click
       local col = (GB.db and GB.db.castFillColor) or { 1, 0.85, 0.4 }
       local a = (GB.db and GB.db.castFillAlpha) or 0.55
       f.tex:SetVertexColor(col[1], col[2], col[3], a)
@@ -2288,9 +2284,10 @@ local function buildPreviewPane(parent)
   previewCastFillFrame.tex = previewCastFillFrame:CreateTexture(nil, "OVERLAY")
   previewCastFillFrame.tex:SetTexture("Interface\\Buttons\\WHITE8X8")   -- maskable (masks don't clip SetColorTexture)
   previewCastFillFrame:SetScript("OnUpdate", function(f)
+    -- No completion burst at the wrap: the real one is Blizzard's own EndBurst
+    -- animation (replayed inside their widget on the bars) and can't be cloned
+    -- faithfully here — Jason: better none than a lookalike (session 12).
     local p = (GetTime() % 2.4) / 2.4      -- a looping fake 2.4s cast
-    if f.lastP and p < f.lastP then C:PlayPreviewCastBurst() end   -- wrap = the cast completed
-    f.lastP = p
     local frac = f.channel and (1 - p) or p
     local tex, W, H = f.tex, f:GetWidth(), f:GetHeight()
     local dir = (GB.db and GB.db.castDrainDir) or "up"
