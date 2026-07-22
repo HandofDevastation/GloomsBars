@@ -675,6 +675,21 @@ local function ensureBorder()
   return st.border
 end
 
+-- The "plate" look for 2:1 portrait shapes: a square icon in one half, a solid-colour
+-- plate in the other, the colour fading up over the icon. styleData.plate; absent = off.
+local function plateData() local st = GB.db and GB.db.styleData; return st and st.plate end
+local function ensurePlate()
+  local st = GB.db and GB.db.styleData; if not st then return nil end
+  st.plate = st.plate or { enabled = false, iconSide = "top", color = { 0.1, 0.1, 0.13 }, fadeStart = 0.5 }
+  return st.plate
+end
+-- Plate only makes sense on a 2:1 portrait shape (the halves are then two squares).
+local function plateShapeOK()
+  local hk = GB.db and GB.db.handShape
+  local info = hk and GB.HAND_SHAPES and GB.HAND_SHAPES[hk]
+  return (info and info.orient == "portrait" and info.aspect == 2) or false
+end
+
 -- The keybind (HotKey) override. Present = the engine restyles/repositions the
 -- keybind text (ApplyHotkeyOverride reads styleData.hotkey: zone/offset/size/
 -- font/flags/color); absent = Blizzard's default (top-right). `font` is a GB.FONT
@@ -690,76 +705,68 @@ end
 -- persist and come back when re-enabled. Legacy tables (no `enabled`) read as on.
 local function hotkeyOn() local h = hotkeyData(); return h ~= nil and h.enabled ~= false end
 
--- Construction — the extension zone below the icon (extra plate real estate). A
--- lighter re-anchor (ReapplyDecor) applies it; no mask recreation needed.
-local function buildConstructionSection(bf, s)
-  -- Centered slider: 0 = no plate, LEFT (negative) extends ABOVE the icon, RIGHT
-  -- (positive) BELOW — a signed % of icon height (construction.extendPct). The
-  -- hexagon is a fixed shape → no extension (slider disabled).
-  local function isHex() return (GB.db and GB.db.shape) == "hexagon" end
-  local function get()
-    if isHex() then return 0 end
-    local c = GB.db and GB.db.styleData and GB.db.styleData.construction
-    if not c then return 0 end
-    if c.extendPct ~= nil then return c.extendPct end
-    return c.extendBottomPct or 0   -- legacy below-only key
+-- Plate — the 2:1-shape "plate" look: a SQUARE icon fills one half, a solid-colour plate
+-- fills the other, and that colour fades up over the icon. Only meaningful on a 2:1
+-- portrait shape (its halves are two squares); greyed with a hint on any other shape.
+local function buildPlateSection(bf, s)
+  local function on() local p = plateData(); return p and p.enabled and true or false end
+  local function curSide() return (plateData() and plateData().iconSide) or "top" end
+
+  local enLbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); enLbl:SetPoint("TOPLEFT", 18, -14); enLbl:SetText("Plate")
+  local enTog = makeToggle(bf, on, function(v)
+    local p = ensurePlate(); if p then p.enabled = v and true or false end
+    if GB.Skin then GB.Skin:RefreshPlate() end
+    C:RefreshPreview(); s.refresh()
+  end)
+  enTog:SetPoint("TOPRIGHT", -18, -12)
+
+  -- Icon side: which half the square icon fills (the plate fills the other).
+  local sideLbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); sideLbl:SetPoint("TOPLEFT", 18, -46); sideLbl:SetText("Icon side")
+  local sideBtns, prev = {}, nil
+  local function setSide(v)
+    local p = ensurePlate(); if p then p.iconSide = v end
+    for _, e in ipairs(sideBtns) do e.b:SetActive(e.v == v) end
+    if GB.Skin then GB.Skin:RefreshPlate() end
+    C:RefreshPreview()
   end
-  local function side(x) return x > 0 and 1 or (x < 0 and -1 or 0) end
-  local row = sliderRow(bf, -14, "Extend plate", -0.9, 0.9, 0.05, get,
+  for _, opt in ipairs({ { "bottom", "Bottom" }, { "top", "Top" } }) do   -- reverse → Top ends up leftmost
+    local b = flatButton(bf, 52, 20, COLOR.heroic, opt[2], 11)
+    if prev then b:SetPoint("TOPRIGHT", prev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -45) end
+    b:SetScript("OnClick", function() setSide(opt[1]) end)
+    sideBtns[#sideBtns + 1] = { b = b, v = opt[1] }; prev = b
+  end
+
+  local colLbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); colLbl:SetPoint("TOPLEFT", 18, -78); colLbl:SetText("Plate color")
+  local cs = colorSwatch(bf, function() local p = plateData(); return p and p.color end,
+    function(c) local p = ensurePlate(); if p then p.color = c end; local l = gradLayer(); if l then l.color = c end; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end)
+  cs.swatch:SetPoint("TOPRIGHT", -18, -77)
+
+  -- Fade start: how far the plate colour bleeds up over the icon. Kept in sync with the
+  -- Decoration Layers gradient fade (bleedPct) when a gradient layer exists.
+  local fadeRow = sliderRow(bf, -104, "Fade start", 0, 1, 0.05,
+    function() local p = plateData(); return (p and p.fadeStart) or 0.5 end,
     function(v)
-      if isHex() then return end
-      local st = GB.db.styleData; st.construction = st.construction or {}
-      local prev = st.construction.extendPct
-      if prev == nil then prev = st.construction.extendBottomPct or 0 end   -- legacy below-only key
-      st.construction.extendPct = v
-      st.construction.extendBottomPct = nil   -- superseded by the signed key
-      -- Auto-flip the gradient to keep filling the plate when its SIDE changes
-      -- (below ⇄ above): a vertical fill points at the plate (below → solid at
-      -- bottom "up", above → solid at top "down"). Only a genuine side change
-      -- re-syncs, so a manual Direction pick survives same-side tweaks; a
-      -- horizontal (left/right) gradient is orthogonal → never auto-flipped.
-      if side(v) ~= 0 and side(v) ~= side(prev) then
-        local l = gradLayer()
-        if l and (l.dir == nil or l.dir == "up" or l.dir == "down") then
-          l.dir = (v < 0) and "down" or "up"
-        end
-      end
-      if GB.Skin then GB.Skin:ReapplyDecor() end
-      C:RefreshPreview()
+      local p = ensurePlate(); if p then p.fadeStart = v end
+      local l = gradLayer(); if l then l.bleedPct = v end
+      if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview()
     end,
-    function(v)
-      if math.abs(v) < 0.001 then return "None" end
-      return (v < 0 and "Above " or "Below ") .. math.floor(math.abs(v) * 100 + 0.5) .. "%"
-    end)
-  -- Continuous shape: ON = icon + plate wrapped as one shape; OFF = rounded icon
-  -- on a crisp square plate (squares off the junction).
-  local contLbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); contLbl:SetPoint("TOPLEFT", 18, -54); contLbl:SetText("Continuous shape")
-  local contTog = makeToggle(bf,
-    function() local c = GB.db and GB.db.styleData and GB.db.styleData.construction; return not (c and c.continuous == false) end,
-    function(v)
-      local st = GB.db.styleData; st.construction = st.construction or {}
-      st.construction.continuous = v
-      if GB.Skin then GB.Skin:ReapplyDecor() end
-      C:RefreshPreview()
-    end)
-  contTog:SetPoint("TOPRIGHT", -18, -52)
+    function(v) return math.floor(v * 100 + 0.5) .. "%" end)
 
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -86); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  bf:SetHeight(112)
+  hint:SetPoint("TOPLEFT", 18, -150); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  bf:SetHeight(180)
   s.refresh = function()
-    local hex = isHex()
-    -- Continuous-OFF only makes sense with a plate on a shape that has straight
-    -- sides: force-ON (and grey the toggle) for the hexagon AND the circle.
-    local noCont = hex or (GB.db and GB.db.shape) == "circle"
-    row:setEnabled(not hex)   -- circle CAN have an extension (→ a pill); only the hexagon can't
-    row:refresh()
-    contTog:EnableMouse(not noCont); contTog:SetAlpha(noCont and 0.35 or 1); contTog:refresh()
-    hint:SetText(hex
-      and "The hexagon is a fixed shape — no plate extension."
-      or ((GB.db and GB.db.shape) == "circle"
-        and "Circle: an extension makes a pill (always one continuous shape)."
-        or "Centered slider: LEFT = plate above, RIGHT = below. Continuous = one shape; off = rounded icon + square plate."))
+    local ok = plateShapeOK()
+    enTog:EnableMouse(ok); enTog:SetAlpha(ok and 1 or 0.35); enTog:refresh()
+    local live = ok and on()
+    sideLbl:SetAlpha(live and 1 or 0.4)
+    for _, e in ipairs(sideBtns) do e.b:SetActive(e.v == curSide()); e.b:SetEnabled(live) end
+    colLbl:SetAlpha(live and 1 or 0.4)
+    cs.swatch:SetEnabled(live); cs.swatch:SetAlpha(live and 1 or 0.4); cs:refresh()
+    fadeRow:setEnabled(live); fadeRow:refresh()
+    hint:SetText(ok
+      and "Square icon in one half, solid plate + colour-fade in the other. Side picks which half."
+      or "Plate needs a 2:1 shape — pick Pill 2:1, Tall square 2:1, or a Tall rounded ·2:1 in Shape & icon.")
   end
 end
 
@@ -775,12 +782,12 @@ local function buildDecorSection(bf, s)
   local clab = newText(bf, FONT.body, 12, TEXT, "LEFT"); clab:SetPoint("TOPLEFT", 18, -46); clab:SetText("Color")
   local cs = colorSwatch(bf,
     function() local l = gradLayer(); return l and l.color end,
-    function(c) local l = ensureGradLayer(); l.color = c; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end)
+    function(c) local l = ensureGradLayer(); l.color = c; if plateData() then plateData().color = c end; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end)
   cs.swatch:SetPoint("TOPRIGHT", -18, -44)
 
   local bleedRow = sliderRow(bf, -78, "Fade start", 0, 1, 0.05,
     function() local l = gradLayer(); return (l and l.bleedPct) or 0.5 end,
-    function(v) local l = ensureGradLayer(); l.bleedPct = v; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end,
+    function(v) local l = ensureGradLayer(); l.bleedPct = v; if plateData() then plateData().fadeStart = v end; if GB.Skin then GB.Skin:ReapplyDecor() end; C:RefreshPreview() end,
     function(v) return math.floor(v * 100 + 0.5) .. "%" end)
 
   -- Direction — which edge the fill is solid at and which way it fades. Works on
@@ -1731,6 +1738,9 @@ local function openAnimFlyout(anchor, options, current, onPick)
 end
 local function animDropdown(parent, w, getLabel, getOptions, getCurrent, onPick)
   local b = flatButton(parent, w, 22, COLOR.heroic, "", 11); b:SetBase(0.2); b.text:SetWordWrap(false)
+  local car = b:CreateTexture(nil, "ARTWORK"); car:SetTexture(CARET_TEX)   -- ▾ down-caret (same asset as the accordion)
+  car:SetVertexColor(COLOR.orange.r, COLOR.orange.g, COLOR.orange.b)
+  car:SetSize(8, 8); car:SetPoint("RIGHT", -8, 0); car:SetRotation(CARET_DOWN)
   function b:refresh() self.text:SetText(getLabel()) end
   b:SetScript("OnClick", function() openAnimFlyout(b, getOptions(), getCurrent(), function(v) onPick(v); b:refresh() end) end)
   b:refresh()
@@ -1771,20 +1781,29 @@ local function buildAnimsSection(bf, s)
 
   local ddLab = newText(bf, FONT.body, 12, TEXT, "LEFT"); ddLab:SetPoint("TOPLEFT", 18, -84); ddLab:SetText("Animation")
 
-  -- Param blocks (one per module), all anchored at PARAM_Y, hidden until selected.
-  local PARAM_Y, maxBottom = -118, -118
+  -- Param blocks (one per module), all anchored at PARAM_Y, hidden until selected. Each
+  -- records its own bottom so the section can size to JUST the selected module.
+  local PARAM_Y = -118
   if GB.Anims then
     GB.Anims:Each(function(mod)
       local prs, y = {}, PARAM_Y
       for _, param in ipairs(mod.params) do local pr = animParamRow(bf, y, mod.id, param, apply); prs[#prs + 1] = pr; y = y - pr.h end
-      if y < maxBottom then maxBottom = y end
       blocks[mod.id] = {
+        bottom = y,
         setShown = function(on) for _, pr in ipairs(prs) do pr.setShown(on) end end,
         refresh = function() for _, pr in ipairs(prs) do pr.refresh(); pr.setEnabled(true) end end,
       }
       blocks[mod.id].setShown(false)
     end)
   end
+
+  -- Size the section to the SELECTED module's params (None → tight under the dropdown), then
+  -- reflow the accordion — no dead space below a short module (was fixed to the tallest one).
+  local function heightFor(id)
+    local blk = blocks[id]
+    return -((blk and blk.bottom) or (PARAM_Y + 8)) + 16
+  end
+  local function setSectionHeight(id) bf:SetHeight(heightFor(id)); relayout() end
 
   local function selectAnim(v)
     local t = GB.db and GB.db.triggers and GB.db.triggers[animTrigger]
@@ -1796,6 +1815,7 @@ local function buildAnimsSection(bf, s)
     end) end
     for id, blk in pairs(blocks) do blk.setShown(id == v) end
     if blocks[v] then blocks[v].refresh() end
+    setSectionHeight(v)
     apply()
   end
 
@@ -1807,12 +1827,13 @@ local function buildAnimsSection(bf, s)
     local cur = currentSel()
     for id, blk in pairs(blocks) do blk.setShown(id == cur) end
     if blocks[cur] then blocks[cur].refresh() end
+    setSectionHeight(cur)
     C:SetPreviewAnim(animTrigger)
   end
   local function selectTrigger(k) animTrigger = k; for _, c in ipairs(chips) do c.b:SetActive(c.k == k) end; refreshForTrigger() end
   for _, c in ipairs(chips) do c.b:SetScript("OnClick", function() selectTrigger(c.k) end) end
 
-  bf:SetHeight(-maxBottom + 16)
+  bf:SetHeight(heightFor(currentSel()))   -- initial; runtime changes go through setSectionHeight
   s.refresh = function()
     for _, c in ipairs(chips) do c.b:SetActive(c.k == animTrigger) end
     refreshForTrigger()
@@ -1964,7 +1985,7 @@ local function BuildPanel()
 
   -- Sections (mockup order). Bar layout + Apply to bars are still stubs.
   makeSection("Shape & icon", buildShapeSection)
-  makeSection("Construction", buildConstructionSection)
+  makeSection("Plate", buildPlateSection)
   makeSection("Decoration layers", buildDecorSection)
   makeSection("Text", buildTextSection)
   makeSection("Glows", buildGlowsSection)

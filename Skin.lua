@@ -194,6 +194,21 @@ end
 -- Session 8 pivot: the active key is a PERSISTED setting (GB.db.handShape), read
 -- straight from the db here — nil → the legacy SDF shape path.
 local function handKey() return GB.db and GB.db.handShape end
+
+-- Plate mode (session 11): a 2:1 PORTRAIT hand shape rendered as a SQUARE icon filling
+-- one half + a solid-colour PLATE filling the other half (the colour then fading up over
+-- the icon). Only the 2:1 portrait shapes halve into two clean squares, so plate mode is
+-- gated to them. styleData.plate = { enabled, iconSide = "top"|"bottom", color, fadeStart }.
+local function plateStyle() local s = GB:GetStyle(); return s and s.plate end
+local function plateActive()
+  local hk = handKey(); if not hk then return false end
+  local info = GB.HAND_SHAPES and GB.HAND_SHAPES[hk]
+  if not (info and info.orient == "portrait" and info.aspect == 2) then return false end
+  local p = plateStyle()
+  return p and p.enabled and true or false
+end
+-- Where the SQUARE icon sits (plate fills the opposite half). Returns "top"|"bottom".
+local function plateIconSide() local p = plateStyle(); return (p and p.iconSide) or "top" end
 -- Anchor a hand texture/mask so its silhouette maps to the icon GROWN uniformly by
 -- `grow` screen-px on every side. The base's shape occupies a different FRACTION of the
 -- canvas per axis (short = 0.5, long = long/(long+256)), so a uniform margin would grow
@@ -715,6 +730,7 @@ local function ApplyDecor(btn)
   local icon = btn.icon or btn.Icon
   if not (rec and icon) then return end
   local style = GB:GetStyle()
+  local plate = plateActive()   -- 2:1 portrait shape split into a square icon half + a colour plate half
   rec.plates = rec.plates or {}
   rec.plateFresh = false   -- set by getPlate when a plate texture is first created (mask-retry, below)
   local ext = ExtensionHeight(icon)
@@ -737,15 +753,79 @@ local function ApplyDecor(btn)
   -- built only when the plan changes (source swaps never re-render — §2), else a
   -- plain re-anchor re-clips live. Fold `continuous` into the key so toggling it
   -- rebuilds even when the aspect happens to match.
+  -- Plate mode routes the SHAPE mask to a full-2:1 construction rect (plateRect), so a
+  -- SQUARE icon (only half the height) doesn't squish the silhouette; the same mask then
+  -- clips BOTH the icon and the plate fill, each showing only in its own half.
+  local shapeRef = icon
+  if plate then
+    rec.plateRect = rec.plateRect or CreateFrame("Frame", nil, btn)
+    local pw = icon:GetWidth()
+    rec.plateRect:SetSize(pw, pw * 2)
+    rec.plateRect:ClearAllPoints(); rec.plateRect:SetPoint("CENTER", btn, "CENTER", 0, 0)
+    shapeRef = rec.plateRect
+  end
   local maskSrc, maskKey = maskPlan(icon, maskExt)
-  maskKey = maskKey .. (continuous and "|c1" or "|c0")
+  maskKey = maskKey .. (continuous and "|c1" or "|c0") .. (plate and "|plate" or "")
   if rec.mask and rec.maskKey == maskKey then
-    AnchorConstructionMask(rec.mask, icon, maskExt)
+    AnchorConstructionMask(rec.mask, shapeRef, maskExt)
   else
-    if rec.mask then icon:RemoveMaskTexture(rec.mask) end
-    rec.mask = buildMask(btn, icon, maskExt, maskSrc)
+    if rec.mask then icon:RemoveMaskTexture(rec.mask); if rec.platefill then rec.platefill:RemoveMaskTexture(rec.mask) end end
+    rec.mask = buildMask(btn, shapeRef, maskExt, maskSrc)
     icon:AddMaskTexture(rec.mask)
     rec.maskKey = maskKey
+    rec.platefillMask = nil   -- force a re-attach to the plate fill below
+  end
+  -- Plate fill: the solid-colour half OPPOSITE the icon, clipped by the shared silhouette
+  -- mask (rec.mask spans the full 2:1 → this shows only in its half). Solid for now; the
+  -- gradient fading up over the icon is the next step.
+  if plate then
+    if not rec.platefill then
+      rec.platefill = btn:CreateTexture(nil, "ARTWORK", nil, -1)
+      rec.platefill:SetTexture("Interface\\Buttons\\WHITE8X8")   -- masks clip a FILE, not SetColorTexture (§4)
+      rec.plateFresh = true                                       -- first AddMaskTexture may need the mask-retry
+    end
+    local pf, pw = rec.platefill, icon:GetWidth()
+    local pdy = (plateIconSide() == "bottom") and (pw * 0.5) or (-pw * 0.5)   -- the half OPPOSITE the icon
+    local pc = (plateStyle() and plateStyle().color) or { 0.1, 0.1, 0.13 }
+    pf:ClearAllPoints(); pf:SetPoint("CENTER", btn, "CENTER", 0, pdy); pf:SetSize(pw, pw)
+    pf:SetVertexColor(pc[1], pc[2], pc[3])
+    if rec.forcePlateMask or rec.platefillMask ~= rec.mask then
+      if rec.platefillMask then pf:RemoveMaskTexture(rec.platefillMask) end
+      pf:AddMaskTexture(rec.mask); rec.platefillMask = rec.mask
+    end
+    pf:Show()
+  elseif rec.platefill then
+    rec.platefill:Hide()
+  end
+  -- Plate gradient: the plate colour, opaque where it meets the plate (the midline) and
+  -- fading OUT over the icon across `fadeStart` of the icon half. Same silhouette mask so
+  -- it can't spill past the shape. Drawn above the icon, below the text container (+4).
+  if plate then
+    if not rec.plategrad then
+      local _, isub = icon:GetDrawLayer()
+      rec.plategrad = btn:CreateTexture(nil, "ARTWORK", nil, (isub or 0) + 1)
+      rec.plategrad:SetTexture("Interface\\Buttons\\WHITE8X8")
+      rec.plateFresh = true
+    end
+    local pg, pw = rec.plategrad, icon:GetWidth()
+    local pc = (plateStyle() and plateStyle().color) or { 0.1, 0.1, 0.13 }
+    local fadeStart = (plateStyle() and plateStyle().fadeStart) or 0.5
+    local fromC, toC = CreateColor(pc[1], pc[2], pc[3], 1), CreateColor(pc[1], pc[2], pc[3], 0)
+    pg:ClearAllPoints(); pg:SetHeight(math.max(0.01, pw * fadeStart))   -- the icon half is pw tall
+    if plateIconSide() == "bottom" then   -- icon in the BOTTOM half → opaque at its TOP, fading DOWN
+      pg:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0); pg:SetPoint("TOPRIGHT", icon, "TOPRIGHT", 0, 0)
+      pg:SetGradient("VERTICAL", toC, fromC)
+    else                                   -- icon in the TOP half → opaque at its BOTTOM, fading UP
+      pg:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, 0); pg:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
+      pg:SetGradient("VERTICAL", fromC, toC)
+    end
+    if rec.forcePlateMask or rec.plategradMask ~= rec.mask then
+      if rec.plategradMask then pg:RemoveMaskTexture(rec.plategradMask) end
+      pg:AddMaskTexture(rec.mask); rec.plategradMask = rec.mask
+    end
+    pg:Show()
+  elseif rec.plategrad then
+    rec.plategrad:Hide()
   end
   -- Border: a colored copy of the shape, oversized by `thickness` px and drawn
   -- BEHIND the icon, so a rim of colour shows around the whole construction. Any
@@ -762,17 +842,17 @@ local function ApplyDecor(btn)
     b.tex:SetDrawLayer("BACKGROUND", math.max(-8, (isub or 0) - 1))   -- just behind the icon
     applyBorderColor(b.tex, bd)   -- two-tone gradient or flat colour (shared with the glow recolour)
     b.tex:ClearAllPoints()
-    b.tex:SetPoint("TOPLEFT", icon, "TOPLEFT", -t, t + mExtT)      -- frames the masked region
-    b.tex:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", t, -(mExtB + t))
+    b.tex:SetPoint("TOPLEFT", shapeRef, "TOPLEFT", -t, t + mExtT)      -- frames the masked region (plateRect in plate mode)
+    b.tex:SetPoint("BOTTOMRIGHT", shapeRef, "BOTTOMRIGHT", t, -(mExtB + t))
     -- Same shape source as the icon; rebuild only on a shape/plan change (source
     -- swaps never re-render, §2) — thickness/size are a live re-anchor.
     if b.mask and b.maskKey == maskKey then
-      AnchorBorderMask(b.mask, icon, maskExt, t)
+      AnchorBorderMask(b.mask, shapeRef, maskExt, t)
     else
       if b.mask then b.tex:RemoveMaskTexture(b.mask) end
       b.mask = btn:CreateMaskTexture()
       b.mask:SetTexture(maskSrc or GB:GetShape().mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
-      AnchorBorderMask(b.mask, icon, maskExt, t)
+      AnchorBorderMask(b.mask, shapeRef, maskExt, t)
       b.tex:AddMaskTexture(b.mask)
       b.maskKey = maskKey
     end
@@ -817,8 +897,9 @@ local function ApplyDecor(btn)
   -- as a fraction of the icon — works on EVERY shape now (was extension-only).
   -- When an extension lies on the solid edge it's drawn as a flat SOLID zone
   -- first (the "plate" look): solid through the extension, fading into the icon.
+  -- In plate mode the plate draws its OWN gradient (below), so skip the decoration layers.
   local used = 0
-  for _, layer in ipairs(style.layers or {}) do
+  for _, layer in ipairs((not plate and style.layers) or {}) do
     if layer.enabled ~= false and layer.kind == "gradient" then
       local c = layer.color or { 1, 1, 1 }
       local fromA, toA = layer.fromAlpha or 1, layer.toAlpha or 0
@@ -1188,6 +1269,14 @@ local function applyIconSize(btn)
   local icon = btn.icon or btn.Icon
   if not icon then return end
   local w, h = handIconSize(btn)
+  if w and h and plateActive() then
+    -- Plate mode: SQUARE icon (w×w) in one half of the w×2w (=w×h) construction; the
+    -- construction stays centred on the button, so the icon's half-centre is ±w/2.
+    local dy = (plateIconSide() == "bottom") and (-w * 0.5) or (w * 0.5)
+    if GB.db then GB.db.iconW, GB.db.iconH = w, w end
+    icon:ClearAllPoints(); icon:SetPoint("CENTER", btn, "CENTER", 0, dy); icon:SetSize(w, w)
+    return
+  end
   if w and h then
     if GB.db then GB.db.iconW, GB.db.iconH = w, h end
   else
@@ -1328,6 +1417,15 @@ local function refreshIconGeometry(btn)
   fit(btn.Flash)
   AlignCooldowns(btn)
   ApplyDecor(btn)
+end
+
+-- Plate-mode apply. Enable / icon-side change the icon geometry (square-in-half) → a full
+-- per-button refreshIconGeometry; colour / fade are decoration-only, so those callers use
+-- ReapplyDecor instead. No-op unless a 2:1 portrait shape + plate.enabled is live.
+function Skin:RefreshPlate()
+  if not self.enabled then return end
+  GB:ForEachButton(refreshIconGeometry)
+  if GB.Glows then GB.Glows:RefreshShape(); GB.Glows:RefreshSize() end
 end
 
 -- Live icon resize (legacy free-size path; a hand shape overrides these dims in
