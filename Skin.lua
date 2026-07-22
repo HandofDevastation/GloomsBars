@@ -1196,6 +1196,53 @@ function Skin:RefreshPlateDim()
   GB:ForEachButton(function(btn) refreshDimProxy(btn) end)
 end
 
+-- ---------------------------------------------------------------------------
+-- Cooldown countdown text (session 12): show/hide + restyle/reposition the
+-- number Blizzard's Cooldown widget draws. Its FontString is created LAZILY on
+-- the first visible countdown, so styling re-asserts from the UpdateCooldown
+-- post-hook (with a one-frame retry for the very first cooldown). Blizzard
+-- re-drives the hidden state from the countdownForCooldowns CVar callback
+-- (ActionButton_UpdateCooldownNumberHidden) — re-asserted in a hook of that
+-- global. styleData.cdtext = { enabled, size, font, flags, color, offsetX/Y };
+-- ABSENT = never touch anything (the user's game CVar stays in charge).
+-- ---------------------------------------------------------------------------
+local function cooldownFontString(cd)
+  for _, r in ipairs({ cd:GetRegions() }) do
+    if r.GetObjectType and r:GetObjectType() == "FontString" then return r end
+  end
+end
+local function styleCooldownText(btn)
+  local cd = btn.cooldown
+  local conf = GB:GetStyle().cdtext
+  local rec = records[btn]
+  if not (cd and conf and rec) then return end
+  if cd.SetHideCountdownNumbers then cd:SetHideCountdownNumbers(conf.enabled == false) end
+  if conf.enabled == false then return end
+  local fs = cooldownFontString(cd)
+  if not fs then
+    -- Not created yet — retry once next frame so the very first cooldown a
+    -- button ever shows adopts the style too.
+    if not rec.cdTextRetry then
+      rec.cdTextRetry = true
+      C_Timer.After(0, function() rec.cdTextRetry = nil; if Skin.enabled and rec.active then styleCooldownText(btn) end end)
+    end
+    return
+  end
+  fs:SetFont(resolveFont(conf.font), conf.size or 16, conf.flags or "OUTLINE")
+  local c = conf.color or { 1, 1, 1 }
+  fs:SetTextColor(c[1], c[2], c[3])
+  fs:ClearAllPoints()
+  fs:SetPoint("CENTER", cd, "CENTER", conf.offsetX or 0, conf.offsetY or 0)
+end
+-- Config setters call this after writing styleData.cdtext.
+function Skin:RefreshCooldownText()
+  if not self.enabled then return end
+  GB:ForEachButton(function(btn)
+    local rec = records[btn]
+    if rec and rec.active then styleCooldownText(btn) end
+  end)
+end
+
 -- Apply (or revert) the Mac modifier rewrite across all buttons — call when the
 -- setting changes. Revert asks Blizzard to re-set the original text; the hook
 -- then leaves it alone (mods != "symbols"), so nothing re-symbolizes it.
@@ -1842,7 +1889,20 @@ local function ApplyButton(btn)
       local r = b and records[b]
       if Skin.enabled and r and r.active then
         applySwipe(b.cooldown)
-        refreshDimProxy(b)   -- plate dim-on-cooldown tracks every cooldown update
+        refreshDimProxy(b)      -- plate dim-on-cooldown tracks every cooldown update
+        styleCooldownText(b)    -- countdown numbers: lazy FontString + hidden-state re-assert
+      end
+    end)
+  end
+  -- Countdown-number hidden state: Blizzard re-drives it from the
+  -- countdownForCooldowns CVar callback — re-assert our setting after it.
+  if not Skin._cdNumHook and type(ActionButton_UpdateCooldownNumberHidden) == "function" then
+    Skin._cdNumHook = true
+    hooksecurefunc("ActionButton_UpdateCooldownNumberHidden", function(b)
+      local r = b and records[b]
+      local conf = GB:GetStyle().cdtext
+      if Skin.enabled and r and r.active and conf and b.cooldown and b.cooldown.SetHideCountdownNumbers then
+        b.cooldown:SetHideCountdownNumbers(conf.enabled == false)
       end
     end)
   end

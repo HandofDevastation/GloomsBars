@@ -315,6 +315,7 @@ local panel, bodyContainer
 local sections = {}
 local previewFrame, previewIcon, previewMask, previewGlow, previewRing, previewCD
 local previewBorder, previewBorderMask, previewCaption, previewCaptionHead
+local previewCastFillFrame               -- looping cast/channel drain (Cast / Channel chips)
 local previewPlateOn = false             -- plate mode live in the preview (set by RefreshPreview)
 local previewOuter, previewInner          -- multi-part shaped glow (hand shapes; mirrors the bars)
 local previewFlashFrame, previewFlash, previewFlashAnim   -- finish-flash preview
@@ -751,6 +752,17 @@ local function ensureCount()
 end
 local function countOn() local c = countData(); return c ~= nil and c.enabled ~= false end
 
+-- Cooldown countdown text (styleData.cdtext) — show/hide + restyle/reposition the
+-- number Blizzard's Cooldown widget draws. ABSENT = untouched (the game's own
+-- countdownForCooldowns CVar stays in charge). Engine: Skin.styleCooldownText.
+local function cdtextData() local st = GB.db and GB.db.styleData; return st and st.cdtext end
+local function ensureCdtext()
+  local st = GB.db and GB.db.styleData; if not st then return nil end
+  st.cdtext = st.cdtext or { enabled = true, size = 16, font = "GeneralSans SemiBold", flags = "OUTLINE", color = { 1, 1, 1 }, offsetX = 0, offsetY = 0 }
+  return st.cdtext
+end
+local function cdtextOn() local c = cdtextData(); return c ~= nil and c.enabled ~= false end
+
 -- Plate — the 2:1-shape "plate" look: a SQUARE icon fills one half, a solid-colour plate
 -- fills the other, and that colour fades up over the icon. Only meaningful on a 2:1
 -- portrait shape (its halves are two squares); greyed with a hint on any other shape.
@@ -1116,23 +1128,24 @@ end
 -- preview pane doesn't animate casts. Test by casting / cancelling a spell.
 local function buildCastSection(bf, s)
   local rows = {}
+  local function showCast() C:SetPreviewState("cast") end   -- fill edits animate on the Cast chip
   -- FILL (cast fills up, channel drains).
   local flab = newText(bf, FONT.body, 12, TEXT, "LEFT"); flab:SetPoint("TOPLEFT", 18, -14); flab:SetText("Fill color")
   local fcs = colorSwatch(bf,
     function() return GB.db and GB.db.castFillColor end,
-    function(c) if GB.db then GB.db.castFillColor = c end end)
+    function(c) if GB.db then GB.db.castFillColor = c end; showCast() end)
   fcs.swatch:SetPoint("TOPRIGHT", -18, -12)
   rows[#rows + 1] = fcs
 
   local opRow = sliderRow(bf, -46, "Opacity", 0, 1, 0.05,
     function() return (GB.db and GB.db.castFillAlpha) or 0.55 end,
-    function(v) if GB.db then GB.db.castFillAlpha = v end end,
+    function(v) if GB.db then GB.db.castFillAlpha = v end; showCast() end,
     function(v) return math.floor(v * 100 + 0.5) .. "%" end)
   rows[#rows + 1] = opRow
 
   local dirR = dirRow(bf, -96, "Direction",
     function() return (GB.db and GB.db.castDrainDir) or "up" end,
-    function(d) if GB.db then GB.db.castDrainDir = d end end)
+    function(d) if GB.db then GB.db.castDrainDir = d end; showCast() end)
   rows[#rows + 1] = dirR
 
   -- COMPLETE = the burst on a SUCCESSFUL cast/channel (Blizzard's completion flash,
@@ -1358,16 +1371,55 @@ local function buildCooldownSection(bf, s)
     function(c) if GB.Skin then GB.Skin:SetRangeColor(c) end end)
   rcs.swatch:SetPoint("TOPRIGHT", -18, -316); rows[#rows + 1] = rcs
 
+  -- COUNTDOWN — the number Blizzard draws while a cooldown runs: show/hide +
+  -- font/size/colour/offsets (the numbers can crowd the keybind — Jason, session 12).
+  local function reCD() if GB.Skin and GB.Skin.RefreshCooldownText then GB.Skin:RefreshCooldownText() end end
+  local cdhdr = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); cdhdr:SetPoint("TOPLEFT", 18, -354); cdhdr:SetText("COUNTDOWN")
+  local ctl = newText(bf, FONT.body, 12, TEXT, "LEFT"); ctl:SetPoint("TOPLEFT", 18, -384); ctl:SetText("Countdown numbers")
+  local ctTog = makeToggle(bf, cdtextOn,
+    function(v) local c = ensureCdtext(); if c then c.enabled = v and true or false end; reCD(); s.refresh() end)
+  ctTog:SetPoint("TOPRIGHT", -18, -382); rows[#rows + 1] = ctTog
+  local ccl2 = newText(bf, FONT.body, 12, TEXT, "LEFT"); ccl2:SetPoint("TOPLEFT", 30, -416); ccl2:SetText("Number color")
+  local ccs2 = colorSwatch(bf,
+    function() local c = cdtextData(); return c and c.color end,
+    function(col) local c = ensureCdtext(); c.color = col; reCD() end)
+  ccs2.swatch:SetPoint("TOPRIGHT", -18, -414); rows[#rows + 1] = ccs2
+  local csz = sliderRow(bf, -446, "Size", 8, 30, 1,
+    function() local c = cdtextData(); return (c and c.size) or 16 end,
+    function(v) local c = ensureCdtext(); c.size = v; reCD() end,
+    function(v) return v .. "px" end)
+  rows[#rows + 1] = csz
+  local cfl2 = newText(bf, FONT.body, 12, TEXT, "LEFT"); cfl2:SetPoint("TOPLEFT", 30, -492); cfl2:SetText("Font")
+  local cfontBtn = fontDropdown(bf, 150,
+    function() local c = cdtextData(); return c and c.font end,
+    function(name) local c = ensureCdtext(); c.font = name; reCD() end)
+  cfontBtn:SetPoint("TOPRIGHT", -18, -490)
+  local cox = sliderRow(bf, -524, "Offset X", -40, 40, 1,
+    function() local c = cdtextData(); return (c and c.offsetX) or 0 end,
+    function(v) local c = ensureCdtext(); c.offsetX = v; reCD() end,
+    function(v) return v .. "px" end)
+  rows[#rows + 1] = cox
+  local coy = sliderRow(bf, -568, "Offset Y", -40, 40, 1,
+    function() local c = cdtextData(); return (c and c.offsetY) or 0 end,
+    function(v) local c = ensureCdtext(); c.offsetY = v; reCD() end,
+    function(v) return v .. "px" end)
+  rows[#rows + 1] = coy
+
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -354); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("Availability tints react to Blizzard's own checks (no preview — test on the bars). Out-of-range matches the red keybind; unusable/mana fire for wrong form, missing resources, etc.")
-  bf:SetHeight(394)
+  hint:SetPoint("TOPLEFT", 18, -612); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Availability tints react to Blizzard's own checks (no preview — test on the bars). Out-of-range matches the red keybind; unusable/mana fire for wrong form, missing resources, etc. Countdown styling applies from the next cooldown update.")
+  bf:SetHeight(662)
   s.refresh = function()
     for _, r in ipairs(rows) do if r.refresh then r:refresh() end end
     local flashOn = GB.db and GB.db.finishFlash
     fcl:SetAlpha(flashOn and 1 or 0.35); fcs.swatch:EnableMouse(flashOn and true or false); fcs.swatch:SetAlpha(flashOn and 1 or 0.35)
     local rangeOn = GB.db and GB.db.rangeTint
     rcl:SetAlpha(rangeOn and 1 or 0.35); rcs.swatch:EnableMouse(rangeOn and true or false); rcs.swatch:SetAlpha(rangeOn and 1 or 0.35)
+    local ctOn = cdtextOn()
+    ccl2:SetAlpha(ctOn and 1 or 0.35); ccs2.swatch:EnableMouse(ctOn and true or false); ccs2.swatch:SetAlpha(ctOn and 1 or 0.35)
+    csz:setEnabled(ctOn); cox:setEnabled(ctOn); coy:setEnabled(ctOn)
+    cfl2:SetAlpha(ctOn and 1 or 0.35); cfontBtn:SetEnabled(ctOn)
+    cfontBtn:refresh()
     C:SetPreviewState("cooldown")   -- show the sweep while this section is open
   end
 end
@@ -1693,13 +1745,35 @@ function C:RefreshPreview()
     previewBorder:Hide()
   end
 
+  -- Cast/channel fill preview: the frame spans the shape rect exactly (a draining
+  -- rectangle — the mask does the shaping, same rule as the bars' fill); fresh
+  -- same-frame mask per refresh (the border's pattern). The chip's very first
+  -- show gets a one-frame retry from SetPreviewState (never-rendered quirk §2).
+  if previewCastFillFrame then
+    local pfl = previewCastFillFrame
+    pfl:ClearAllPoints()
+    pfl:SetPoint("TOPLEFT", sref, "TOPLEFT", 0, 0)
+    pfl:SetPoint("BOTTOMRIGHT", sref, "BOTTOMRIGHT", 0, 0)
+    if pfl.mask then pfl.tex:RemoveMaskTexture(pfl.mask) end
+    pfl.mask = pfl:CreateMaskTexture()
+    pfl.mask:SetTexture(maskSrc or shp.mask, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    if hk then
+      handAnchor(pfl.mask, 0)
+    else
+      pfl.mask:ClearAllPoints()
+      pfl.mask:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -growX, growY + mExtT)
+      pfl.mask:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", growX, -(growY + mExtB))
+    end
+    pfl.tex:AddMaskTexture(pfl.mask)
+  end
+
   -- Caption tucks just below the construction (below the plate when it extends
   -- downward) so it never sits under the plate: bold state heading, body under it
   -- (an empty heading has zero height, so the default caption sits at the top).
   if previewCaption and previewCaptionHead then
     local pane2 = previewFrame:GetParent()
     previewCaptionHead:ClearAllPoints()
-    previewCaptionHead:SetPoint("TOP", previewFrame, "BOTTOM", 0, -(previewExtB + 14))
+    previewCaptionHead:SetPoint("TOP", previewFrame, "BOTTOM", 0, -(previewExtB + 26))   -- breathing room under the construction (Jason)
     previewCaptionHead:SetPoint("LEFT", pane2, "LEFT", 10, 0)
     previewCaptionHead:SetPoint("RIGHT", pane2, "RIGHT", -10, 0)
     previewCaption:ClearAllPoints()
@@ -1789,6 +1863,28 @@ function C:SetPreviewState(st)
       if GB.Skin and GB.Skin.StyleCooldown then GB.Skin:StyleCooldown(previewCD) end
       previewCD:Show(); previewCD:SetCooldown(GetTime(), 12)
     else previewCD:Hide() end
+  end
+  -- Cast / Channel chips: run the looping fake drain (colour / alpha / direction
+  -- from the same db fields the bars read — edits in Cast & channel show live).
+  if previewCastFillFrame then
+    if previewState == "cast" or previewState == "channel" then
+      local f = previewCastFillFrame
+      f.channel = (previewState == "channel")
+      local col = (GB.db and GB.db.castFillColor) or { 1, 0.85, 0.4 }
+      local a = (GB.db and GB.db.castFillAlpha) or 0.55
+      f.tex:SetVertexColor(col[1], col[2], col[3], a)
+      f.tex:Show(); f:Show()
+      if not f.everShown then
+        -- Very first show: the tex had never rendered, so RefreshPreview's mask
+        -- attach silently failed (§2) — re-attach one frame later.
+        f.everShown = true
+        C_Timer.After(0, function()
+          if panel and panel:IsShown() then local st = previewState; C:RefreshPreview(); C:SetPreviewState(st) end
+        end)
+      end
+    else
+      previewCastFillFrame:Hide()
+    end
   end
   -- Icon tint: the availability chips mirror the engine's computeIconTint (range =
   -- desaturate + wash; oom / unusable = the configured vertex tint — same db fields
@@ -2161,13 +2257,34 @@ local function buildPreviewPane(parent)
   if previewFlashAnim.SetToFinalAlpha then previewFlashAnim:SetToFinalAlpha(true) end
   previewFlashAnim:SetScript("OnFinished", function() previewFlashFrame:SetAlpha(0) end)
 
+  -- Cast/channel fill preview: a looping fake drain mirroring the bars' fill
+  -- (CastFillOnUpdate geometry — cast fills up, channel drains; colour / alpha /
+  -- direction from the same db fields the engine reads). Shown by the Cast /
+  -- Channel chips; anchored + masked per-refresh in RefreshPreview.
+  previewCastFillFrame = CreateFrame("Frame", nil, frame)
+  previewCastFillFrame:SetFrameLevel(frame:GetFrameLevel() + 4)   -- above plates/glows, below the flash burst (+5)
+  previewCastFillFrame.tex = previewCastFillFrame:CreateTexture(nil, "OVERLAY")
+  previewCastFillFrame.tex:SetTexture("Interface\\Buttons\\WHITE8X8")   -- maskable (masks don't clip SetColorTexture)
+  previewCastFillFrame:SetScript("OnUpdate", function(f)
+    local p = (GetTime() % 2.4) / 2.4      -- a looping fake 2.4s cast
+    local frac = f.channel and (1 - p) or p
+    local tex, W, H = f.tex, f:GetWidth(), f:GetHeight()
+    local dir = (GB.db and GB.db.castDrainDir) or "up"
+    tex:ClearAllPoints()
+    if dir == "up" then tex:SetPoint("BOTTOMLEFT", f); tex:SetPoint("BOTTOMRIGHT", f); tex:SetHeight(math.max(0.01, H * frac))
+    elseif dir == "down" then tex:SetPoint("TOPLEFT", f); tex:SetPoint("TOPRIGHT", f); tex:SetHeight(math.max(0.01, H * frac))
+    elseif dir == "left" then tex:SetPoint("TOPRIGHT", f); tex:SetPoint("BOTTOMRIGHT", f); tex:SetWidth(math.max(0.01, W * frac))
+    else tex:SetPoint("TOPLEFT", f); tex:SetPoint("BOTTOMLEFT", f); tex:SetWidth(math.max(0.01, W * frac)) end
+  end)
+  previewCastFillFrame:Hide()
+
   -- Caption = a bold state-name heading (GeneralSans-Semibold) + the description
   -- body. The body lives on its own mouse-enabled frame with hyperlinks on:
   -- section names are |Hgbsec:*|h links (caret orange) that open that accordion
   -- section. RefreshPreview re-anchors both below the construction.
   local head = newText(pane, FONT.label, 11, TEXT, "CENTER")
   head:SetJustifyH("CENTER"); head:SetText("")
-  head:SetPoint("TOP", frame, "BOTTOM", 0, -16)
+  head:SetPoint("TOP", frame, "BOTTOM", 0, -26)
   head:SetPoint("LEFT", pane, "LEFT", 10, 0); head:SetPoint("RIGHT", pane, "RIGHT", -10, 0)
   previewCaptionHead = head
   local capFrame = CreateFrame("Frame", nil, pane)
