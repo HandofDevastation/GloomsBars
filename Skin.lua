@@ -132,9 +132,20 @@ local function Suppress(btn)
   if btn.SlotArt then btn.SlotArt:Hide() end
   if btn.NormalTexture then btn.NormalTexture:SetAlpha(0) end
   if btn.PushedTexture then btn.PushedTexture:SetAlpha(0) end
-  -- Equipped-item green border (rounded-square, mismatched on a pill) — suppress
-  -- via alpha-0 (Blizzard toggles it Show/Hide, so alpha sticks). API-NOTES §1.
-  if btn.Border then btn.Border:SetAlpha(0) end
+  -- Equipped-item green border (rounded-square, mismatched on a pill). Alpha-0
+  -- does NOT stick here: ActionBarActionButtonMixin:Update() re-drives it with
+  -- SetVertexColor(0, 1, 0, 0.5) — the 4th arg IS the texture alpha — on every
+  -- button refresh (target swap, page flip, …), far more paths than the reassert
+  -- events cover. Re-assert alpha-0 in a post-hook of that exact call.
+  if btn.Border then
+    btn.Border:SetAlpha(0)
+    if not btn.Border.gbAlphaHooked then
+      btn.Border.gbAlphaHooked = true
+      hooksecurefunc(btn.Border, "SetVertexColor", function(self)
+        if Skin.enabled then self:SetAlpha(0) end
+      end)
+    end
+  end
   -- Ground-target reticle: the green square `UI-HUD-ActionBar-Target` glow shown
   -- while a ground-target spell is on the cursor (event UNIT_SPELLCAST_RETICLE_
   -- TARGET → TargetReticleAnimFrame:Setup). Setup only Show()s + plays a ROTATE
@@ -209,6 +220,14 @@ local function plateActive()
 end
 -- Where the SQUARE icon sits (plate fills the opposite half). Returns "top"|"bottom".
 local function plateIconSide() local p = plateStyle(); return (p and p.iconSide) or "top" end
+-- Which swipe asset the cooldowns use. Plate mode anchors them to the SQUARE icon half
+-- (a radial sweep stretched over the full 2:1 plate reads as an ellipse — Jason's call,
+-- session 12), so it takes the HALF swipe matching the icon side (generate-hand-swipes.py
+-- half_swipes; the widget has no texcoord flip, hence per-side files). Else the full swipe.
+local function handSwipePart()
+  if plateActive() then return (plateIconSide() == "bottom") and "swipe-b" or "swipe-t" end
+  return "swipe"
+end
 -- Anchor a hand texture/mask so its silhouette maps to the icon GROWN uniformly by
 -- `grow` screen-px on every side. The base's shape occupies a different FRACTION of the
 -- canvas per axis (short = 0.5, long = long/(long+256)), so a uniform margin would grow
@@ -441,8 +460,10 @@ local function applyShapeArt(btn, icon)
   -- Cooldown swipe: the hand shape's own squished-square swipe (generated from its
   -- base by tools/generate-hand-swipes.py) so the sweep traces the silhouette; else
   -- the SDF swipe. SetSwipeTexture needs a square pow2 texture, which both are.
+  -- Plate mode swaps in the icon-half swipe (handSwipePart) — side flips re-set it
+  -- because the path is folded into artKey below.
   local hk = handKey()
-  local swipe = (hk and GB:HandAsset(hk, "swipe")) or art.swipe
+  local swipe = (hk and GB:HandAsset(hk, handSwipePart())) or art.swipe
   -- Skip the SetTexture churn when the art is unchanged (e.g. dragging the size
   -- slider within one aspect bucket) — keeps the sliders smooth.
   local rec = records[btn]
@@ -820,14 +841,18 @@ local function ApplyDecor(btn)
   end
   -- Plate gradient: the plate colour, opaque where it meets the plate (the midline) and
   -- fading OUT over the icon across `fadeStart` of the icon half. Same silhouette mask so
-  -- it can't spill past the shape. Drawn above the icon, below the text container (+4).
+  -- it can't spill past the shape. Lives on its OWN frame at btn+1: the cooldowns are
+  -- useParentLevel (btn+0), so the gradient draws ABOVE the sweep and the sweep's hard
+  -- midline edge hides under the opaque end of the fade (Jason, session 12). Still below
+  -- the decor (+2), cast fill (+3) and text (+4).
   if plate then
     if not rec.plategrad then
-      local _, isub = icon:GetDrawLayer()
-      rec.plategrad = btn:CreateTexture(nil, "ARTWORK", nil, (isub or 0) + 1)
+      rec.plategradFrame = CreateFrame("Frame", nil, btn)
+      rec.plategrad = rec.plategradFrame:CreateTexture(nil, "ARTWORK")
       rec.plategrad:SetTexture("Interface\\Buttons\\WHITE8X8")
       rec.plateFresh = true
     end
+    rec.plategradFrame:SetFrameLevel(btn:GetFrameLevel() + 1)
     local pg, pw = rec.plategrad, icon:GetWidth()
     local pc = (plateStyle() and plateStyle().color) or { 0.1, 0.1, 0.13 }
     local fadeStart = (plateStyle() and plateStyle().fadeStart) or 0.5
@@ -840,9 +865,17 @@ local function ApplyDecor(btn)
       pg:SetPoint("BOTTOMLEFT", icon, "BOTTOMLEFT", 0, 0); pg:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
       pg:SetGradient("VERTICAL", fromC, toC)
     end
-    if rec.forcePlateMask or rec.plategradMask ~= rec.mask then
+    -- The gradient needs its OWN mask copy: rec.mask lives on the button frame and a
+    -- cross-frame AddMaskTexture is unproven (§2) — same-frame buildMask is the safe
+    -- pattern (the cast fill's). Same source/anchor as rec.mask, rebuilt on the same
+    -- plan changes + the mask-retry pass (forcePlateMask).
+    if rec.forcePlateMask or rec.plategradMaskKey ~= maskKey then
       if rec.plategradMask then pg:RemoveMaskTexture(rec.plategradMask) end
-      pg:AddMaskTexture(rec.mask); rec.plategradMask = rec.mask
+      rec.plategradMask = buildMask(rec.plategradFrame, shapeRef, maskExt, maskSrc)
+      pg:AddMaskTexture(rec.plategradMask)
+      rec.plategradMaskKey = maskKey
+    elseif rec.plategradMask then
+      AnchorConstructionMask(rec.plategradMask, shapeRef, maskExt)
     end
     pg:Show()
   elseif rec.plategrad then
@@ -1074,14 +1107,17 @@ local function AlignCooldowns(btn)
   -- Hand swipe + icon mask both derive from the SAME reference rect, so the cooldown
   -- anchors to the icon bounds EXACTLY (no overshoot) — the sweep edge lands on the
   -- silhouette edge. (A white sweep makes any overshoot fringe visible; 0 is right.)
+  -- Hand shapes anchor to the ICON — which in plate mode is the SQUARE half (the sweep
+  -- stays circular there; the full-plate anchor made it elliptical — Jason, session 12;
+  -- the half-swipe art matches that half's silhouette), and otherwise IS the full
+  -- silhouette. The plate half stays lit during a cooldown by design.
   local hk = handKey()
   for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown, btn.chargeCooldown }) do
     if cd then
       if hk then
-        local ref = constructRef(btn, icon)   -- full 2:1 plate in plate mode; else the icon
         cd:ClearAllPoints()
-        cd:SetPoint("TOPLEFT", ref, "TOPLEFT", 0, 0)
-        cd:SetPoint("BOTTOMRIGHT", ref, "BOTTOMRIGHT", 0, 0)
+        cd:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0)
+        cd:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
       else
         AnchorConstruction(cd, icon, GROW_RATIO, 0.75)
       end
@@ -1151,17 +1187,40 @@ local function playFinishFlash(btn)
   rec.flashFrame:SetAlpha(1)
   rec.flashAnim:Stop(); rec.flashAnim:Play()
 end
--- Hook ONE cooldown frame for the flash. SetCooldown records whether THIS cooldown is a
--- real one (duration > a GCD); OnCooldownDone flashes only if so. Reacting to the length
--- Blizzard draws sidesteps the old wall-clock timer's race at GCD boundaries (which
--- false-flashed whole rotations). Normal + charge cooldowns each keep their own flag.
+-- The game-clock filter alone can't tell a GCD from a real cooldown during a rotation:
+-- chained casts keep gbRunning true, so gbStart goes stale and after ~2s of casting
+-- EVERY button's "elapsed" clears FLASH_MIN_CD — a GCD boundary then flashed the whole
+-- bar. The duration argument is secret (comparing it taints), but there IS a non-secret
+-- tell: a GCD ends on MANY buttons in the same frame; a real cooldown ends on ONE. So
+-- flashes are queued and resolved one frame later — if several buttons qualified
+-- together, it was a GCD wave and the whole batch is suppressed.
+local FLASH_GCD_GROUP = 3       -- ≥ this many cooldowns ending in one frame = a GCD wave
+local pendingFlash, pendingFlashCount, pendingFlashScheduled = {}, 0, false
+local function queueFinishFlash(btn)
+  if not pendingFlash[btn] then
+    pendingFlash[btn] = true
+    pendingFlashCount = pendingFlashCount + 1
+  end
+  if pendingFlashScheduled then return end
+  pendingFlashScheduled = true
+  C_Timer.After(0, function()
+    if pendingFlashCount < FLASH_GCD_GROUP then
+      for b in pairs(pendingFlash) do playFinishFlash(b) end
+    end
+    wipe(pendingFlash)
+    pendingFlashCount, pendingFlashScheduled = 0, false
+  end)
+end
+-- Hook ONE cooldown frame for the flash. SetCooldown stamps the game clock (never
+-- reading its secret duration arg); OnCooldownDone queues a flash if the elapsed
+-- wall-time clears FLASH_MIN_CD. Normal + charge cooldowns each keep their own flag.
 local function hookFlashCooldown(btn, cd)
   if not (cd and cd.HookScript) then return end
   cd:HookScript("OnCooldownDone", function()
     local elapsed = cd.gbStart and (GetTime() - cd.gbStart)
     cd.gbRunning, cd.gbStart = false, nil   -- clear: a new cooldown must re-stamp (kills the
                                             -- GCD-boundary race where a stale start false-flashed)
-    if elapsed and elapsed >= FLASH_MIN_CD then playFinishFlash(btn) end
+    if elapsed and elapsed >= FLASH_MIN_CD then queueFinishFlash(btn) end
   end)
   hooksecurefunc(cd, "SetCooldown", function()   -- no args read → the secret duration is never touched
     if not cd.gbRunning then cd.gbStart = GetTime(); cd.gbRunning = true end
@@ -1590,7 +1649,7 @@ local function ApplyButton(btn)
   -- square edge and no shaped sweep); applySwipe forces its swipe on + edge off.
   if not rec.cooldownStyled then
     local hk = handKey()
-    local swipe = (hk and GB:HandAsset(hk, "swipe")) or shapeArt(icon).swipe
+    local swipe = (hk and GB:HandAsset(hk, handSwipePart())) or shapeArt(icon).swipe
     for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown, btn.chargeCooldown }) do
       if cd and cd.SetSwipeTexture then
         cd:SetSwipeTexture(swipe)

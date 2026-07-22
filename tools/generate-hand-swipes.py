@@ -24,6 +24,33 @@ MARGIN = 128        # ART-SPEC: icon reference rect centered with a 128px margin
 S = 256             # square, power-of-2 swipe
 SWEEP = 0.8         # matches generate-art.py swipe_alpha
 
+# Plate mode (session 12): the cooldown anchors to the SQUARE icon half only (a radial
+# sweep on the full 2:1 plate reads as an ellipse), so each 2:1 portrait shape needs
+# HALF swipes matching the icon half's silhouette — outer corners rounded per the shape,
+# midline edge square. Two variants per shape (icon on top / bottom half): the widget
+# has no texcoord flip. Already 256x256 pow2, so no pre-distortion resize.
+PLATE_KEYS = ["pill21", "square21", "roundsq1-21", "roundsq2-21", "roundsq3-21"]
+
+
+def bake(ref):
+    a = ref.split()[3].point(lambda v: int(v * SWEEP))
+    white = Image.new("L", ref.size, 255)
+    return Image.merge("RGBA", (white, white, white, a))
+
+
+def half_swipes():
+    for key in PLATE_KEYS:
+        base_path = os.path.join(HAND, f"{key}-base.png")
+        base = Image.open(base_path).convert("RGBA")
+        w, h = base.size
+        ref = base.crop((MARGIN, MARGIN, w - MARGIN, h - MARGIN))   # 256x512 icon rect
+        rw, rh = ref.size
+        top = ref.crop((0, 0, rw, rh // 2))
+        bottom = ref.crop((0, rh // 2, rw, rh))
+        bake(top).save(os.path.join(HAND, f"{key}-swipe-t.png"))
+        bake(bottom).save(os.path.join(HAND, f"{key}-swipe-b.png"))
+        print(f"  {key}: {rw}x{rh // 2} half swipes (t/b)")
+
 
 def main():
     count = 0
@@ -41,6 +68,8 @@ def main():
         count += 1
         print(f"  {key}: {w}x{h} base -> {S}x{S} swipe")
     print(f"{count} hand swipes written to Media/art/hand/")
+    half_swipes()
+    print(f"{len(PLATE_KEYS) * 2} plate half swipes written to Media/art/hand/")
 
 
 if __name__ == "__main__":
