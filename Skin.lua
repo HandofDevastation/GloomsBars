@@ -869,6 +869,90 @@ local function ApplyCountOverride(btn)
   rec.cntOverridden = true
 end
 
+-- Macro-name override (session 13) — position / font / size / colour for
+-- btn.Name (the macro-name label), mirroring the count override (reads
+-- styleData.name). Blizzard only SetText()s Name at runtime (Update ~line 607)
+-- and never re-anchors it — not even the small-button OnLoad — so applying from
+-- ApplyDecor needs no re-assert hook. Stock geometry is a fixed 36×10 box at
+-- BOTTOM(0,2), which truncates long names; the override widens it to the icon.
+-- Zones: bottom (Blizzard's spot, on the icon), center, extension (centred in
+-- the plate half — plate shapes only, falls back to bottom elsewhere).
+-- Repopulate the name label after Hidden mode: Blizzard won't SetText again
+-- until its next Update, so ask the same API it uses (macro names are plain
+-- strings, AllowedWhenUntainted — not combat secrets). pcall = fail soft.
+local function refreshNameText(btn)
+  local nm, action = btn.Name, btn.action
+  if not (nm and action) then return end
+  local ok, uses = pcall(C_ActionBar.UsesActionText, action)
+  if not ok then return end
+  if uses then
+    local ok2, txt = pcall(C_ActionBar.GetActionText, action)
+    if ok2 then nm:SetText(txt or "") end
+  else
+    nm:SetText("")
+  end
+end
+
+local function ApplyNameOverride(btn)
+  local rec = records[btn]
+  local nm = btn.Name
+  local icon = btn.icon or btn.Icon
+  if not (rec and nm and icon) then return end
+  local conf = GB:GetStyle().name
+  -- Three modes: default = Blizzard's stock label, custom = the styling below,
+  -- hidden = no label at all. Hidden EMPTIES THE TEXT rather than alpha-0:
+  -- text addons (NiceDamage restyles HotKey/Count/Name) re-drive the label's
+  -- alpha after us and win, but an empty string renders nothing under ANY
+  -- styling. Blizzard writes the name via SetText in Update() → re-assert in a
+  -- post-hook of that exact call (the equipped-border pattern); un-hiding
+  -- repopulates via refreshNameText. Legacy tables (no mode) read the old
+  -- enabled flag: true = custom, false = default.
+  local mode = "default"
+  if conf then mode = conf.mode or (conf.enabled ~= false and "custom" or "default") end
+  if not rec.nmTextHooked then
+    rec.nmTextHooked = true
+    hooksecurefunc(nm, "SetText", function(fs, text)
+      local r = records[btn]
+      if Skin.enabled and r and r.nmHidden and text and text ~= "" then fs:SetText("") end
+    end)
+  end
+  if mode == "hidden" then
+    if not rec.nmHidden then rec.nmHidden = true; nm:SetText("") end
+  elseif rec.nmHidden then
+    rec.nmHidden = nil
+    refreshNameText(btn)
+  end
+  if mode ~= "custom" then
+    if rec.nmOverridden then
+      -- Restore the pristine font/colour + Blizzard's stock geometry (a /reload is exact).
+      rec.nmOverridden = nil
+      nm:SetJustifyH(rec.nmJustify or "CENTER")
+      if rec.nmFont and rec.nmFont[1] then nm:SetFont(rec.nmFont[1], rec.nmFont[2], rec.nmFont[3] or "") end
+      if rec.nmColor then nm:SetTextColor(rec.nmColor[1], rec.nmColor[2], rec.nmColor[3], rec.nmColor[4] or 1) end
+      nm:ClearAllPoints()
+      nm:SetPoint("BOTTOM", btn, "BOTTOM", 0, 2)
+      nm:SetSize(36, 10)
+    end
+    return
+  end
+  local ox, oy = conf.offsetX or 0, conf.offsetY or 0
+  nm:ClearAllPoints()
+  if conf.zone == "center" then
+    nm:SetPoint("CENTER", icon, "CENTER", ox, oy)
+  elseif conf.zone == "extension" and plateActive() then
+    local pw = icon:GetWidth()   -- same positioning math as the platefill / keybind
+    local pdy = (plateIconSide() == "bottom") and (pw * 0.5) or (-pw * 0.5)
+    nm:SetPoint("CENTER", btn, "CENTER", ox, pdy + oy)
+  else   -- "bottom" (and the extension fallback on non-plate shapes)
+    nm:SetPoint("BOTTOM", icon, "BOTTOM", ox, 2 + oy)
+  end
+  nm:SetSize(icon:GetWidth(), (conf.size or 10) + 4)
+  nm:SetJustifyH("CENTER")
+  nm:SetFont(resolveFont(conf.font), conf.size or 10, conf.flags or "OUTLINE")
+  if conf.color then nm:SetTextColor(unpack(conf.color)) end
+  rec.nmOverridden = true
+end
+
 local function ApplyDecor(btn)
   local rec = records[btn]
   local icon = btn.icon or btn.Icon
@@ -1103,9 +1187,16 @@ local function ApplyDecor(btn)
   -- Text must render above plates: raise Blizzard's text container once.
   if btn.TextOverlayContainer then
     btn.TextOverlayContainer:SetFrameLevel(btn:GetFrameLevel() + 4)
+    -- The macro-name label is the ONE text region Blizzard leaves OUTSIDE the
+    -- container (XML: it sits on the button's own OVERLAY layer, btn+0 — under
+    -- our +1/+2 gradient frames). Adopt it so all text draws above the plates.
+    if btn.Name and btn.Name:GetParent() ~= btn.TextOverlayContainer then
+      btn.Name:SetParent(btn.TextOverlayContainer)
+    end
   end
   ApplyHotkeyOverride(btn)
   ApplyCountOverride(btn)
+  ApplyNameOverride(btn)
   -- Mask-retry: a plate texture created THIS frame hasn't rendered yet, so its
   -- first AddMaskTexture silently fails (never-rendered-texture quirk, API-NOTES
   -- §2) and the gradient draws UNMASKED — e.g. a square bottom on a hexagon,
@@ -1769,6 +1860,7 @@ local function ApplyButton(btn)
     -- re-anchors + re-sizes but never re-sets the font — API-NOTES §3).
     if btn.HotKey then rec.hkFont = { btn.HotKey:GetFont() }; rec.hkJustify = btn.HotKey:GetJustifyH(); rec.hkColor = { btn.HotKey:GetTextColor() } end
     if btn.Count then rec.cntFont = { btn.Count:GetFont() }; rec.cntJustify = btn.Count:GetJustifyH(); rec.cntColor = { btn.Count:GetTextColor() } end
+    if btn.Name then rec.nmFont = { btn.Name:GetFont() }; rec.nmJustify = btn.Name:GetJustifyH(); rec.nmColor = { btn.Name:GetTextColor() }; rec.nmParent = btn.Name:GetParent() end
     if btn.UpdateButtonArt then
       hooksecurefunc(btn, "UpdateButtonArt", function(b)
         if Skin.enabled then
@@ -1968,6 +2060,24 @@ local function RestoreButton(btn)
     if rec.cntColor then btn.Count:SetTextColor(rec.cntColor[1], rec.cntColor[2], rec.cntColor[3], rec.cntColor[4] or 1) end
     btn.Count:ClearAllPoints()
     btn.Count:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -3, 1)   -- stock anchor; a /reload is exact
+  end
+  -- Un-adopt the name label from the text container (adopted in ApplyDecor
+  -- regardless of the name mode, so this restore is unconditional) + undo the
+  -- Hidden-mode empty text.
+  if btn.Name then
+    if rec.nmHidden then rec.nmHidden = nil; refreshNameText(btn) end
+    if rec.nmParent and btn.Name:GetParent() ~= rec.nmParent then
+      btn.Name:SetParent(rec.nmParent)
+    end
+  end
+  if rec.nmOverridden and btn.Name then
+    rec.nmOverridden = nil
+    btn.Name:SetJustifyH(rec.nmJustify or "CENTER")
+    if rec.nmFont and rec.nmFont[1] then btn.Name:SetFont(rec.nmFont[1], rec.nmFont[2], rec.nmFont[3] or "") end
+    if rec.nmColor then btn.Name:SetTextColor(rec.nmColor[1], rec.nmColor[2], rec.nmColor[3], rec.nmColor[4] or 1) end
+    btn.Name:ClearAllPoints()
+    btn.Name:SetPoint("BOTTOM", btn, "BOTTOM", 0, 2)   -- stock geometry; a /reload is exact
+    btn.Name:SetSize(36, 10)
   end
   rec.active = false
   -- Blizzard restores correct slot-art state itself (branching on the bar's

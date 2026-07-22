@@ -780,6 +780,22 @@ local function ensureCdtext()
 end
 local function cdtextOn() local c = cdtextData(); return c ~= nil and c.enabled ~= false end
 
+-- Macro-name override (styleData.name) — same styling pattern as the count, but
+-- THREE modes (default = Blizzard's stock label / custom = styled / hidden =
+-- no label). Engine: Skin's ApplyNameOverride. Absent = default. Legacy tables
+-- (no mode) read the old enabled flag: true = custom, false = default.
+local function nameData() local st = GB.db and GB.db.styleData; return st and st.name end
+local function ensureName()
+  local st = GB.db and GB.db.styleData; if not st then return nil end
+  st.name = st.name or { mode = "custom", zone = "bottom", offsetX = 0, offsetY = 0, size = 10, font = "GeneralSans Medium", flags = "OUTLINE", color = { 1, 1, 1 } }
+  return st.name
+end
+local function nameMode()
+  local c = nameData()
+  if not c then return "default" end
+  return c.mode or (c.enabled ~= false and "custom" or "default")
+end
+
 -- Plate — the 2:1-shape "plate" look: a SQUARE icon fills one half, a solid-colour plate
 -- fills the other, and that colour fades up over the icon. Only meaningful on a 2:1
 -- portrait shape (its halves are two squares); greyed with a hint on any other shape.
@@ -956,7 +972,7 @@ local function buildTextSection(bf, s)
   local function reapply() if GB.Skin then GB.Skin:ReapplyDecor() end end
   local function reCD() if GB.Skin and GB.Skin.RefreshCooldownText then GB.Skin:RefreshCooldownText() end end
 
-  local TEXT_TABS = { { "keybind", "Keybind" }, { "count", "Charge count" }, { "cdtext", "Countdown" } }
+  local TEXT_TABS = { { "keybind", "Keybind" }, { "count", "Charge count" }, { "cdtext", "Countdown" }, { "name", "Name" } }
   local tab = "keybind"
   local BLOCK_TOP = -44                   -- blocks hang below the chip row
   local blocks, chips = {}, {}
@@ -1154,6 +1170,77 @@ local function buildTextSection(bf, s)
     cdcs.swatch:EnableMouse(on); cdcs.swatch:SetAlpha(on and 1 or 0.35)
     cdSize:setEnabled(on); cdOx:setEnabled(on); cdOy:setEnabled(on)
     cdFont:SetEnabled(on)
+  end
+
+  -- --------------------------------------------------------------------- NAME
+  local nm = newBlock("name", 344)
+  local nmlab = newText(nm, FONT.body, 12, TEXT, "LEFT"); nmlab:SetPoint("TOPLEFT", 18, -14); nmlab:SetText("Macro name")
+  local nmModes, nmmPrev = {}, nil
+  for i = 3, 1, -1 do   -- reverse → Default ends up leftmost
+    local mc = ({ { "default", "Default" }, { "custom", "Custom" }, { "hidden", "Hidden" } })[i]
+    local b = flatButton(nm, 60, 22, COLOR.heroic, mc[2], 11)
+    if nmmPrev then b:SetPoint("TOPRIGHT", nmmPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -12) end
+    b:SetScript("OnClick", function()
+      local c = ensureName(); c.mode = mc[1]; c.enabled = nil   -- mode supersedes the legacy flag
+      reapply(); nm.refresh()
+    end)
+    nmModes[#nmModes + 1] = { b = b, m = mc[1] }; nmmPrev = b
+  end
+
+  local nmclab = newText(nm, FONT.body, 12, TEXT, "LEFT"); nmclab:SetPoint("TOPLEFT", 18, -46); nmclab:SetText("Color")
+  local nmcs = colorSwatch(nm,
+    function() local c = nameData(); return c and c.color end,
+    function(col) local c = ensureName(); c.color = col; reapply() end)
+  nmcs.swatch:SetPoint("TOPRIGHT", -18, -44)
+
+  local nmSize = sliderRow(nm, -78, "Size", 6, 28, 1,
+    function() local c = nameData(); return (c and c.size) or 10 end,
+    function(v) local c = ensureName(); c.size = v; reapply() end,
+    function(v) return v .. "px" end)
+
+  local nmflab = newText(nm, FONT.body, 12, TEXT, "LEFT"); nmflab:SetPoint("TOPLEFT", 18, -122); nmflab:SetText("Font")
+  local nmFont = fontDropdown(nm, 150,
+    function() local c = nameData(); return c and c.font end,
+    function(name) local c = ensureName(); c.font = name; reapply() end)
+  nmFont:SetPoint("TOPRIGHT", -18, -120)
+
+  -- POSITION — zone (Blizzard's bottom edge / centred on the icon / in the plate half).
+  local nmphdr = newText(nm, FONT.head, 13, COLOR.purple, "LEFT"); nmphdr:SetPoint("TOPLEFT", 18, -160); nmphdr:SetText("POSITION")
+  local nmzlab = newText(nm, FONT.body, 12, TEXT, "LEFT"); nmzlab:SetPoint("TOPLEFT", 18, -190); nmzlab:SetText("Zone")
+  local nmZone, nmzPrev = {}, nil
+  for i = 3, 1, -1 do   -- reverse → Bottom ends up leftmost
+    local zc = ({ { "bottom", "Bottom" }, { "center", "Center" }, { "extension", "Plate" } })[i]
+    local b = flatButton(nm, 60, 22, COLOR.heroic, zc[2], 11)
+    if nmzPrev then b:SetPoint("TOPRIGHT", nmzPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -188) end
+    b:SetScript("OnClick", function()
+      local c = ensureName(); c.zone = zc[1]
+      for _, e in ipairs(nmZone) do e.b:SetActive(e.z == c.zone) end; reapply()
+    end)
+    nmZone[#nmZone + 1] = { b = b, z = zc[1] }; nmzPrev = b
+  end
+
+  local nmOx = sliderRow(nm, -222, "Offset X", -40, 40, 1,
+    function() local c = nameData(); return (c and c.offsetX) or 0 end,
+    function(v) local c = ensureName(); c.offsetX = v; reapply() end,
+    function(v) return v .. "px" end)
+  local nmOy = sliderRow(nm, -266, "Offset Y", -40, 40, 1,
+    function() local c = nameData(); return (c and c.offsetY) or 0 end,
+    function(v) local c = ensureName(); c.offsetY = v; reapply() end,
+    function(v) return v .. "px" end)
+
+  local nmHint = newText(nm, FONT.body, 11, MUTE, "LEFT")
+  nmHint:SetPoint("TOPLEFT", 18, -306); nmHint:SetPoint("RIGHT", nm, "RIGHT", -16, 0); nmHint:SetJustifyH("LEFT")
+  nmHint:SetText("The macro-name label. Default = Blizzard's stock look; Hidden removes it entirely. Custom applies the styling above and widens Blizzard's 36px clip box to the icon. Plate centres it in the plate half (2:1 plate shapes only).")
+  nm.refresh = function()
+    local c = nameData()
+    local m = nameMode()
+    local on = m == "custom"
+    nmcs:refresh(); nmSize:refresh(); nmOx:refresh(); nmOy:refresh(); nmFont:refresh()
+    for _, e in ipairs(nmModes) do e.b:SetActive(e.m == m) end
+    nmcs.swatch:EnableMouse(on); nmcs.swatch:SetAlpha(on and 1 or 0.35)
+    nmSize:setEnabled(on); nmOx:setEnabled(on); nmOy:setEnabled(on)
+    nmFont:SetEnabled(on)
+    for _, e in ipairs(nmZone) do e.b:SetActive(on and ((c and c.zone) or "bottom") == e.z); e.b:SetEnabled(on) end
   end
 
   -- Chip row (which text element is being edited) + selection.

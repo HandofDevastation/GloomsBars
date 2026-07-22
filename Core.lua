@@ -622,10 +622,19 @@ local function FontInfo()
     if fs and fs.GetFont then
       local face, size, flags = fs:GetFont()
       local r, g, bl = fs:GetTextColor()
-      print(("  .%s: %s @ %.1f [%s] color %.2f,%.2f,%.2f text=%q shown=%s"):format(
+      local par = fs:GetParent()
+      print(("  .%s: %s @ %.1f [%s] color %.2f,%.2f,%.2f text=%q shown=%s alpha=%.2f eff=%.2f parent=%s"):format(
         key, tostring(face), size or 0, tostring(flags),
-        r or 0, g or 0, bl or 0, tostring(fs:GetText()), tostring(fs:IsShown())))
+        r or 0, g or 0, bl or 0, tostring(fs:GetText()), tostring(fs:IsShown()),
+        fs:GetAlpha() or -1, (fs.GetEffectiveAlpha and fs:GetEffectiveAlpha()) or -1,
+        tostring(par and (par:GetName() or par.GetDebugName and par:GetDebugName()) or "?")))
     end
+  end
+  local nmconf = GB.db and GB.db.styleData and GB.db.styleData.name
+  if type(nmconf) == "table" then
+    print(("  styleData.name: mode=%s enabled=%s"):format(tostring(nmconf.mode), tostring(nmconf.enabled)))
+  else
+    print("  styleData.name: " .. tostring(nmconf))
   end
 end
 
