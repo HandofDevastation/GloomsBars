@@ -493,7 +493,7 @@ local STATE_DESC = {
   hover     = { "HOVER", "Shows while hovering your pointer over an icon in your action bars. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
   selected  = { "SELECTED", "Displays when a button is toggled on (a stance, form or aura). Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
   flash     = { "FLASH", "Appears when auto-attack or auto-shot is active — typically needs the related auto-attack ability to be on the action bar. Not commonly seen. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
-  cooldown  = { "COOLDOWN", "A swipe animation and finish flash to indicate that an ability is recharging or ready. Styled in " .. L_CDA .. "." },
+  cooldown  = { "COOLDOWN", "A swipe animation and finish flash to indicate that an ability is recharging or ready. Styled in " .. L_CDA .. "; the countdown number text in " .. secLink("Text") .. "." },
   unusable  = { "UNUSABLE", "Indicates an ability is unusable due to wrong talent, form/stance, weapon type, silenced, missing resource, etc. Styled in " .. L_CDA .. "." },
   oom       = { "OUT OF MANA", "Indicates you have insufficient mana or other resource/power to cast. Styled in " .. L_CDA .. "." },
   range     = { "OUT OF RANGE", "Shows when the target is too far for the ability to be cast. Tints the icon and recolors the keybind text (if shown). Enabled and styled in " .. L_CDA .. "." },
@@ -929,44 +929,64 @@ local function buildDecorSection(bf, s)
   end
 end
 
--- Text — keybind styling + placement. The engine (ApplyHotkeyOverride, re-run
--- via ReapplyDecor and re-asserted in the UpdateHotkeys hook) reads styleData.
--- hotkey. Off = Blizzard's default. Count has its own section (session 12);
--- a Name override remains future work.
+-- Text — ONE home for every text element (Jason, session 12: keybind / charge
+-- count / countdown styling were scattered over three sections). A chip row picks
+-- the element (the Animations-section pattern); each element's block shows below,
+-- and the section resizes to the selected block (bf:SetHeight + relayout).
+-- Engines: ApplyHotkeyOverride (styleData.hotkey, UpdateHotkeys re-assert),
+-- ApplyCountOverride (styleData.count), styleCooldownText (styleData.cdtext).
 local function buildTextSection(bf, s)
   local function reapply() if GB.Skin then GB.Skin:ReapplyDecor() end end
+  local function reCD() if GB.Skin and GB.Skin.RefreshCooldownText then GB.Skin:RefreshCooldownText() end end
 
-  local lab = newText(bf, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 18, -14); lab:SetText("Custom keybind")
-  local en = makeToggle(bf,
+  local TEXT_TABS = { { "keybind", "Keybind" }, { "count", "Charge count" }, { "cdtext", "Countdown" } }
+  local tab = "keybind"
+  local BLOCK_TOP = -44                   -- blocks hang below the chip row
+  local blocks, chips = {}, {}
+  local selectTab                         -- fwd-declared (chip handlers + s.refresh)
+
+  local function newBlock(key, height)
+    local f = CreateFrame("Frame", nil, bf)
+    f:SetPoint("TOPLEFT", 0, BLOCK_TOP); f:SetPoint("TOPRIGHT", 0, BLOCK_TOP)
+    f:SetHeight(height); f.height = height
+    f:Hide()
+    blocks[key] = f
+    return f
+  end
+
+  -- ------------------------------------------------------------------ KEYBIND
+  local kb = newBlock("keybind", 404)
+  local lab = newText(kb, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 18, -14); lab:SetText("Custom keybind")
+  local en = makeToggle(kb,
     hotkeyOn,
-    function(v) local h = ensureHotkey(); if h then h.enabled = v and true or false end; reapply(); if GB.Skin then GB.Skin:RefreshHotkeyText() end; s.refresh() end)
+    function(v) local h = ensureHotkey(); if h then h.enabled = v and true or false end; reapply(); if GB.Skin then GB.Skin:RefreshHotkeyText() end; kb.refresh() end)
   en:SetPoint("TOPRIGHT", -18, -12)
 
-  local clab = newText(bf, FONT.body, 12, TEXT, "LEFT"); clab:SetPoint("TOPLEFT", 18, -46); clab:SetText("Color")
-  local cs = colorSwatch(bf,
+  local clab = newText(kb, FONT.body, 12, TEXT, "LEFT"); clab:SetPoint("TOPLEFT", 18, -46); clab:SetText("Color")
+  local cs = colorSwatch(kb,
     function() local h = hotkeyData(); return h and h.color end,
     function(c) local h = ensureHotkey(); h.color = c; reapply() end)
   cs.swatch:SetPoint("TOPRIGHT", -18, -44)
 
-  local sizeRow = sliderRow(bf, -78, "Size", 6, 28, 1,
+  local sizeRow = sliderRow(kb, -78, "Size", 6, 28, 1,
     function() local h = hotkeyData(); return (h and h.size) or 13 end,
     function(v) local h = ensureHotkey(); h.size = v; reapply() end,
     function(v) return v .. "px" end)
 
   -- Font — a dropdown of every LibSharedMedia font (bundled + other addons').
-  local flab = newText(bf, FONT.body, 12, TEXT, "LEFT"); flab:SetPoint("TOPLEFT", 18, -122); flab:SetText("Font")
-  local fontBtn = fontDropdown(bf, 150,
+  local flab = newText(kb, FONT.body, 12, TEXT, "LEFT"); flab:SetPoint("TOPLEFT", 18, -122); flab:SetText("Font")
+  local fontBtn = fontDropdown(kb, 150,
     function() local h = hotkeyData(); return h and h.font end,
     function(name) local h = ensureHotkey(); h.font = name; reapply() end)
   fontBtn:SetPoint("TOPRIGHT", -18, -120)
 
   -- POSITION — zone (over the icon vs. in the extension plate) + nudge offsets.
-  local phdr = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); phdr:SetPoint("TOPLEFT", 18, -160); phdr:SetText("POSITION")
-  local zlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); zlab:SetPoint("TOPLEFT", 18, -190); zlab:SetText("Zone")
+  local phdr = newText(kb, FONT.head, 13, COLOR.purple, "LEFT"); phdr:SetPoint("TOPLEFT", 18, -160); phdr:SetText("POSITION")
+  local zlab = newText(kb, FONT.body, 12, TEXT, "LEFT"); zlab:SetPoint("TOPLEFT", 18, -190); zlab:SetText("Zone")
   local zoneBtns, zPrev = {}, nil
   for i = 2, 1, -1 do
     local zc = ({ { "center", "Center" }, { "extension", "Extension" } })[i]
-    local b = flatButton(bf, 80, 22, COLOR.heroic, zc[2], 11)
+    local b = flatButton(kb, 80, 22, COLOR.heroic, zc[2], 11)
     if zPrev then b:SetPoint("TOPRIGHT", zPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -188) end
     b:SetScript("OnClick", function()
       local h = ensureHotkey(); h.zone = zc[1]
@@ -975,11 +995,11 @@ local function buildTextSection(bf, s)
     zoneBtns[#zoneBtns + 1] = { b = b, z = zc[1] }; zPrev = b
   end
 
-  local oxRow = sliderRow(bf, -222, "Offset X", -40, 40, 1,
+  local oxRow = sliderRow(kb, -222, "Offset X", -40, 40, 1,
     function() local h = hotkeyData(); return (h and h.offsetX) or 0 end,
     function(v) local h = ensureHotkey(); h.offsetX = v; reapply() end,
     function(v) return v .. "px" end)
-  local oyRow = sliderRow(bf, -266, "Offset Y", -40, 40, 1,
+  local oyRow = sliderRow(kb, -266, "Offset Y", -40, 40, 1,
     function() local h = hotkeyData(); return (h and h.offsetY) or 0 end,
     function(v) local h = ensureHotkey(); h.offsetY = v; reapply() end,
     function(v) return v .. "px" end)
@@ -988,9 +1008,9 @@ local function buildTextSection(bf, s)
   -- prefixes (m-/s-/c-/a-) for Mac symbols (⌘⇧⌃⌥), hyphen removed. Only renders
   -- while Custom keybind is on (greyed + inert when off); stored per style
   -- (keybindMods) so the choice persists across the master toggle.
-  local mhdr = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); mhdr:SetPoint("TOPLEFT", 18, -306); mhdr:SetText("MODIFIERS")
-  local mlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); mlab:SetPoint("TOPLEFT", 18, -336); mlab:SetText("Mac symbol icons")
-  local modTog = makeToggle(bf,
+  local mhdr = newText(kb, FONT.head, 13, COLOR.purple, "LEFT"); mhdr:SetPoint("TOPLEFT", 18, -306); mhdr:SetText("MODIFIERS")
+  local mlab = newText(kb, FONT.body, 12, TEXT, "LEFT"); mlab:SetPoint("TOPLEFT", 18, -336); mlab:SetText("Mac symbol icons")
+  local modTog = makeToggle(kb,
     function() local st = GB.db and GB.db.styleData; return st and st.keybindMods == "symbols" end,
     function(v)
       local st = GB.db and GB.db.styleData; if st then st.keybindMods = v and "symbols" or "default" end
@@ -998,11 +1018,10 @@ local function buildTextSection(bf, s)
     end)
   modTog:SetPoint("TOPRIGHT", -18, -334)
 
-  local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -366); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("Everything here needs Custom keybind on. Mac symbol icons replace m-/s-/c-/a- prefixes with ⌘/⇧/⌃/⌥ (macOS binds).")
-  bf:SetHeight(404)
-  s.refresh = function()
+  local kbHint = newText(kb, FONT.body, 11, MUTE, "LEFT")
+  kbHint:SetPoint("TOPLEFT", 18, -366); kbHint:SetPoint("RIGHT", kb, "RIGHT", -16, 0); kbHint:SetJustifyH("LEFT")
+  kbHint:SetText("Everything here needs Custom keybind on. Mac symbol icons replace m-/s-/c-/a- prefixes with ⌘/⇧/⌃/⌥ (macOS binds).")
+  kb.refresh = function()
     local h = hotkeyData()
     local on = hotkeyOn()
     en:refresh(); cs:refresh(); sizeRow:refresh(); oxRow:refresh(); oyRow:refresh()
@@ -1012,75 +1031,135 @@ local function buildTextSection(bf, s)
     sizeRow:setEnabled(on); oxRow:setEnabled(on); oyRow:setEnabled(on)
     fontBtn:SetEnabled(on)
     modTog:SetEnabled(on); modTog:SetAlpha(on and 1 or 0.35)
-    for _, e in ipairs(zoneBtns) do e.b:SetActive(on and (h.zone or "extension") == e.z); e.b:SetEnabled(on) end
+    for _, e in ipairs(zoneBtns) do e.b:SetActive(on and ((h and h.zone) or "extension") == e.z); e.b:SetEnabled(on) end
   end
-end
 
--- Charge count — styling + placement for the count text (spell charges, item
--- stacks). Engine: ApplyCountOverride (re-run via ReapplyDecor) reads
--- styleData.count. Off = Blizzard's default corner text.
-local function buildCountSection(bf, s)
-  local function reapply() if GB.Skin then GB.Skin:ReapplyDecor() end end
+  -- ------------------------------------------------------------- CHARGE COUNT
+  local ct = newBlock("count", 344)
+  local ctlab = newText(ct, FONT.body, 12, TEXT, "LEFT"); ctlab:SetPoint("TOPLEFT", 18, -14); ctlab:SetText("Custom count")
+  local cten = makeToggle(ct, countOn,
+    function(v) local c = ensureCount(); if c then c.enabled = v and true or false end; reapply(); ct.refresh() end)
+  cten:SetPoint("TOPRIGHT", -18, -12)
 
-  local lab = newText(bf, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 18, -14); lab:SetText("Custom count")
-  local en = makeToggle(bf, countOn,
-    function(v) local c = ensureCount(); if c then c.enabled = v and true or false end; reapply(); s.refresh() end)
-  en:SetPoint("TOPRIGHT", -18, -12)
-
-  local clab = newText(bf, FONT.body, 12, TEXT, "LEFT"); clab:SetPoint("TOPLEFT", 18, -46); clab:SetText("Color")
-  local cs = colorSwatch(bf,
+  local ctclab = newText(ct, FONT.body, 12, TEXT, "LEFT"); ctclab:SetPoint("TOPLEFT", 18, -46); ctclab:SetText("Color")
+  local ctcs = colorSwatch(ct,
     function() local c = countData(); return c and c.color end,
     function(col) local c = ensureCount(); c.color = col; reapply() end)
-  cs.swatch:SetPoint("TOPRIGHT", -18, -44)
+  ctcs.swatch:SetPoint("TOPRIGHT", -18, -44)
 
-  local sizeRow = sliderRow(bf, -78, "Size", 6, 28, 1,
+  local ctSize = sliderRow(ct, -78, "Size", 6, 28, 1,
     function() local c = countData(); return (c and c.size) or 14 end,
     function(v) local c = ensureCount(); c.size = v; reapply() end,
     function(v) return v .. "px" end)
 
-  local flab = newText(bf, FONT.body, 12, TEXT, "LEFT"); flab:SetPoint("TOPLEFT", 18, -122); flab:SetText("Font")
-  local fontBtn = fontDropdown(bf, 150,
+  local ctflab = newText(ct, FONT.body, 12, TEXT, "LEFT"); ctflab:SetPoint("TOPLEFT", 18, -122); ctflab:SetText("Font")
+  local ctFont = fontDropdown(ct, 150,
     function() local c = countData(); return c and c.font end,
     function(name) local c = ensureCount(); c.font = name; reapply() end)
-  fontBtn:SetPoint("TOPRIGHT", -18, -120)
+  ctFont:SetPoint("TOPRIGHT", -18, -120)
 
   -- POSITION — zone (Blizzard's corner / centred on the icon / in the plate half).
-  local phdr = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); phdr:SetPoint("TOPLEFT", 18, -160); phdr:SetText("POSITION")
-  local zlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); zlab:SetPoint("TOPLEFT", 18, -190); zlab:SetText("Zone")
-  local zoneBtns, zPrev = {}, nil
+  local ctphdr = newText(ct, FONT.head, 13, COLOR.purple, "LEFT"); ctphdr:SetPoint("TOPLEFT", 18, -160); ctphdr:SetText("POSITION")
+  local ctzlab = newText(ct, FONT.body, 12, TEXT, "LEFT"); ctzlab:SetPoint("TOPLEFT", 18, -190); ctzlab:SetText("Zone")
+  local ctZone, ctzPrev = {}, nil
   for i = 3, 1, -1 do   -- reverse → Corner ends up leftmost
     local zc = ({ { "corner", "Corner" }, { "center", "Center" }, { "extension", "Plate" } })[i]
-    local b = flatButton(bf, 60, 22, COLOR.heroic, zc[2], 11)
-    if zPrev then b:SetPoint("TOPRIGHT", zPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -188) end
+    local b = flatButton(ct, 60, 22, COLOR.heroic, zc[2], 11)
+    if ctzPrev then b:SetPoint("TOPRIGHT", ctzPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -188) end
     b:SetScript("OnClick", function()
       local c = ensureCount(); c.zone = zc[1]
-      for _, e in ipairs(zoneBtns) do e.b:SetActive(e.z == c.zone) end; reapply()
+      for _, e in ipairs(ctZone) do e.b:SetActive(e.z == c.zone) end; reapply()
     end)
-    zoneBtns[#zoneBtns + 1] = { b = b, z = zc[1] }; zPrev = b
+    ctZone[#ctZone + 1] = { b = b, z = zc[1] }; ctzPrev = b
   end
 
-  local oxRow = sliderRow(bf, -222, "Offset X", -40, 40, 1,
+  local ctOx = sliderRow(ct, -222, "Offset X", -40, 40, 1,
     function() local c = countData(); return (c and c.offsetX) or 0 end,
     function(v) local c = ensureCount(); c.offsetX = v; reapply() end,
     function(v) return v .. "px" end)
-  local oyRow = sliderRow(bf, -266, "Offset Y", -40, 40, 1,
+  local ctOy = sliderRow(ct, -266, "Offset Y", -40, 40, 1,
     function() local c = countData(); return (c and c.offsetY) or 0 end,
     function(v) local c = ensureCount(); c.offsetY = v; reapply() end,
     function(v) return v .. "px" end)
 
-  local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -306); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("Styles the charge / stack / item count. Corner = Blizzard's spot on the icon; Plate centres it in the plate half (2:1 plate shapes only).")
-  bf:SetHeight(344)
-  s.refresh = function()
+  local ctHint = newText(ct, FONT.body, 11, MUTE, "LEFT")
+  ctHint:SetPoint("TOPLEFT", 18, -306); ctHint:SetPoint("RIGHT", ct, "RIGHT", -16, 0); ctHint:SetJustifyH("LEFT")
+  ctHint:SetText("Styles the charge / stack / item count. Corner = Blizzard's spot on the icon; Plate centres it in the plate half (2:1 plate shapes only).")
+  ct.refresh = function()
     local c = countData()
     local on = countOn()
-    en:refresh(); cs:refresh(); sizeRow:refresh(); oxRow:refresh(); oyRow:refresh(); fontBtn:refresh()
-    cs.swatch:EnableMouse(on); cs.swatch:SetAlpha(on and 1 or 0.35)
-    sizeRow:setEnabled(on); oxRow:setEnabled(on); oyRow:setEnabled(on)
-    fontBtn:SetEnabled(on)
-    for _, e in ipairs(zoneBtns) do e.b:SetActive(on and ((c and c.zone) or "corner") == e.z); e.b:SetEnabled(on) end
+    cten:refresh(); ctcs:refresh(); ctSize:refresh(); ctOx:refresh(); ctOy:refresh(); ctFont:refresh()
+    ctcs.swatch:EnableMouse(on); ctcs.swatch:SetAlpha(on and 1 or 0.35)
+    ctSize:setEnabled(on); ctOx:setEnabled(on); ctOy:setEnabled(on)
+    ctFont:SetEnabled(on)
+    for _, e in ipairs(ctZone) do e.b:SetActive(on and ((c and c.zone) or "corner") == e.z); e.b:SetEnabled(on) end
   end
+
+  -- ---------------------------------------------------------------- COUNTDOWN
+  local cd = newBlock("cdtext", 280)
+  local cdlab = newText(cd, FONT.body, 12, TEXT, "LEFT"); cdlab:SetPoint("TOPLEFT", 18, -14); cdlab:SetText("Countdown numbers")
+  local cdTog = makeToggle(cd, cdtextOn,
+    function(v) local c = ensureCdtext(); if c then c.enabled = v and true or false end; reCD(); cd.refresh() end)
+  cdTog:SetPoint("TOPRIGHT", -18, -12)
+
+  local cdclab = newText(cd, FONT.body, 12, TEXT, "LEFT"); cdclab:SetPoint("TOPLEFT", 18, -46); cdclab:SetText("Color")
+  local cdcs = colorSwatch(cd,
+    function() local c = cdtextData(); return c and c.color end,
+    function(col) local c = ensureCdtext(); c.color = col; reCD() end)
+  cdcs.swatch:SetPoint("TOPRIGHT", -18, -44)
+
+  local cdSize = sliderRow(cd, -78, "Size", 8, 30, 1,
+    function() local c = cdtextData(); return (c and c.size) or 16 end,
+    function(v) local c = ensureCdtext(); c.size = v; reCD() end,
+    function(v) return v .. "px" end)
+
+  local cdflab = newText(cd, FONT.body, 12, TEXT, "LEFT"); cdflab:SetPoint("TOPLEFT", 18, -122); cdflab:SetText("Font")
+  local cdFont = fontDropdown(cd, 150,
+    function() local c = cdtextData(); return c and c.font end,
+    function(name) local c = ensureCdtext(); c.font = name; reCD() end)
+  cdFont:SetPoint("TOPRIGHT", -18, -120)
+
+  local cdOx = sliderRow(cd, -154, "Offset X", -40, 40, 1,
+    function() local c = cdtextData(); return (c and c.offsetX) or 0 end,
+    function(v) local c = ensureCdtext(); c.offsetX = v; reCD() end,
+    function(v) return v .. "px" end)
+  local cdOy = sliderRow(cd, -198, "Offset Y", -40, 40, 1,
+    function() local c = cdtextData(); return (c and c.offsetY) or 0 end,
+    function(v) local c = ensureCdtext(); c.offsetY = v; reCD() end,
+    function(v) return v .. "px" end)
+
+  local cdHint = newText(cd, FONT.body, 11, MUTE, "LEFT")
+  cdHint:SetPoint("TOPLEFT", 18, -242); cdHint:SetPoint("RIGHT", cd, "RIGHT", -16, 0); cdHint:SetJustifyH("LEFT")
+  cdHint:SetText("The number Blizzard draws while a cooldown runs. Off = hidden. Styling applies from the next cooldown update.")
+  cd.refresh = function()
+    local on = cdtextOn()
+    cdTog:refresh(); cdcs:refresh(); cdSize:refresh(); cdOx:refresh(); cdOy:refresh(); cdFont:refresh()
+    cdcs.swatch:EnableMouse(on); cdcs.swatch:SetAlpha(on and 1 or 0.35)
+    cdSize:setEnabled(on); cdOx:setEnabled(on); cdOy:setEnabled(on)
+    cdFont:SetEnabled(on)
+  end
+
+  -- Chip row (which text element is being edited) + selection.
+  selectTab = function(k)
+    tab = k
+    for _, c in ipairs(chips) do c.b:SetActive(c.k == k) end
+    for key, f in pairs(blocks) do f:SetShown(key == k) end
+    local b = blocks[k]
+    b.refresh()
+    bf:SetHeight(-BLOCK_TOP + b.height)
+    relayout()
+  end
+  local cPrev
+  for _, t in ipairs(TEXT_TABS) do
+    local w = 24 + t[2]:len() * 6
+    local b = flatButton(bf, w, 22, COLOR.heroic, t[2], 11); b:SetBase(0.2)
+    if cPrev then b:SetPoint("TOPLEFT", cPrev, "TOPRIGHT", 6, 0) else b:SetPoint("TOPLEFT", 18, -12) end
+    b:SetScript("OnClick", function() selectTab(t[1]) end)
+    chips[#chips + 1] = { b = b, k = t[1] }; cPrev = b
+  end
+
+  bf:SetHeight(-BLOCK_TOP + blocks[tab].height)
+  s.refresh = function() selectTab(tab) end
 end
 
 -- Empty slots — dim or hide bar slots with no action. Alpha-only (the secure
@@ -1371,55 +1450,16 @@ local function buildCooldownSection(bf, s)
     function(c) if GB.Skin then GB.Skin:SetRangeColor(c) end end)
   rcs.swatch:SetPoint("TOPRIGHT", -18, -316); rows[#rows + 1] = rcs
 
-  -- COUNTDOWN — the number Blizzard draws while a cooldown runs: show/hide +
-  -- font/size/colour/offsets (the numbers can crowd the keybind — Jason, session 12).
-  local function reCD() if GB.Skin and GB.Skin.RefreshCooldownText then GB.Skin:RefreshCooldownText() end end
-  local cdhdr = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); cdhdr:SetPoint("TOPLEFT", 18, -354); cdhdr:SetText("COUNTDOWN")
-  local ctl = newText(bf, FONT.body, 12, TEXT, "LEFT"); ctl:SetPoint("TOPLEFT", 18, -384); ctl:SetText("Countdown numbers")
-  local ctTog = makeToggle(bf, cdtextOn,
-    function(v) local c = ensureCdtext(); if c then c.enabled = v and true or false end; reCD(); s.refresh() end)
-  ctTog:SetPoint("TOPRIGHT", -18, -382); rows[#rows + 1] = ctTog
-  local ccl2 = newText(bf, FONT.body, 12, TEXT, "LEFT"); ccl2:SetPoint("TOPLEFT", 30, -416); ccl2:SetText("Number color")
-  local ccs2 = colorSwatch(bf,
-    function() local c = cdtextData(); return c and c.color end,
-    function(col) local c = ensureCdtext(); c.color = col; reCD() end)
-  ccs2.swatch:SetPoint("TOPRIGHT", -18, -414); rows[#rows + 1] = ccs2
-  local csz = sliderRow(bf, -446, "Size", 8, 30, 1,
-    function() local c = cdtextData(); return (c and c.size) or 16 end,
-    function(v) local c = ensureCdtext(); c.size = v; reCD() end,
-    function(v) return v .. "px" end)
-  rows[#rows + 1] = csz
-  local cfl2 = newText(bf, FONT.body, 12, TEXT, "LEFT"); cfl2:SetPoint("TOPLEFT", 30, -492); cfl2:SetText("Font")
-  local cfontBtn = fontDropdown(bf, 150,
-    function() local c = cdtextData(); return c and c.font end,
-    function(name) local c = ensureCdtext(); c.font = name; reCD() end)
-  cfontBtn:SetPoint("TOPRIGHT", -18, -490)
-  local cox = sliderRow(bf, -524, "Offset X", -40, 40, 1,
-    function() local c = cdtextData(); return (c and c.offsetX) or 0 end,
-    function(v) local c = ensureCdtext(); c.offsetX = v; reCD() end,
-    function(v) return v .. "px" end)
-  rows[#rows + 1] = cox
-  local coy = sliderRow(bf, -568, "Offset Y", -40, 40, 1,
-    function() local c = cdtextData(); return (c and c.offsetY) or 0 end,
-    function(v) local c = ensureCdtext(); c.offsetY = v; reCD() end,
-    function(v) return v .. "px" end)
-  rows[#rows + 1] = coy
-
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -612); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  hint:SetText("Availability tints react to Blizzard's own checks (no preview — test on the bars). Out-of-range matches the red keybind; unusable/mana fire for wrong form, missing resources, etc. Countdown styling applies from the next cooldown update.")
-  bf:SetHeight(662)
+  hint:SetPoint("TOPLEFT", 18, -354); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Availability tints react to Blizzard's own checks (no preview — test on the bars). Out-of-range matches the red keybind; unusable/mana fire for wrong form, missing resources, etc. Countdown-number styling lives in Text.")
+  bf:SetHeight(394)
   s.refresh = function()
     for _, r in ipairs(rows) do if r.refresh then r:refresh() end end
     local flashOn = GB.db and GB.db.finishFlash
     fcl:SetAlpha(flashOn and 1 or 0.35); fcs.swatch:EnableMouse(flashOn and true or false); fcs.swatch:SetAlpha(flashOn and 1 or 0.35)
     local rangeOn = GB.db and GB.db.rangeTint
     rcl:SetAlpha(rangeOn and 1 or 0.35); rcs.swatch:EnableMouse(rangeOn and true or false); rcs.swatch:SetAlpha(rangeOn and 1 or 0.35)
-    local ctOn = cdtextOn()
-    ccl2:SetAlpha(ctOn and 1 or 0.35); ccs2.swatch:EnableMouse(ctOn and true or false); ccs2.swatch:SetAlpha(ctOn and 1 or 0.35)
-    csz:setEnabled(ctOn); cox:setEnabled(ctOn); coy:setEnabled(ctOn)
-    cfl2:SetAlpha(ctOn and 1 or 0.35); cfontBtn:SetEnabled(ctOn)
-    cfontBtn:refresh()
     C:SetPreviewState("cooldown")   -- show the sweep while this section is open
   end
 end
@@ -2403,7 +2443,6 @@ local function BuildPanel()
   makeSection("Plate", buildPlateSection)
   makeSection("Decoration layers", buildDecorSection)
   makeSection("Text", buildTextSection)
-  makeSection("Charge count", buildCountSection)
   makeSection("Glows", buildGlowsSection)
   makeSection("Animations", buildAnimsSection)
   makeSection("Cast & channel", buildCastSection)
