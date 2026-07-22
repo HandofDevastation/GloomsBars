@@ -314,7 +314,7 @@ local PREVIEW_CENTER_Y = -220
 local panel, bodyContainer
 local sections = {}
 local previewFrame, previewIcon, previewMask, previewGlow, previewRing, previewCD
-local previewBorder, previewBorderMask, previewCaption
+local previewBorder, previewBorderMask, previewCaption, previewHotkey
 local previewPlateOn = false             -- plate mode live in the preview (set by RefreshPreview)
 local previewOuter, previewInner          -- multi-part shaped glow (hand shapes; mirrors the bars)
 local previewFlashFrame, previewFlash, previewFlashAnim   -- finish-flash preview
@@ -1653,6 +1653,33 @@ function C:RefreshPreview()
     previewBorder:Hide()
   end
 
+  -- Sample keybind chip — mirrors ApplyHotkeyOverride's placement (plate half /
+  -- extension / centre) + font/size/colour, so the preview shows the real keybind
+  -- treatment. Only while Custom keybind is on (off = Blizzard default, not previewed).
+  if previewHotkey then
+    local hconf = hotkeyOn() and hotkeyData() or nil
+    if hconf then
+      previewHotkey:SetFont(fontPath(hconf.font), hconf.size or 13, hconf.flags or "OUTLINE")
+      local col = hconf.color or { 1, 1, 1 }
+      previewHotkey:SetTextColor(col[1], col[2], col[3], col[4] or 1)
+      previewHotkey:SetText("3")
+      local hx, hy = hconf.offsetX or 0, hconf.offsetY or 0
+      previewHotkey:ClearAllPoints()
+      if previewPlateOn and hconf.zone == "extension" then
+        local pdy = (plateSide == "bottom") and (pw * 0.5) or (-pw * 0.5)   -- the half OPPOSITE the icon
+        previewHotkey:SetPoint("CENTER", previewFrame, "CENTER", hx, pdy + hy)
+      elseif hconf.zone == "extension" and ext > 0 then
+        if above then previewHotkey:SetPoint("CENTER", previewIcon, "TOP", hx, (ext / 2) + hy)
+        else previewHotkey:SetPoint("CENTER", previewIcon, "BOTTOM", hx, -(ext / 2) + hy) end
+      else
+        previewHotkey:SetPoint("CENTER", previewIcon, "CENTER", hx, hy)
+      end
+      previewHotkey:Show()
+    else
+      previewHotkey:Hide()
+    end
+  end
+
   -- Caption tucks just below the construction (below the plate when it extends
   -- downward) so it never sits under the plate.
   if previewCaption then
@@ -2093,6 +2120,15 @@ local function buildPreviewPane(parent)
   fsc:SetDuration(0.45); fsc:SetSmoothing("OUT")
   if previewFlashAnim.SetToFinalAlpha then previewFlashAnim:SetToFinalAlpha(true) end
   previewFlashAnim:SetScript("OnFinished", function() previewFlashFrame:SetAlpha(0) end)
+
+  -- Sample keybind chip: a FontString on its own high frame (the bars' text
+  -- container analogue) so it renders over the plate/gradient. RefreshPreview
+  -- styles + places it from styleData.hotkey; hidden while Custom keybind is off.
+  local hkf = CreateFrame("Frame", nil, frame)
+  hkf:SetFrameLevel(frame:GetFrameLevel() + 6)
+  hkf:SetAllPoints()
+  previewHotkey = hkf:CreateFontString(nil, "OVERLAY")
+  previewHotkey:Hide()
 
   local cap = newText(pane, FONT.body, 10, MUTE, "CENTER")
   cap:SetPoint("TOP", frame, "BOTTOM", 0, -16); cap:SetPoint("LEFT", 10, 0); cap:SetPoint("RIGHT", -10, 0)
