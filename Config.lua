@@ -1803,17 +1803,26 @@ end
 -- Replay the shaped finish flash on the preview (so its colour/shape is visible
 -- without waiting for a real cooldown to end). Uses the same art + sizing as the
 -- engine's playFinishFlash. No-op when the flash is disabled.
-function C:PlayPreviewFlash()
+-- Shared burst player: the expanding flash tinted `c` — the cooldown finish flash
+-- and the cast/channel COMPLETE burst both use it, differing only by colour.
+local function playPreviewBurst(c)
   if not (previewFlash and previewIcon) then return end
-  if not (GB.db and GB.db.finishFlash) then return end
   previewFlash:SetTexture(GB.Skin:GlowArt())
-  local c = GB.db.finishFlashColor or { 1, 0.9, 0.5 }
   previewFlash:SetVertexColor(c[1], c[2], c[3])
   -- Anchor the FRAME so the scale bursts from centre; plate mode spans the full 2:1
   -- construction (the bars' flash traces constructRef), else the icon.
   anchorPreviewOverlay(previewFlashFrame, (128 / 80 - 1) / 2, 0, previewPlateOn and previewFrame or nil)
   previewFlashFrame:SetAlpha(1)
   previewFlashAnim:Stop(); previewFlashAnim:Play()
+end
+function C:PlayPreviewFlash()
+  if not (GB.db and GB.db.finishFlash) then return end
+  playPreviewBurst(GB.db.finishFlashColor or { 1, 0.9, 0.5 })
+end
+-- The cast/channel drain loop calls this at each wrap — the completion burst a
+-- successful cast plays on the bars (Cast & channel → Complete color).
+function C:PlayPreviewCastBurst()
+  playPreviewBurst((GB.db and GB.db.castCompleteColor) or { 1, 0.9, 0.5 })
 end
 
 -- Multi-part preview glow: for a hand shape, every glow-trigger chip (proc /
@@ -1870,6 +1879,7 @@ function C:SetPreviewState(st)
     if previewState == "cast" or previewState == "channel" then
       local f = previewCastFillFrame
       f.channel = (previewState == "channel")
+      f.lastP = nil   -- fresh loop — no completion burst from a stale wrap on chip click
       local col = (GB.db and GB.db.castFillColor) or { 1, 0.85, 0.4 }
       local a = (GB.db and GB.db.castFillAlpha) or 0.55
       f.tex:SetVertexColor(col[1], col[2], col[3], a)
@@ -2267,6 +2277,8 @@ local function buildPreviewPane(parent)
   previewCastFillFrame.tex:SetTexture("Interface\\Buttons\\WHITE8X8")   -- maskable (masks don't clip SetColorTexture)
   previewCastFillFrame:SetScript("OnUpdate", function(f)
     local p = (GetTime() % 2.4) / 2.4      -- a looping fake 2.4s cast
+    if f.lastP and p < f.lastP then C:PlayPreviewCastBurst() end   -- wrap = the cast completed
+    f.lastP = p
     local frac = f.channel and (1 - p) or p
     local tex, W, H = f.tex, f:GetWidth(), f:GetHeight()
     local dir = (GB.db and GB.db.castDrainDir) or "up"
