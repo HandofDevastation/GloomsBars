@@ -1,16 +1,102 @@
 # Gloom's Bars — Session Handoff
-**Last updated: end of session 9 (2026-07-21). ⇒ Read SESSION 9 FIRST — it turned the session-8 pivot
-into the real product: the 21 hand shapes are now a persisted, Config-selectable setting (NEXT #2 done),
-AND every button state (proc / hover / selected / cast / channel / cooldown sweep / flash) is now driven by
-the multi-part shaped glow (NEXT #1 done). All committed + QA'd in-game. Session 8 (the pivot) and the docs
-it produced — [SHAPE-CATALOG.md](SHAPE-CATALOG.md) (FROZEN), [EFFECTS-MATRIX.md](EFFECTS-MATRIX.md),
-[ART-SPEC.md](ART-SPEC.md) — are still the reference; sessions 2–7 are the still-valid skin/Config
-foundation (their SDF-shape/old-glow parts are superseded by 8+9).**
+**Last updated: end of session 10 (2026-07-21). ⇒ Read SESSION 10 FIRST — it (A) finished the glow polish
+(per-trigger glow MATRIX + flash-square fix + honest preview chips) and (B) built the per-trigger ANIMATION
+SYSTEM — a plug-in framework whose FIRST module is "Comet Chase" (the rotating shine on the rim). All committed
++ QA'd in-game via the GUI. Session 9 (shape selection + glow-to-triggers) and sessions 2–8 remain the valid
+foundation; the FROZEN docs [SHAPE-CATALOG.md](SHAPE-CATALOG.md) / [EFFECTS-MATRIX.md](EFFECTS-MATRIX.md) /
+[ART-SPEC.md](ART-SPEC.md) still apply.**
 
-## ▶ FIRST THING NEXT SESSION (session 10): pick up at SESSION 9 → "▶▶ NEXT (session 10)".
-Nothing is mid-flight — session 9 ends clean, everything committed (HEAD = the handoff commit; the last code
-commit is `2d26e57`). The shape system + the whole glow-to-triggers effort are DONE and QA'd. Remaining work
-is polish + the two later priorities (animation layer, effects-matrix gaps) — see the session-9 NEXT list.
+## ▶ FIRST THING NEXT SESSION (session 11): pick up at SESSION 10 → "▶▶ NEXT (session 11)".
+Nothing is mid-flight — session 10 ends clean, everything committed (HEAD = the handoff commit). The animation
+FRAMEWORK is done + QA'd with Comet Chase as the reference module; the other 7 animation types (marching lines
+next) each slot into the same "Animations" section as a new module. Also open: glow per-state spread (optional),
+Animations UI polish (dropdown caret, None-height), effects-matrix gaps.
+
+## ★★★ SESSION 10 (2026-07-21) — GLOW POLISH (#1) + the PER-TRIGGER ANIMATION SYSTEM (#2). ALL committed + QA'd.
+A long, high-throughput session done GUI-first (Jason HATES slash commands — see below). Two big deliverables.
+Commits: `3477eae` (glow matrix + flash fix), `34d10b8` (preview chips), `7f31e16` (shine prototype + assets),
++ this handoff commit (the animation framework). **Do NOT relitigate anything below — QA'd in-game.**
+
+### PART A — Glow polish (NEXT #1). Commits `3477eae`, `34d10b8`.
+- **Per-trigger glow model — `db.triggers`.** Each of proc/assist/cast/channel/hover/selected/flash is now ONE
+  uniform record `{ enabled, color, opacity, layers }`, so each is tuned independently. Replaces the scattered
+  `glowColor/glowIntensity/glowAssistColor` + `stateColors/stateIntensity` (kept DORMANT for the SDF fallback +
+  seeded once from them on load). Config **"Glows" matrix** (replaced "Proc glow" + "State highlights"):
+  per-trigger **on · colour · layers (both/inner/outer) · opacity**, + a global **Pulse speed**. Engine
+  (Glows.lua): `winningTrigger` picks the highest-priority ENABLED trigger (disabling one drops to the next);
+  the shared pulse driver uses each glow's OWN peak; outer/inner are Show-gated by `layers`. Folded in the old
+  hardcoded cast/channel halo colour + brightness (two backlog items gone).
+- **Flash-checked SQUARE fix (was a latent session-9 gap).** Blizzard's `UpdateFlash` re-drives
+  `GetCheckedTexture():SetAlpha(1.0)` on the auto-attacking button (`ActionButton.lua:1306`), un-hiding the old
+  SDF checked ring OVER the shaped flash glow. Our one-time alpha-0 loses. Fix: re-assert alpha 0 in a per-button
+  `UpdateFlash` post-hook (Skin.lua) — same "re-assert in a hook" pattern as the cast fill.
+- **Preview chips honest now (#1a).** The Config preview's **Proc/Hover/Selected/Flash** chips draw the REAL
+  multi-part glow (`previewOuter` under the icon + `previewInner` over the plate, mirroring the bars) and honour
+  the per-trigger **layers**; the **Cooldown** chip traces the hand `-swipe`. The pulsing chips (proc/flash)
+  **breathe at the live Pulse speed** via an OnUpdate on `previewFrame`. The SDF `previewGlow`/`previewRing` stay
+  as the dormant non-hand fallback.
+
+### PART B — The per-trigger ANIMATION SYSTEM (NEXT #2 — "the fun one"). This commit.
+- **THE FRAMEWORK — `Anims.lua` (`GB.Anims`), a plug-in registry.** Each animation = a MODULE:
+  `{ id, label, defaults, params(schema), Start(host, icon, key, p), Stop(host) }`. **Start/Stop are keyed by
+  HOST frame** — a button OR the Config preview frame — so ONE module renders identically on the bars AND in the
+  editor preview. `Anims:Reconcile(btn, triggerKey, trigger)` (called from `Glows:Refresh`, hand path) runs the
+  WINNING trigger's enabled animation + stops the rest; skips when the winner is unchanged (Refresh fires often);
+  `Anims:Invalidate(triggerKey)` forces a re-reconcile after a Config edit. `Anims:PreviewReconcile(host,icon,
+  key,trigger)` drives the preview. **Data: per trigger `anims[id] = { enabled, ...params }` — PER-STATE**, so
+  Proc's Comet Chase (red/CW) and Hover's (green/CCW) are fully independent.
+- **FIRST MODULE — Comet Chase** (`id = "shine"`, label **"Comet Chase"**): N glowing comets orbiting the rim.
+  One shared comet (`Media/art/shine.png`) + a per-shape rim mask (`Media/art/hand/<key>-rim.png`). Params:
+  **colour · comets (1–4) · spin** (a bidirectional velocity slider). Assets from `tools/generate-shine.py`.
+- **CONFIG "Animations" section = State chips → Animation dropdown → the selected animation's params.** ONE
+  animation per state (dropdown lists None + each module). Params are generated from each module's schema (kinds:
+  `color`/`range`/`bispeed`/`choice`), so **new modules get their UI for free**. Generic dropdown flyout
+  (`animDropdown`/`animFlyoutFrame`) modelled on the font flyout (catcher closes on outside click).
+
+### ★★ HARD-WON LEARNINGS (do NOT rediscover):
+- **The rotating-shine mechanic works:** a comet spun over the icon (`SetRotation`, oversized 1.6× so the spin
+  covers the rim at every angle), clipped by a per-shape RIM MASK, reveals only the outline band → the bright
+  head chases the rim on ANY silhouette. **`SetRotation` on a masked texture does NOT rotate the mask** (the
+  comet sweeps under a fixed rim — validated). N comets = N phase-spaced copies (360/N apart) driven by ONE OnUpdate.
+- **The comet + rim art:** the comet must be a **compact bright POINT + a short dim tail** (angle-only, so it hits
+  the rim at any radius) — a wide wedge read as a thick "inchworm". The rim mask must be a **SOFT band CENTRED on
+  the outline** (dilate + erode, then gaussian FEATHER) — a hard eroded band read as a metallic border and pinched
+  to a point at the caps. Thickness/softness/tail are BAKED (regen `generate-shine.py`); count/colour/spin are LIVE.
+- **Spin = one SIGNED velocity** in [-1,1]: sign = direction, magnitude = speed, 0 = still, |1| = fastest
+  (`SHINE_MIN_REV` sec/rev). **WoW rotation is CCW-positive → NEGATE** so positive/right = clockwise (matches the
+  UI). The comet's tail is baked on one side → **mirror the comet (`SetTexCoord(1,0,0,1)`) for CW motion** so the
+  tail always TRAILS, never leads.
+- **`AddMaskTexture` fails on a never-rendered texture** (API-NOTES §2) — show the comet FIRST, attach the rim mask
+  one frame later (`C_Timer.After(0)`). Same pattern the plates use.
+- **Arrow glyphs `←`/`→` are TOFU** in the bundled fonts — don't put them in labels (use plain "CCW"/"CW").
+
+### ★★ SETTLED DECISIONS (2026-07-21, session 10 — do not reopen):
+- **Per-trigger EVERYTHING, never global.** Glow (colour/opacity/layers) AND animation params are per-STATE.
+  (Jason: an animation's settings must NOT be global — Proc red-CW and Hover green-CCW coexist.)
+- **Animations are a plug-in SYSTEM, not one-offs.** Catalog of **8 types**: Comet Chase (BUILT) + **marching
+  lines · sheen sweep · sparkles · breathe/pulse-scale · rim flash · burst-on-fire · full-glow spin** (planned).
+  Each is a module registered in `Anims.lua`.
+- **ONE animation per state** — the dropdown IS the choice (incl. None). The engine supports multiple-enabled if
+  we ever want to layer them; the UI enforces one.
+- **GUI ONLY — NO slash commands for the user.** Jason "really really really" HATES slash/CLI (saved to memory
+  `gui-not-slash-commands`). Every user control is in Config; the `/gb shine` playground was REMOVED. Dev slash
+  commands for Claude's own checks are tolerable but should be hidden/removed once a GUI equivalent exists.
+- **Renamed "Shine chase" → "Comet Chase"** (user-facing label; the module `id` stays `"shine"` internally).
+
+### ▶▶ NEXT (session 11) — in priority order
+1. **Next animation types.** **Marching lines FIRST** — reuses Comet Chase's rim-mask + scrolling-texture
+   mechanism (a dashed/dotted band scrolled around the rim), so it's a cheap second module that proves the
+   registry. Then sheen sweep, sparkles, breathe, rim flash, burst-on-fire, full-glow spin — one small module
+   each. Each new module auto-appears in the Animations dropdown + gets its param UI free from its schema.
+2. **Animations UI polish:** (a) the dropdown has no ▾ **caret** yet (`Media/ui/caret.png` is available). (b)
+   picking **None** leaves the section at full height (empty space) — dynamic section height via `relayout()`, or
+   shrink. (c) optional per-shape rim **thickness/softness presets** (currently baked defaults in generate-shine.py).
+3. **Glow leftover (#1 remainder):** per-trigger **spread/softness** for the glow (Jason said OPTIONAL — the
+   now-dead `stateWidth` "Glow width" could be revived for hand shapes so hover reads subtler than proc).
+4. **Effects-matrix gaps (#3):** `SpellHighlightTexture` (pulsing "press this"), `CooldownFlash` (GCD flipbook),
+   `NewActionTexture`, flyout member background. See EFFECTS-MATRIX.md §B/§A/§I.
+- **Anytime:** coexistence QA with ArcUI/EQOL re-enabled (our hover/flash/icon-vertex work touches a lot now);
+  the old SDF shape/bloom code is dormant (removable once nothing references it); assist glow stays low-priority.
 
 ## ★★★ SESSION 9 (2026-07-21) — SHAPE SELECTION + PERSISTENCE, then GLOW-TO-TRIGGERS (both major; ALL committed + QA'd)
 A long, high-throughput session. Delivered BOTH remaining big pieces of the shaped-glow rebuild end-to-end.
@@ -359,6 +445,8 @@ probes), `Skin.lua` (skin + decoration engine), `Glows.lua` (proc glow engine),
 | 6 | Proc glows hookable without secret reads | ✅ VERIFIED IN COMBAT — the differentiator is proven |
 | 7 | ALL states drive the multi-part shaped glow (proc/hover/selected/cast/channel/flash) per-shape | ✅ VERIFIED IN COMBAT (session 9) — every trigger reconciled by source priority; no secret reads |
 | 8 | Cooldown sweep + cast fill/burst + finish flash trace the hand silhouette | ✅ VERIFIED (session 9) — hand `-swipe` generated from the base; fill/burst mask from `-base` |
+| 9 | Per-trigger glow matrix (colour/opacity/layers/enable per state) + flash-square fix | ✅ VERIFIED IN-GAME (session 10) — GUI-configured; disabled trigger drops to next; no square on auto-attack |
+| 10 | Per-trigger ANIMATION SYSTEM: Comet Chase rides the winning glow; masked rim-chase on any shape; per-state independent | ✅ VERIFIED IN-GAME (session 10) — GUI + preview; SetRotation under a fixed rim mask; one animation per state |
 
 ## Hard-won LEARNINGS (verified — do NOT rediscover; details in API-NOTES)
 - **Masks**: fresh masks render; editing a live mask's texture never re-renders; runtime

@@ -412,6 +412,7 @@ loader:SetScript("OnEvent", function(_, event, arg1)
           if t.layers == nil then t.layers = def.layers end
         end
       end
+      for _, t in pairs(GB.db.triggers) do t.anims = t.anims or {} end   -- per-trigger animation configs (GB.Anims)
     end
   elseif event == "PLAYER_LOGIN" then
     PreloadFonts()
@@ -883,7 +884,6 @@ end
 SLASH_GLOOMSBARS1 = "/gb"
 SLASH_GLOOMSBARS2 = "/gloomsbars"
 local glowTestOn = false   -- /gb glowtest force-preview state (session 8 glow bake-off)
-local shineCount, shineColor, shineSecs, shineDirV = 0, { 1, 1, 1 }, 2.6, 1   -- /gb shine dev playground
 SlashCmdList.GLOOMSBARS = function(input)
   local cmd, arg = (input or ""):lower():match("^%s*(%S*)%s*(%S*)")
   if cmd == "" or cmd == "config" or cmd == "ui" then
@@ -921,21 +921,7 @@ SlashCmdList.GLOOMSBARS = function(input)
     if GB.Glows then GB.Glows:ForceTest(glowTestOn) end
     msg(("proc-glow force-preview %s%s"):format(glowTestOn and "|cff59ff59ON|r" or "|cffff5555OFF|r",
       glowTestOn and " — now run /gb glowstyle 0|A|B|C to compare (off = real art)" or ""))
-  elseif cmd == "shine" then
-    local a = (arg or ""):lower()
-    local COLORS = { white = { 1, 1, 1 }, green = { 0.3, 1, 0.4 }, gold = { 1, 0.82, 0.35 },
-      cyan = { 0.4, 0.95, 1 }, red = { 1, 0.35, 0.35 }, purple = { 0.7, 0.5, 1 }, blue = { 0.4, 0.6, 1 } }
-    local n = tonumber(a)
-    if a == "off" then shineCount = 0
-    elseif a == "flip" or a == "dir" then shineDirV = -shineDirV
-    elseif a == "faster" then shineSecs = math.max(0.4, shineSecs * 0.7)
-    elseif a == "slower" then shineSecs = math.min(12, shineSecs * 1.4)
-    elseif n then shineCount = math.max(0, math.min(4, math.floor(n)))
-    elseif COLORS[a] then shineColor = COLORS[a]; if shineCount == 0 then shineCount = 1 end
-    else shineCount = (shineCount > 0) and 0 or 1 end   -- bare /gb shine toggles on/off
-    if GB.Glows and GB.Glows.ShinePreview then GB.Glows:ShinePreview(shineCount, shineColor, shineSecs, shineDirV) end
-    msg(("shine: %d comet(s) · %.1fs/rev · %s.  /gb shine 1-4 · green|gold|cyan|red|purple|blue|white · faster|slower · flip · off")
-      :format(shineCount, shineSecs, shineDirV > 0 and "cw" or "ccw"))
+  -- (the /gb shine playground was removed — shine-chase is now a Config animation)
   elseif cmd == "handshape" then
     local key = (arg or ""):lower()
     if key == "" then

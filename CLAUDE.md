@@ -47,8 +47,12 @@ Hard walls (from [docs/SPEC.md](docs/SPEC.md)):
 - `Skin.lua` — GB.Skin: skin engine (zoom/mask/art-suppression, cooldown sweeps, state
   art, cast/channel shaping, re-assert hooks) + the decoration/construction engine (gradient
   plate, **border**, bidirectional + continuous extension — session 5).
-- `Glows.lua` — GB.Glows: shape-matched proc glow engine (hooks all three Blizzard glow
-  mechanisms; THE differentiator).
+- `Glows.lua` — GB.Glows: shape-matched glow engine. Per-trigger glow model (`db.triggers`);
+  every button state (proc/assist/cast/channel/hover/selected/flash) drives the multi-part
+  glow, reconciled by the winning trigger. Calls `GB.Anims:Reconcile` (session 10).
+- `Anims.lua` — GB.Anims: per-trigger ANIMATION SYSTEM (session 10). A plug-in registry;
+  each animation is a module (Comet Chase is the first). Modules render on bars AND the
+  Config preview (host-keyed). New animation = one new module. See docs/HANDOFF.md SESSION 10.
 - `Media/masks/`, `Media/art/` — generated per-shape art; `tools/generate-art.py`
   regenerates everything (SDF-based; edge-padding rule in API-NOTES §2). Shapes: `circle`,
   `roundrect`, `square`, `hexagon` (session 5), + 16 corner patterns × 6 radius levels

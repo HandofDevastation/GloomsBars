@@ -1540,7 +1540,259 @@ function C:SetPreviewState(st)
       previewRing:SetAlpha((rt and rt.opacity) or 1)
     end
   end
+  -- Glow chips don't show animations; the Animations section re-adds them via
+  -- SetPreviewAnim. Clear any preview animation by default so they don't linger.
+  if GB.Anims and previewFrame then GB.Anims:PreviewReconcile(previewFrame, previewIcon, GB.db and GB.db.handShape, nil) end
   for s2, chip in pairs(previewChips) do chip:SetActive(s2 == previewState) end
+end
+
+-- Preview the selected trigger's glow (its chip, or idle) PLUS its enabled animations
+-- on the preview host — the live-feedback surface for the Animations section.
+local ANIM_PREVIEW_STATE = { proc = "proc", hover = "hover", selected = "selected", flash = "flash" }
+function C:SetPreviewAnim(triggerKey)
+  self:SetPreviewState(ANIM_PREVIEW_STATE[triggerKey] or "idle")
+  if GB.Anims and previewFrame and previewIcon then
+    local trigger = GB.db and GB.db.triggers and GB.db.triggers[triggerKey]
+    GB.Anims:PreviewReconcile(previewFrame, previewIcon, GB.db and GB.db.handShape, trigger)
+  end
+end
+
+-- Animations — the per-trigger animation system (GB.Anims). Pick a trigger, then
+-- enable/configure each registered animation module (shine, and future march/sheen/…)
+-- for it. Params are generated from each module's schema, so new modules get a UI for
+-- free. The preview host runs the selected trigger's enabled animations live.
+local ANIM_TRIGGERS = {
+  { "proc", "Proc" }, { "cast", "Cast" }, { "channel", "Channel" }, { "hover", "Hover" },
+  { "selected", "Selected" }, { "flash", "Flash" }, { "assist", "Assist" },
+}
+local animTrigger = "proc"   -- which trigger the section is currently editing
+
+local function animData(id)   -- saved params for the selected trigger's animation `id` (nil until created)
+  local t = GB.db and GB.db.triggers and GB.db.triggers[animTrigger]
+  return t and t.anims and t.anims[id]
+end
+local function animEnsure(id)   -- create the saved table from the module defaults (enabled = false)
+  local t = GB.db and GB.db.triggers and GB.db.triggers[animTrigger]
+  if not t then return nil end
+  t.anims = t.anims or {}
+  if not t.anims[id] then
+    local mod = GB.Anims and GB.Anims:Get(id)
+    local d = { enabled = false }
+    if mod then for k, v in pairs(mod.defaults) do d[k] = (type(v) == "table") and { v[1], v[2], v[3], v[4] } or v end end
+    t.anims[id] = d
+  end
+  return t.anims[id]
+end
+local function animDefault(id, key) local m = GB.Anims and GB.Anims:Get(id); return m and m.defaults[key] end
+local function animGet(id, key) local d = animData(id); if d and d[key] ~= nil then return d[key] end; return animDefault(id, key) end
+local function animSet(id, key, v) local d = animEnsure(id); if d then d[key] = v end end
+local function animFmt(p)
+  if p.fmt == "int" then return function(v) return tostring(math.floor(v + 0.5)) end end
+  if p.fmt == "secs" then return function(v) return string.format("%.1fs", v) end end
+  return function(v) return string.format("%.1f", v) end
+end
+
+-- One param control (from a module's schema). Returns { h, refresh, setEnabled, setShown }.
+local function animParamRow(bf, yTop, id, param, onChange)
+  if param.kind == "color" then
+    local lab = newText(bf, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 30, yTop); lab:SetText(param.label)
+    local cs = colorSwatch(bf, function() return animGet(id, param.key) end,
+      function(c) animSet(id, param.key, c); onChange() end)
+    cs.swatch:SetPoint("TOPRIGHT", -18, yTop + 1)
+    return { h = 30, refresh = function() cs:refresh() end,
+      setEnabled = function(on) cs.swatch:SetEnabled(on); cs.swatch:SetAlpha(on and 1 or 0.4); lab:SetAlpha(on and 1 or 0.4) end,
+      setShown = function(on) lab:SetShown(on); cs.swatch:SetShown(on) end }
+  elseif param.kind == "range" then
+    local row = sliderRow(bf, yTop, param.label, param.min, param.max, param.step,
+      function() return animGet(id, param.key) end,
+      function(v) animSet(id, param.key, v); onChange() end, animFmt(param))
+    return { h = 44, refresh = function() row:refresh() end, setEnabled = function(on) row:setEnabled(on) end,
+      setShown = function(on) row:SetShown(on) end }
+  elseif param.kind == "bispeed" then
+    -- One signed slider: centre = still, right half = faster CW, left half = faster CCW.
+    -- Value = velocity in [-1,1]; |v| = 1 is param.minRev sec/rev.
+    local minRev = param.minRev or 0.8
+    local lab = newText(bf, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 30, yTop); lab:SetText(param.label)
+    local val = newText(bf, FONT.label, 11, TEXT, "RIGHT"); val:SetPoint("TOPRIGHT", -18, yTop)
+    local lccw = newText(bf, FONT.body, 9.5, MUTE, "LEFT"); lccw:SetPoint("TOPLEFT", 18, yTop - 32); lccw:SetText("CCW")
+    local lcw = newText(bf, FONT.body, 9.5, MUTE, "RIGHT"); lcw:SetPoint("TOPRIGHT", -18, yTop - 32); lcw:SetText("CW")
+    local sl = CreateFrame("Slider", nil, bf)
+    sl:SetPoint("TOPLEFT", 18, yTop - 18); sl:SetPoint("TOPRIGHT", -18, yTop - 18); sl:SetHeight(16)
+    sl:EnableMouse(true); sl:SetOrientation("HORIZONTAL"); sl:SetMinMaxValues(-1, 1); sl:SetValueStep(0.05); sl:SetObeyStepOnDrag(true)
+    local track = sl:CreateTexture(nil, "BACKGROUND"); track:SetPoint("LEFT"); track:SetPoint("RIGHT"); track:SetHeight(6)
+    track:SetColorTexture(COLOR.heroic.r, COLOR.heroic.g, COLOR.heroic.b, 0.20)
+    local tick = sl:CreateTexture(nil, "ARTWORK"); tick:SetSize(2, 12); tick:SetPoint("CENTER"); tick:SetColorTexture(1, 1, 1, 0.28)
+    local thumb = sl:CreateTexture(nil, "ARTWORK"); thumb:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 1)
+    thumb:SetSize(5, 20); sl:SetThumbTexture(thumb)
+    local applying = false
+    local function show(v)
+      if math.abs(v) < 0.04 then val:SetText("still")
+      else val:SetText(string.format("%s %.1fs", v > 0 and "CW" or "CCW", minRev / math.abs(v))) end
+    end
+    sl:SetScript("OnValueChanged", function(_, v) if not applying then animSet(id, param.key, v); onChange() end; show(v) end)
+    local function seek(self)
+      local left, w = self:GetLeft(), self:GetWidth()
+      if not (left and w and w > 0) then return end
+      local frac = math.max(0, math.min(1, (GetCursorPosition() / self:GetEffectiveScale() - left) / w))
+      self:SetValue(math.floor((-1 + frac * 2) / 0.05 + 0.5) * 0.05)
+    end
+    sl:SetScript("OnMouseDown", function(self) if self:IsEnabled() then self._seek = true; seek(self) end end)
+    sl:SetScript("OnMouseUp", function(self) self._seek = false end)
+    sl:SetScript("OnUpdate", function(self)
+      if self._seek then if self:IsEnabled() and IsMouseButtonDown("LeftButton") then seek(self) else self._seek = false end end
+    end)
+    return { h = 50,
+      refresh = function() applying = true; local v = animGet(id, param.key) or 0; sl:SetValue(v); show(v); applying = false end,
+      setEnabled = function(on)
+        sl:SetEnabled(on); sl:SetAlpha(on and 1 or 0.35)
+        for _, t in ipairs({ lab, val, lccw, lcw }) do t:SetAlpha(on and 1 or 0.4) end
+      end,
+      setShown = function(on) for _, t in ipairs({ lab, val, lccw, lcw, sl }) do t:SetShown(on) end end }
+  elseif param.kind == "choice" then
+    local lab = newText(bf, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 30, yTop); lab:SetText(param.label)
+    local btns, prev = {}, nil
+    for i = #param.choices, 1, -1 do
+      local ch = param.choices[i]
+      local b = flatButton(bf, 46, 20, COLOR.heroic, ch[2], 11)
+      if prev then b:SetPoint("TOPRIGHT", prev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, yTop + 1) end
+      b:SetScript("OnClick", function() animSet(id, param.key, ch[1]); for _, e in ipairs(btns) do e.b:SetActive(e.v == ch[1]) end; onChange() end)
+      btns[#btns + 1] = { b = b, v = ch[1] }; prev = b
+    end
+    return { h = 28,
+      refresh = function() local cur = animGet(id, param.key); for _, e in ipairs(btns) do e.b:SetActive(e.v == cur) end end,
+      setEnabled = function(on) for _, e in ipairs(btns) do e.b:SetEnabled(on) end; lab:SetAlpha(on and 1 or 0.4) end,
+      setShown = function(on) lab:SetShown(on); for _, e in ipairs(btns) do e.b:SetShown(on) end end }
+  end
+  return { h = 0, refresh = function() end, setEnabled = function() end, setShown = function() end }
+end
+
+-- A generic dropdown flyout (short lists, no scroll) — options = { {value,label}, .. }.
+-- Modelled on the font flyout: a full-screen catcher closes it on any outside click.
+local animFlyout
+local function animFlyoutFrame()
+  if animFlyout then return animFlyout end
+  local catcher = CreateFrame("Button", nil, panel)
+  catcher:SetFrameStrata("FULLSCREEN"); catcher:SetAllPoints(UIParent); catcher:Hide()
+  local fly = CreateFrame("Frame", nil, catcher)
+  fly:SetFrameStrata("FULLSCREEN_DIALOG"); skinPlate(fly); addEdges(fly, COLOR.rim, 1)
+  catcher:SetScript("OnClick", function() catcher:Hide() end)
+  fly.catcher, fly.rows = catcher, {}
+  animFlyout = fly
+  return fly
+end
+local function openAnimFlyout(anchor, options, current, onPick)
+  local fly = animFlyoutFrame()
+  local ROW_H, y = 22, -3
+  for i, opt in ipairs(options) do
+    local row = fly.rows[i]
+    if not row then
+      row = CreateFrame("Button", nil, fly); row:SetHeight(ROW_H)
+      row.hl = row:CreateTexture(nil, "BACKGROUND"); row.hl:SetAllPoints(); row.hl:SetColorTexture(1, 1, 1, 0.07); row.hl:Hide()
+      row:SetScript("OnEnter", function(self) self.hl:Show() end)
+      row:SetScript("OnLeave", function(self) self.hl:Hide() end)
+      row.text = newText(row, FONT.body, 12, TEXT, "LEFT"); row.text:SetPoint("LEFT", 8, 0); row.text:SetPoint("RIGHT", -8, 0); row.text:SetWordWrap(false)
+      fly.rows[i] = row
+    end
+    row:ClearAllPoints(); row:SetPoint("TOPLEFT", 3, y); row:SetPoint("TOPRIGHT", -3, y)
+    row.text:SetText(opt.label)
+    if opt.value == current then row.text:SetTextColor(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b) else row.text:SetTextColor(1, 1, 1) end
+    row:SetScript("OnClick", function() fly.catcher:Hide(); onPick(opt.value) end)
+    row:Show()
+    y = y - ROW_H
+  end
+  for i = #options + 1, #fly.rows do fly.rows[i]:Hide() end
+  fly:SetSize(math.max(anchor:GetWidth(), 150), #options * ROW_H + 6)
+  fly:ClearAllPoints(); fly:SetPoint("TOPRIGHT", anchor, "BOTTOMRIGHT", 0, -2)
+  fly.catcher:Show()
+end
+local function animDropdown(parent, w, getLabel, getOptions, getCurrent, onPick)
+  local b = flatButton(parent, w, 22, COLOR.heroic, "", 11); b:SetBase(0.2); b.text:SetWordWrap(false)
+  function b:refresh() self.text:SetText(getLabel()) end
+  b:SetScript("OnClick", function() openAnimFlyout(b, getOptions(), getCurrent(), function(v) onPick(v); b:refresh() end) end)
+  b:refresh()
+  return b
+end
+
+-- Animations section: State chips -> Animation dropdown (one per state, or None) -> the
+-- selected animation's params. Params for each module are pre-built (hidden) at the same
+-- spot; only the chosen module's set is shown. Each state's params are independent (they
+-- read/write GB.db.triggers[animTrigger].anims[id]).
+local function buildAnimsSection(bf, s)
+  local chips, blocks, dd = {}, {}, nil
+  local function apply() C:SetPreviewAnim(animTrigger); if GB.Anims then GB.Anims:Invalidate(animTrigger) end end
+
+  local function currentSel()
+    local t = GB.db and GB.db.triggers and GB.db.triggers[animTrigger]
+    local found = "none"
+    if t and t.anims and GB.Anims then
+      GB.Anims:Each(function(mod) if t.anims[mod.id] and t.anims[mod.id].enabled then found = mod.id end end)
+    end
+    return found
+  end
+  local function options()
+    local o = { { value = "none", label = "None" } }
+    if GB.Anims then GB.Anims:Each(function(mod) o[#o + 1] = { value = mod.id, label = mod.label } end) end
+    return o
+  end
+  local function labelFor(v) if v == "none" or not v then return "None" end local m = GB.Anims and GB.Anims:Get(v); return (m and m.label) or "None" end
+
+  -- State chips (onClick assigned once selectTrigger exists, below).
+  local st = newText(bf, FONT.body, 11, MUTE, "LEFT"); st:SetPoint("TOPLEFT", 18, -12); st:SetText("State")
+  local cx, cy = 18, -30
+  for i, tr in ipairs(ANIM_TRIGGERS) do
+    local b = flatButton(bf, 58, 20, COLOR.heroic, tr[2], 11); b:SetPoint("TOPLEFT", cx, cy)
+    chips[#chips + 1] = { b = b, k = tr[1] }
+    cx = cx + 62; if i == 4 then cx, cy = 18, cy - 24 end
+  end
+
+  local ddLab = newText(bf, FONT.body, 12, TEXT, "LEFT"); ddLab:SetPoint("TOPLEFT", 18, -84); ddLab:SetText("Animation")
+
+  -- Param blocks (one per module), all anchored at PARAM_Y, hidden until selected.
+  local PARAM_Y, maxBottom = -118, -118
+  if GB.Anims then
+    GB.Anims:Each(function(mod)
+      local prs, y = {}, PARAM_Y
+      for _, param in ipairs(mod.params) do local pr = animParamRow(bf, y, mod.id, param, apply); prs[#prs + 1] = pr; y = y - pr.h end
+      if y < maxBottom then maxBottom = y end
+      blocks[mod.id] = {
+        setShown = function(on) for _, pr in ipairs(prs) do pr.setShown(on) end end,
+        refresh = function() for _, pr in ipairs(prs) do pr.refresh(); pr.setEnabled(true) end end,
+      }
+      blocks[mod.id].setShown(false)
+    end)
+  end
+
+  local function selectAnim(v)
+    local t = GB.db and GB.db.triggers and GB.db.triggers[animTrigger]
+    if not t then return end
+    t.anims = t.anims or {}
+    if GB.Anims then GB.Anims:Each(function(mod)
+      if mod.id == v then local d = animEnsure(mod.id); if d then d.enabled = true end
+      elseif t.anims[mod.id] then t.anims[mod.id].enabled = false end
+    end) end
+    for id, blk in pairs(blocks) do blk.setShown(id == v) end
+    if blocks[v] then blocks[v].refresh() end
+    apply()
+  end
+
+  dd = animDropdown(bf, 168, function() return labelFor(currentSel()) end, options, currentSel, selectAnim)
+  dd:SetPoint("TOPRIGHT", -18, -84)
+
+  local function refreshForTrigger()
+    dd:refresh()
+    local cur = currentSel()
+    for id, blk in pairs(blocks) do blk.setShown(id == cur) end
+    if blocks[cur] then blocks[cur].refresh() end
+    C:SetPreviewAnim(animTrigger)
+  end
+  local function selectTrigger(k) animTrigger = k; for _, c in ipairs(chips) do c.b:SetActive(c.k == k) end; refreshForTrigger() end
+  for _, c in ipairs(chips) do c.b:SetScript("OnClick", function() selectTrigger(c.k) end) end
+
+  bf:SetHeight(-maxBottom + 16)
+  s.refresh = function()
+    for _, c in ipairs(chips) do c.b:SetActive(c.k == animTrigger) end
+    refreshForTrigger()
+  end
 end
 
 local function buildPreviewPane(parent)
@@ -1692,6 +1944,7 @@ local function BuildPanel()
   makeSection("Decoration layers", buildDecorSection)
   makeSection("Text", buildTextSection)
   makeSection("Glows", buildGlowsSection)
+  makeSection("Animations", buildAnimsSection)
   makeSection("Cast & channel", buildCastSection)
   makeSection("Cooldown & availability", buildCooldownSection)
   makeSection("Bar layout", stubBody)
