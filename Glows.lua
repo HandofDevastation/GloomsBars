@@ -304,6 +304,15 @@ local function SetSource(btn, key, value)
   Refresh(btn)
 end
 
+-- Cast / channel source. Blizzard's PlaySpellCastAnim (hooked in Skin.lua's decoration
+-- engine) starts it; the CastFill end-hook clears it (kind = nil). PUBLIC because those
+-- hooks live in Skin.lua. kind = "cast" | "channel" | nil — winningTrigger uses the string
+-- as BOTH the presence flag and the trigger key, so it drives the matching glow + animation.
+function Glows:SetCast(btn, kind)
+  if not (Glows.enabled and isOurs(btn)) then return end   -- our action buttons only (skip Cooldown Viewer)
+  SetSource(btn, "cast", kind)
+end
+
 function Glows:Init()
   if self.hooked then return end
   local alertMgr = ActionButtonSpellAlertManager
