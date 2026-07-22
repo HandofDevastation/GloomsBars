@@ -228,6 +228,14 @@ local function handSwipePart()
   if plateActive() then return (plateIconSide() == "bottom") and "swipe-b" or "swipe-t" end
   return "swipe"
 end
+-- Dim-on-cooldown (session 12, Jason's ask): the plate colour darkens while the action's
+-- REAL (non-GCD) cooldown runs — the icon half already darkens under the sweep; this
+-- carries the "on cooldown" read across the plate half. plate.dimCD gates it (Config).
+local PLATE_DIM = 0.45          -- multiplier on the plate colour while dimmed
+local function plateDimOn()
+  local p = plateStyle()
+  return (plateActive() and p and p.dimCD) and true or false
+end
 -- Anchor a hand texture/mask so its silhouette maps to the icon GROWN uniformly by
 -- `grow` screen-px on every side. The base's shape occupies a different FRACTION of the
 -- canvas per axis (short = 0.5, long = long/(long+256)), so a uniform margin would grow
@@ -829,8 +837,9 @@ local function ApplyDecor(btn)
     local pf, pw = rec.platefill, icon:GetWidth()
     local pdy = (plateIconSide() == "bottom") and (pw * 0.5) or (-pw * 0.5)   -- the half OPPOSITE the icon
     local pc = (plateStyle() and plateStyle().color) or { 0.1, 0.1, 0.13 }
+    local k = rec.plateDim and PLATE_DIM or 1   -- dim-on-cooldown (set via setPlateDim)
     pf:ClearAllPoints(); pf:SetPoint("CENTER", btn, "CENTER", 0, pdy); pf:SetSize(pw, pw)
-    pf:SetVertexColor(pc[1], pc[2], pc[3])
+    pf:SetVertexColor(pc[1] * k, pc[2] * k, pc[3] * k)
     if rec.forcePlateMask or rec.platefillMask ~= rec.mask then
       if rec.platefillMask then pf:RemoveMaskTexture(rec.platefillMask) end
       pf:AddMaskTexture(rec.mask); rec.platefillMask = rec.mask
@@ -856,7 +865,8 @@ local function ApplyDecor(btn)
     local pg, pw = rec.plategrad, icon:GetWidth()
     local pc = (plateStyle() and plateStyle().color) or { 0.1, 0.1, 0.13 }
     local fadeStart = (plateStyle() and plateStyle().fadeStart) or 0.5
-    local fromC, toC = CreateColor(pc[1], pc[2], pc[3], 1), CreateColor(pc[1], pc[2], pc[3], 0)
+    local k = rec.plateDim and PLATE_DIM or 1   -- dim-on-cooldown (set via setPlateDim)
+    local fromC, toC = CreateColor(pc[1] * k, pc[2] * k, pc[3] * k, 1), CreateColor(pc[1] * k, pc[2] * k, pc[3] * k, 0)
     pg:ClearAllPoints(); pg:SetHeight(math.max(0.01, pw * fadeStart))   -- the icon half is pw tall
     if plateIconSide() == "bottom" then   -- icon in the BOTTOM half → opaque at its TOP, fading DOWN
       pg:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0); pg:SetPoint("TOPRIGHT", icon, "TOPRIGHT", 0, 0)
@@ -1031,6 +1041,71 @@ function Skin:ReapplyDecor()
     if records[btn] and records[btn].active then ApplyDecor(btn) end
   end)
   if GB.Glows then GB.Glows:RefreshShape(); GB.Glows:RefreshSize() end   -- glow art + span follow continuous/extension edits
+end
+
+-- ---------------------------------------------------------------------------
+-- Plate dim-on-cooldown. We may not READ the cooldown clock (secret — comparing
+-- taints, session 11), but Midnight gives a sanctioned indirect route: feed a
+-- HIDDEN proxy Cooldown widget the action's GCD-IGNORING duration object
+-- (C_ActionBar.GetActionCooldownDuration(action, true) →
+-- proxy:SetCooldownFromDurationObject, clearIfZero default true) and react to the
+-- WIDGET's rendered lifecycle — shown = a real cooldown runs (dim the plate),
+-- OnCooldownDone/OnHide = it ended (restore). No secret value ever touches Lua;
+-- same react-to-rendered-output principle as the usability tints. The proxy is
+-- refreshed from the ActionButton_UpdateCooldown post-hook (installed below with
+-- the swipe-colour re-assert), which fires on every cooldown-affecting update.
+-- ---------------------------------------------------------------------------
+local function setPlateDim(btn, dim)
+  local rec = records[btn]; if not rec then return end
+  dim = dim and true or false
+  if (rec.plateDim or false) == dim then return end
+  rec.plateDim = dim
+  if rec.active and plateActive() then ApplyDecor(btn) end
+end
+-- One-time per-button proxy. rec.dimProxy = false marks "APIs unavailable" so we
+-- probe once, not per update; the feature then just stays off (graceful).
+local function setupDimProxy(btn, rec)
+  if rec.dimProxy ~= nil then return end
+  if not (C_ActionBar and C_ActionBar.GetActionCooldownDuration) then rec.dimProxy = false; return end
+  local proxy = CreateFrame("Cooldown", nil, btn)
+  if not proxy.SetCooldownFromDurationObject then proxy:Hide(); rec.dimProxy = false; return end
+  proxy:SetSize(1, 1); proxy:SetPoint("CENTER")   -- geometry irrelevant — it draws nothing
+  proxy:SetAlpha(0)
+  if proxy.SetDrawSwipe then proxy:SetDrawSwipe(false) end
+  if proxy.SetDrawEdge then proxy:SetDrawEdge(false) end
+  if proxy.SetDrawBling then proxy:SetDrawBling(false) end
+  if proxy.SetHideCountdownNumbers then proxy:SetHideCountdownNumbers(true) end
+  proxy:HookScript("OnCooldownDone", function() setPlateDim(btn, false) end)
+  proxy:HookScript("OnHide", function() setPlateDim(btn, false) end)
+  proxy:HookScript("OnShow", function() setPlateDim(btn, plateDimOn()) end)   -- belt-and-braces if IsShown lags the set
+  rec.dimProxy = proxy
+end
+local function refreshDimProxy(btn)
+  local rec = records[btn]
+  if not (rec and rec.active) then return end
+  setupDimProxy(btn, rec)
+  local proxy = rec.dimProxy
+  if not proxy then return end
+  if not plateDimOn() then
+    if proxy.Clear then proxy:Clear() end
+    setPlateDim(btn, false)
+    return
+  end
+  -- pcall: GetActionCooldownDuration requires a valid slot and both APIs are new
+  -- in Midnight — fail soft (proxy stays hidden → no dim) rather than erroring
+  -- on every cooldown tick.
+  local ok, dur = pcall(C_ActionBar.GetActionCooldownDuration, btn.action, true)   -- true = ignore the GCD
+  if ok and dur then
+    pcall(proxy.SetCooldownFromDurationObject, proxy, dur)
+  end
+  -- Sync from the widget's rendered state: shown = running. Covers a cooldown
+  -- already mid-flight (login/reload) as well as fresh starts.
+  setPlateDim(btn, proxy:IsShown())
+end
+-- Re-sync every button — the Config toggle + plate enable/side changes call this.
+function Skin:RefreshPlateDim()
+  if not self.enabled then return end
+  GB:ForEachButton(function(btn) refreshDimProxy(btn) end)
 end
 
 -- Apply (or revert) the Mac modifier rewrite across all buttons — call when the
@@ -1507,6 +1582,7 @@ function Skin:RefreshPlate()
   if not self.enabled then return end
   GB:ForEachButton(refreshIconGeometry)
   if GB.Glows then GB.Glows:RefreshShape(); GB.Glows:RefreshSize() end
+  self:RefreshPlateDim()   -- plate off/side flip → clear or re-sync the dim proxies
 end
 
 -- Live icon resize (legacy free-size path; a hand shape overrides these dims in
@@ -1668,7 +1744,10 @@ local function ApplyButton(btn)
     Skin._swipeHook = true
     hooksecurefunc("ActionButton_UpdateCooldown", function(b)
       local r = b and records[b]
-      if Skin.enabled and r and r.active then applySwipe(b.cooldown) end
+      if Skin.enabled and r and r.active then
+        applySwipe(b.cooldown)
+        refreshDimProxy(b)   -- plate dim-on-cooldown tracks every cooldown update
+      end
     end)
   end
   -- Out-of-range icon tint: react to Blizzard's own range determination (passed as

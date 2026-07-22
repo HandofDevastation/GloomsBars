@@ -752,9 +752,21 @@ local function buildPlateSection(bf, s)
     end,
     function(v) return math.floor(v * 100 + 0.5) .. "%" end)
 
+  -- Dim on cooldown: the plate colour darkens while the action's REAL (non-GCD)
+  -- cooldown runs — the icon half already darkens under the sweep; this carries
+  -- the "on cooldown" read across the plate half. Engine: Skin's dim proxy.
+  local dimLbl = newText(bf, FONT.body, 12, TEXT, "LEFT"); dimLbl:SetPoint("TOPLEFT", 18, -152); dimLbl:SetText("Dim on cooldown")
+  local dimTog = makeToggle(bf,
+    function() local p = plateData(); return p and p.dimCD and true or false end,
+    function(v)
+      local p = ensurePlate(); if p then p.dimCD = v and true or false end
+      if GB.Skin and GB.Skin.RefreshPlateDim then GB.Skin:RefreshPlateDim() end
+    end)
+  dimTog:SetPoint("TOPRIGHT", -18, -150)
+
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -150); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
-  bf:SetHeight(180)
+  hint:SetPoint("TOPLEFT", 18, -184); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  bf:SetHeight(214)
   s.refresh = function()
     local ok = plateShapeOK()
     enTog:EnableMouse(ok); enTog:SetAlpha(ok and 1 or 0.35); enTog:refresh()
@@ -764,6 +776,8 @@ local function buildPlateSection(bf, s)
     colLbl:SetAlpha(live and 1 or 0.4)
     cs.swatch:SetEnabled(live); cs.swatch:SetAlpha(live and 1 or 0.4); cs:refresh()
     fadeRow:setEnabled(live); fadeRow:refresh()
+    dimLbl:SetAlpha(live and 1 or 0.4)
+    dimTog:EnableMouse(live); dimTog:SetAlpha(live and 1 or 0.35); dimTog:refresh()
     hint:SetText(ok
       and "Square icon in one half, solid plate + colour-fade in the other. Side picks which half."
       or "Plate needs a 2:1 shape — pick Pill 2:1, Tall square 2:1, or a Tall rounded ·2:1 in Shape & icon.")
