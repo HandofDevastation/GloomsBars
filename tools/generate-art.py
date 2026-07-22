@@ -125,57 +125,6 @@ def glow_alpha(d):
     return 0.8 * math.exp(-(d / 10.0) ** 2)        # inward: rim-light bleed so the edge WRAPS softly
 
 
-# --- CANDIDATE proc-glow profiles (session 8, the "make it read as a GLOW" pass).
-# Compared in-game via /gb glowstyle on Jason's tall pill; the winner graduates
-# into the real per-aspect pill glow. d is design px from the shape edge (0 = the
-# silhouette); the glow draws ADD on top of the icon, so d<0 rim-lights the icon
-# edge and d>0 is the outward halo. Everything must fade to ~0 by d=40 (shape edge
-# at 80, padded canvas boundary at 120 → 40px of bloom room; edge-bleed rule §2).
-def glow_A(d):
-    # RADIANT — a single hot core at the rim with a wide, smooth outward bloom.
-    # Reads as light bleeding outward rather than a band. Inner light fades fast so
-    # the icon's centre stays clean.
-    if d >= 40:
-        return 0.0
-    if d >= 0:
-        return min(1.0, math.exp(-(d / 16.0) ** 2))
-    return min(1.0, math.exp(-(d / 9.0) ** 2))
-
-
-def glow_B(d):
-    # NOVA — a solid hot-core BAND (saturates to white under ADD) then a punchy
-    # falloff. More energetic / intense than A, more contained.
-    if d >= 34:
-        return 0.0
-    if abs(d) <= 4:
-        return 1.0
-    if d > 4:
-        return min(1.0, math.exp(-((d - 4) / 11.0) ** 2))
-    return min(1.0, math.exp(-((d + 4) / 7.0) ** 2))
-
-
-def glow_C(d):
-    # AURA — a crisp bright glowing EDGE plus a wide, low ambient haze. Gives both
-    # a defined rim and a soft surrounding glow (two-lobe profile).
-    if d >= 40:
-        return 0.0
-    rim = math.exp(-(d / 4.5) ** 2)
-    haze = 0.4 * math.exp(-(d / 17.0) ** 2)
-    return min(1.0, rim + haze)
-
-
-def gen_test():
-    # Bake the candidate glows on Jason's exact tall pill (circle @ 36x57) so he
-    # compares the LOOK with zero oval (baked at his aspect, not stretched). "0" is
-    # today's profile, fit-corrected, as the reference. Regen: generate-art.py test
-    ratio = 57.0 / 36.0
-    W, H = 256, round(256 * ratio)
-    hw, hh, r = 80.0, 80.0 * ratio, 80.0          # full semicircle caps (r5 / circle)
-    sdf = lambda px, py: sd_roundrect_wh(px, py, hw, hh, r)
-    for key, prof in (("0", glow_alpha), ("A", glow_A), ("B", glow_B), ("C", glow_C)):
-        write_png(f"Media/art/gbtest-glow-{key}.png", render(sdf, prof, W, H), W, H)
-
-
 def ring_alpha(d):
     # State-highlight rim glow (hover/selected/flash), drawn ADD. BOLD profile
     # (Jason 2026-07-20): the rim peaks at FULL alpha over a wider band with a
@@ -317,8 +266,6 @@ if __name__ == "__main__":
         gen_glows()   # fast: only the proc-glow halos (after a glow_alpha edit)
     elif len(sys.argv) > 1 and sys.argv[1] == "rings":
         gen_rings()   # fast: only the state-highlight rings (after a ring_alpha edit)
-    elif len(sys.argv) > 1 and sys.argv[1] == "test":
-        gen_test()    # candidate proc-glow profiles on Jason's tall pill (/gb glowstyle)
     elif len(sys.argv) > 1 and sys.argv[1] == "pills":
         gen_pills()   # fast: only the aspect masks, not the ~384 corner PNGs
     elif len(sys.argv) > 1 and sys.argv[1] in SHAPES:

@@ -21,50 +21,15 @@ local GB = _G.GloomsBars
 local Glows = { enabled = false }
 GB.Glows = Glows
 
--- The glow art's shape edge sits at 80/128 of its canvas (GLOW_EXTENT) so a WIDE
--- soft halo blooms OUTSIDE the icon rim. Size the glow region by 128/80 so the
--- art's edge lands exactly on the icon's edge (the wider bloom then fades out).
-local GLOW_SCALE = 128 / 80
-
-local TINT = {
-  gold   = { 1, 0.85, 0.35 },   -- standard proc
-  assist = { 0.4, 0.75, 1 },    -- assisted highlight / rotation suggestion
-}
-
--- Live-tunable glow style (Config → Proc glow, stored in GB.db). Accessors so the
--- engine always reads the current value; GetGlow builds new halos from these and
--- the setters below re-apply to existing ones.
-local function glowScale() return (GB.db and GB.db.glowScale) or GLOW_SCALE end
+-- Live-tunable pulse values (Config → Glows, stored in GB.db). Accessors so the
+-- engine always reads the current value; the shared pulse driver uses each active
+-- glow's OWN peak (per-trigger opacity), glowPeak is its fallback.
 local PULSE_DEPTH = 0.5   -- the pulse always dips to this fraction of the peak, so it stays visible
-local function glowPeak() return (GB.db and GB.db.glowIntensity) or 0.9 end   -- Brightness = PEAK alpha
+local function glowPeak() return (GB.db and GB.db.glowIntensity) or 0.9 end   -- fallback PEAK alpha
 local function glowSpeed() return math.max(0.1, (GB.db and GB.db.glowPulseSpeed) or 1) end
--- State-highlight default tints (mirror Core DB_DEFAULTS.stateColors) for before
--- the db is populated. hover/selected/flash read GB.db.stateColors.
-local STATE_TINT = { hover = { 1, 0.82, 0.35 }, selected = { 0.45, 0.75, 1 }, flash = { 1, 0.25, 0.25 } }
-local function tintFor(key)
-  if key == "assist" then return (GB.db and GB.db.glowAssistColor) or TINT.assist end
-  if STATE_TINT[key] then
-    local sc = GB.db and GB.db.stateColors
-    return (sc and sc[key]) or STATE_TINT[key]
-  end
-  return (GB.db and GB.db.glowColor) or TINT.gold
-end
 
-local glows = {}      -- [button] = { frame, tex, anim }
-local sources = {}    -- [button] = { alert = "gold"|"assist"|nil, assist = true|nil, test = "gold"|nil }
+local sources = {}    -- [button] = { alert = "gold"|"assist"|nil, assist/highlight/cast/flash/selected/hover flags }
 local silenced = {}   -- [blizzard frame] = true — frames we alpha-0'd
-
--- DEV glow-comparison harness (session 8): /gb glowtest force-shows the halo out
--- of combat (procs are too fast to study live) and /gb glowstyle swaps in a
--- candidate profile PNG. testArt overrides the normal shape art while set.
-local testArt
-local forceScale   -- test: pin the glow scale to the candidates' design scale so
-                   -- a stray Size-slider value can't throw off the shape fit
-local function currentGlowTex()
-  return testArt
-    or (GB.Skin and GB.Skin.GlowArt and GB.Skin:GlowArt())
-    or GB:GetShape().glow
-end
 
 -- The spell-alert manager ALSO fires for Midnight's Cooldown Viewer frames, whose
 -- geometry is a SECRET combat value — reading it (e.g. Icon:GetWidth() * scale)
@@ -77,50 +42,6 @@ local function isOurs(btn)
     if GB.ForEachButton then GB:ForEachButton(function(b) ourSet[b] = true end) end
   end
   return btn ~= nil and ourSet[btn] == true
-end
-
--- Anchor the halo over the whole CONSTRUCTION (icon + any plate extension),
--- oversized by the glow scale, so it tracks the icon's live size/aspect AND wraps
--- the extension — not just the icon. Reuses Skin's overlay anchoring (same math as
--- the ring/sweep); falls back to the icon alone if Skin isn't up yet.
-local function anchorGlow(frame, icon)
-  local ratio = ((forceScale or glowScale()) - 1) / 2
-  if GB.Skin and GB.Skin.AnchorOverlay then
-    GB.Skin:AnchorOverlay(frame, icon, ratio)
-  else
-    local ox, oy = icon:GetWidth() * ratio, icon:GetHeight() * ratio
-    frame:ClearAllPoints()
-    frame:SetPoint("TOPLEFT", icon, "TOPLEFT", -ox, oy)
-    frame:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", ox, -oy)
-  end
-end
-
-local function GetGlow(btn)
-  if not isOurs(btn) then return nil end   -- action buttons only (Cooldown Viewer geometry is secret)
-  local icon = btn.icon or btn.Icon
-  if not icon then return nil end
-  local g = glows[btn]
-  if not g then
-    local frame = CreateFrame("Frame", nil, btn)
-    frame:SetFrameLevel(btn:GetFrameLevel() + 10)
-    anchorGlow(frame, icon)
-    local tex = frame:CreateTexture(nil, "OVERLAY")
-    tex:SetAllPoints()
-    tex:SetTexture(currentGlowTex())
-    tex:SetBlendMode("ADD")
-    local anim = frame:CreateAnimationGroup()
-    anim:SetLooping("BOUNCE")
-    local pulse = anim:CreateAnimation("Alpha")
-    local peak = glowPeak()
-    pulse:SetFromAlpha(peak)
-    pulse:SetToAlpha(peak * PULSE_DEPTH)
-    pulse:SetDuration(0.55 / glowSpeed())
-    pulse:SetSmoothing("IN_OUT")
-    frame:Hide()
-    g = { frame = frame, tex = tex, anim = anim, pulse = pulse }
-    glows[btn] = g
-  end
-  return g
 end
 
 local function Silence(frame)
@@ -141,13 +62,13 @@ end
 -- centre, only the bloom peeks out) + an INNER glow OVER the gradient (interior-
 -- edge tint, fading to a clean centre) + the Border recoloured to the glow tint.
 -- One tintable WHITE pair per shape (Media/art/hand/<key>-outer|-inner) serves
--- procs / hover / cast / finish, differing only by tint. Supersedes the old single
--- soft-bloom (GetGlow) + the SDF state ring; the bloom stays as the fallback for
--- when no hand shape is set (post-migration, that never happens).
+-- procs / hover / cast / finish, differing only by tint. (The pre-hand SDF
+-- soft-bloom fallback was unreachable — db.handShape is always seeded — and was
+-- removed in session 12 along with the /gb glowtest bake-off harness.)
 -- ---------------------------------------------------------------------------
 local handGlows = {}   -- [btn] = { outer, innerFrame, inner }
 
--- The current shape's outer/inner glow art (nil → no hand shape → bloom fallback).
+-- The current shape's outer/inner glow art.
 local function handGlowArt()
   local key = GB.db and GB.db.handShape
   if not key then return nil end
@@ -248,10 +169,10 @@ end
 -- tint + opacity + layers + pulse. Each button state is a TRIGGER record in
 -- GB.db.triggers { enabled, color, opacity, layers }; the winning trigger is chosen
 -- by priority (highest first): assist highlight > proc > spell-highlight > cast/channel > flash >
--- selected (toggled) > hover > dev test — SKIPPING any the user disabled, so turning
+-- selected (toggled) > hover — SKIPPING any the user disabled, so turning
 -- off e.g. Hover still lets a checked button show its Selected glow. Procs/assist/
--- flash pulse; cast/channel/hover/selected are steady. Routes to the multi-part glow
--- when a hand shape is active (the norm), else the old single soft-bloom fallback.
+-- flash/highlight pulse; cast/channel/hover/selected are steady. Always the
+-- multi-part hand glow (db.handShape is always seeded).
 local PULSING = { proc = true, assist = true, flash = true, highlight = true }   -- which triggers pulse
 local function trig(key) return GB.db and GB.db.triggers and GB.db.triggers[key] end
 local function enabledTrig(key) local t = trig(key); if t and t.enabled ~= false then return t end end
@@ -268,7 +189,6 @@ local function winningTrigger(s)
   if s.flash then local t = enabledTrig("flash"); if t then return "flash", t end end
   if s.selected then local t = enabledTrig("selected"); if t then return "selected", t end end
   if s.hover then local t = enabledTrig("hover"); if t then return "hover", t end end
-  if s.test then local t = enabledTrig("proc"); if t then return "proc", t end end   -- dev preview → proc styling
   return nil
 end
 -- Resolve a winning trigger's tint / pulse / peak / layers from its record.
@@ -278,23 +198,9 @@ end
 local function Refresh(btn)
   local s = sources[btn]
   local triggerKey, t = winningTrigger(s)
-  if GB.db and GB.db.handShape then
-    if triggerKey then applyHandGlow(btn, resolveGlow(triggerKey, t))   -- (tint, pulse, peak, layers)
-    else hideHandGlow(btn) end
-    if GB.Anims then GB.Anims:Reconcile(btn, triggerKey, t) end   -- per-trigger animations track the winning glow
-    return
-  end
-  -- SDF soft-bloom fallback (dormant once a hand shape is set — the norm).
-  local g = GetGlow(btn)
-  if not g then return end
-  if triggerKey then
-    local tint = resolveGlow(triggerKey, t)
-    g.tex:SetVertexColor(tint[1], tint[2], tint[3])
-    if not g.frame:IsShown() then g.frame:Show(); g.anim:Play() end
-  elseif g.frame:IsShown() then
-    g.anim:Stop()
-    g.frame:Hide()
-  end
+  if triggerKey then applyHandGlow(btn, resolveGlow(triggerKey, t))   -- (tint, pulse, peak, layers)
+  else hideHandGlow(btn) end
+  if GB.Anims then GB.Anims:Reconcile(btn, triggerKey, t) end   -- per-trigger animations track the winning glow
 end
 
 local function SetSource(btn, key, value)
@@ -408,33 +314,9 @@ function Glows:SetEnabled(on)
   end
 end
 
--- ---------------------------------------------------------------------------
--- Live style setters (Config → Proc glow). Each writes GB.db and re-applies to
--- every already-created halo; new halos read the db in GetGlow. Safe whether or
--- not the engine is enabled — hidden halos just pick the change up when shown.
--- ---------------------------------------------------------------------------
-function Glows:ApplyStyle()
-  local peak, speed = glowPeak(), glowSpeed()
-  for btn, g in pairs(glows) do
-    if isOurs(btn) then   -- never read a Cooldown Viewer's (secret) geometry from insecure config code
-      local icon = btn.icon or btn.Icon
-      if icon then anchorGlow(g.frame, icon) end
-      if g.pulse then g.pulse:SetFromAlpha(peak); g.pulse:SetToAlpha(peak * PULSE_DEPTH); g.pulse:SetDuration(0.55 / speed) end
-      if g.frame:IsShown() then g.anim:Stop(); g.anim:Play() end   -- restart so new pulse values take
-      Refresh(btn)                                                 -- re-tint the shown ones
-    end
-  end
-end
-
--- Shape change: re-point every halo's texture at the new shape's glow art. Plain
--- SetTexture (no mask quirk), so it swaps live. Called from Skin:SetShape — the
--- glow texture was previously set only at creation, so it went stale on a reshape.
+-- Shape change: re-point the multi-part glow art at the new shape + re-anchor any
+-- SHOWN glow. Plain SetTexture (no mask quirk), so it swaps live.
 function Glows:RefreshShape()
-  local tex = currentGlowTex()
-  for btn, g in pairs(glows) do
-    if isOurs(btn) then g.tex:SetTexture(tex) end
-  end
-  -- Multi-part glow: re-point art at the new shape + re-anchor any SHOWN glow.
   local outerArt, innerArt = handGlowArt()
   for btn, hg in pairs(handGlows) do
     if isOurs(btn) and outerArt then
@@ -447,58 +329,14 @@ function Glows:RefreshShape()
   end
 end
 
--- DEV: force the halo on (or off) for every button so it can be studied out of
--- combat. Uses a dedicated "test" source so it never collides with real procs.
-function Glows:ForceTest(on)
-  self:Init()
-  forceScale = on and GLOW_SCALE or nil   -- pin the design scale while previewing
-  GB:ForEachButton(function(btn) SetSource(btn, "test", on and "gold" or nil) end)
-  for btn, g in pairs(glows) do
-    if isOurs(btn) then local ic = btn.icon or btn.Icon; if ic then anchorGlow(g.frame, ic) end end
-  end
-  return on
-end
-
--- DEV: swap the glow art to a candidate profile ("0"/"A"/"B"/"C"), or nil to
--- restore the real shape art. Re-points every existing halo live.
-function Glows:SetTestArt(key)
-  testArt = key and (GB.MEDIA .. "art\\gbtest-glow-" .. key .. ".png") or nil
-  local tex = currentGlowTex()
-  for btn, g in pairs(glows) do
-    if isOurs(btn) then g.tex:SetTexture(tex) end
-  end
-  return key
-end
-
--- DEV: force the multi-part glow ON (via a dedicated "test" source, so it never
--- collides with real procs) for every button, using the CURRENT shape's art —
--- lets the finished proc look be studied out of combat. /gb handglow on|off.
-function Glows:HandPreview(on)
-  self:Init()
-  GB:ForEachButton(function(btn) SetSource(btn, "test", on and "gold" or nil) end)
-end
-
 -- Icon resized → re-anchor every shown glow so it keeps the icon's new size/aspect.
 function Glows:RefreshSize()
-  for btn, g in pairs(glows) do
-    if isOurs(btn) then
-      local icon = btn.icon or btn.Icon
-      if icon then anchorGlow(g.frame, icon) end
-    end
-  end
   for btn, hg in pairs(handGlows) do
     if isOurs(btn) and hg.outer:IsShown() then
       local icon = btn.icon or btn.Icon
       if icon then anchorHandGlow(hg, icon) end
     end
   end
-end
-
-function Glows:SetColor(which, c)
-  if not (GB.db and c) then return end
-  if which == "assist" then GB.db.glowAssistColor = c else GB.db.glowColor = c end
-  for btn in pairs(glows) do Refresh(btn) end
-  for btn in pairs(handGlows) do Refresh(btn) end   -- re-tint an active multi-part glow live
 end
 
 -- ---------------------------------------------------------------------------

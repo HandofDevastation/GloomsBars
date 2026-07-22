@@ -884,7 +884,6 @@ end
 -- ---------------------------------------------------------------------------
 SLASH_GLOOMSBARS1 = "/gb"
 SLASH_GLOOMSBARS2 = "/gloomsbars"
-local glowTestOn = false   -- /gb glowtest force-preview state (session 8 glow bake-off)
 SlashCmdList.GLOOMSBARS = function(input)
   local cmd, arg = (input or ""):lower():match("^%s*(%S*)%s*(%S*)")
   if cmd == "" or cmd == "config" or cmd == "ui" then
@@ -917,12 +916,9 @@ SlashCmdList.GLOOMSBARS = function(input)
     HotkeyInfo()
   elseif cmd == "glowinfo" then
     GlowInfo()
-  elseif cmd == "glowtest" then
-    glowTestOn = not glowTestOn
-    if GB.Glows then GB.Glows:ForceTest(glowTestOn) end
-    msg(("proc-glow force-preview %s%s"):format(glowTestOn and "|cff59ff59ON|r" or "|cffff5555OFF|r",
-      glowTestOn and " — now run /gb glowstyle 0|A|B|C to compare (off = real art)" or ""))
-  -- (the /gb shine playground was removed — shine-chase is now a Config animation)
+  -- (the /gb shine playground was removed — shine-chase is now a Config animation;
+  --  /gb glowtest, /gb glowstyle, /gb handglow — the session-8/9 glow bake-off
+  --  harness — were removed in session 12: the Config preview chips cover them.)
   elseif cmd == "handshape" then
     local key = (arg or ""):lower()
     if key == "" then
@@ -942,24 +938,6 @@ SlashCmdList.GLOOMSBARS = function(input)
       msg(("icon size scale set to %.2f× (persists)."):format(v))
     else
       msg(("icon size scale is %.2f× (usage: /gb size 1.25 — × the Edit-Mode button size)."):format(GB.db and GB.db.sizeScale or 1))
-    end
-  elseif cmd == "handglow" then
-    -- Dev: force the multi-part glow ON to study the finished proc look out of
-    -- combat (real trigger = procs). Uses the CURRENT shape. /gb handglow [off].
-    local on = (arg or ""):lower() ~= "off"
-    if GB.Glows then GB.Glows:HandPreview(on) end
-    msg(("multi-part glow force-preview %s (shape '%s'; real trigger = procs)."):format(
-      on and "|cff59ff59ON|r" or "|cffff5555OFF|r", tostring(GB.db and GB.db.handShape)))
-  elseif cmd == "glowstyle" then
-    local key = (arg or ""):upper()
-    if key == "" or key == "OFF" or key == "NONE" then
-      if GB.Glows then GB.Glows:SetTestArt(nil) end
-      msg("glow art restored to the real shape art.")
-    elseif key == "0" or key == "A" or key == "B" or key == "C" then
-      if GB.Glows then GB.Glows:SetTestArt(key) end
-      msg(("glow candidate '%s' applied  (0 = current · A = radiant · B = nova · C = aura)"):format(key))
-    else
-      msg("usage: /gb glowstyle 0|A|B|C|off")
     end
   elseif cmd == "shape" then
     if arg ~= "" and GB.SHAPES[arg] then
@@ -988,8 +966,6 @@ SlashCmdList.GLOOMSBARS = function(input)
   else
     msg("v" .. GB:Version() .. " — commands:")
     print("  /gb skin — toggle the skin on all 8 action bars (persists)")
-    print("  /gb glowtest — force the proc glow ON to study it out of combat (toggle)")
-    print("  /gb glowstyle 0|A|B|C|off — swap proc-glow candidate profiles to compare")
     print("  /gb shape <name> — pick the icon shape (circle, roundrect, …); applies on /reload")
     print("  /gb style <name> — pick a decoration style (none, plate, …); applies live")
     print("  /gb sweep <px> — tune how far the cooldown sweep overshoots the icon edge")
