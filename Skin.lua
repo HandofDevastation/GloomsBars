@@ -795,6 +795,49 @@ local function ApplyHotkeyOverride(btn)
   rec.hkOverridden = true
 end
 
+-- Charge/stack count override (session 12) — position / font / size / colour for
+-- btn.Count, mirroring the keybind override (reads styleData.count). Blizzard
+-- re-anchors Count only in the small-button OnLoad — never at runtime (UpdateCount
+-- just SetText()s) — so applying from ApplyDecor needs no re-assert hook. Zones:
+-- corner (Blizzard's spot, bottom-right ON the icon), center, extension (centred
+-- in the plate half — plate shapes only, falls back to corner elsewhere).
+local function ApplyCountOverride(btn)
+  local rec = records[btn]
+  local cnt = btn.Count
+  local icon = btn.icon or btn.Icon
+  if not (rec and cnt and icon) then return end
+  local conf = GB:GetStyle().count
+  if not conf or conf.enabled == false then
+    if rec.cntOverridden then
+      -- Restore the pristine font/colour + Blizzard's stock anchor (a /reload is exact).
+      rec.cntOverridden = nil
+      cnt:SetJustifyH(rec.cntJustify or "RIGHT")
+      if rec.cntFont and rec.cntFont[1] then cnt:SetFont(rec.cntFont[1], rec.cntFont[2], rec.cntFont[3] or "") end
+      if rec.cntColor then cnt:SetTextColor(rec.cntColor[1], rec.cntColor[2], rec.cntColor[3], rec.cntColor[4] or 1) end
+      cnt:ClearAllPoints()
+      cnt:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -3, 1)
+    end
+    return
+  end
+  local ox, oy = conf.offsetX or 0, conf.offsetY or 0
+  cnt:ClearAllPoints()
+  if conf.zone == "center" then
+    cnt:SetPoint("CENTER", icon, "CENTER", ox, oy)
+    cnt:SetJustifyH("CENTER")
+  elseif conf.zone == "extension" and plateActive() then
+    local pw = icon:GetWidth()   -- same positioning math as the platefill / keybind
+    local pdy = (plateIconSide() == "bottom") and (pw * 0.5) or (-pw * 0.5)
+    cnt:SetPoint("CENTER", btn, "CENTER", ox, pdy + oy)
+    cnt:SetJustifyH("CENTER")
+  else   -- "corner" (and the extension fallback on non-plate shapes)
+    cnt:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", -2 + ox, 2 + oy)
+    cnt:SetJustifyH("RIGHT")
+  end
+  cnt:SetFont(resolveFont(conf.font), conf.size or 14, conf.flags or "OUTLINE")
+  if conf.color then cnt:SetTextColor(unpack(conf.color)) end
+  rec.cntOverridden = true
+end
+
 local function ApplyDecor(btn)
   local rec = records[btn]
   local icon = btn.icon or btn.Icon
@@ -1031,6 +1074,7 @@ local function ApplyDecor(btn)
     btn.TextOverlayContainer:SetFrameLevel(btn:GetFrameLevel() + 4)
   end
   ApplyHotkeyOverride(btn)
+  ApplyCountOverride(btn)
   -- Mask-retry: a plate texture created THIS frame hasn't rendered yet, so its
   -- first AddMaskTexture silently fails (never-rendered-texture quirk, API-NOTES
   -- §2) and the gradient draws UNMASKED — e.g. a square bottom on a hexagon,
@@ -1646,6 +1690,7 @@ local function ApplyButton(btn)
     -- turning Custom keybind OFF restores it exactly (Blizzard's UpdateHotkeys
     -- re-anchors + re-sizes but never re-sets the font — API-NOTES §3).
     if btn.HotKey then rec.hkFont = { btn.HotKey:GetFont() }; rec.hkJustify = btn.HotKey:GetJustifyH(); rec.hkColor = { btn.HotKey:GetTextColor() } end
+    if btn.Count then rec.cntFont = { btn.Count:GetFont() }; rec.cntJustify = btn.Count:GetJustifyH(); rec.cntColor = { btn.Count:GetTextColor() } end
     if btn.UpdateButtonArt then
       hooksecurefunc(btn, "UpdateButtonArt", function(b)
         if Skin.enabled then
@@ -1816,6 +1861,14 @@ local function RestoreButton(btn)
     if rec.hkFont and rec.hkFont[1] then btn.HotKey:SetFont(rec.hkFont[1], rec.hkFont[2], rec.hkFont[3] or "") end
     if rec.hkColor then btn.HotKey:SetTextColor(rec.hkColor[1], rec.hkColor[2], rec.hkColor[3], rec.hkColor[4] or 1) end
     if btn.UpdateHotkeys then btn:UpdateHotkeys(btn.buttonType) end
+  end
+  if rec.cntOverridden and btn.Count then
+    rec.cntOverridden = nil
+    btn.Count:SetJustifyH(rec.cntJustify or "RIGHT")
+    if rec.cntFont and rec.cntFont[1] then btn.Count:SetFont(rec.cntFont[1], rec.cntFont[2], rec.cntFont[3] or "") end
+    if rec.cntColor then btn.Count:SetTextColor(rec.cntColor[1], rec.cntColor[2], rec.cntColor[3], rec.cntColor[4] or 1) end
+    btn.Count:ClearAllPoints()
+    btn.Count:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -3, 1)   -- stock anchor; a /reload is exact
   end
   rec.active = false
   -- Blizzard restores correct slot-art state itself (branching on the bar's

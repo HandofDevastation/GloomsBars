@@ -707,6 +707,16 @@ end
 -- persist and come back when re-enabled. Legacy tables (no `enabled`) read as on.
 local function hotkeyOn() local h = hotkeyData(); return h ~= nil and h.enabled ~= false end
 
+-- Charge/stack count override (styleData.count) — same pattern as the keybind.
+-- Engine: Skin's ApplyCountOverride. Absent/off = Blizzard's default look.
+local function countData() local st = GB.db and GB.db.styleData; return st and st.count end
+local function ensureCount()
+  local st = GB.db and GB.db.styleData; if not st then return nil end
+  st.count = st.count or { enabled = true, zone = "corner", offsetX = 0, offsetY = 0, size = 14, font = "GeneralSans SemiBold", flags = "OUTLINE", color = { 1, 1, 1 } }
+  return st.count
+end
+local function countOn() local c = countData(); return c ~= nil and c.enabled ~= false end
+
 -- Plate — the 2:1-shape "plate" look: a SQUARE icon fills one half, a solid-colour plate
 -- fills the other, and that colour fades up over the icon. Only meaningful on a 2:1
 -- portrait shape (its halves are two squares); greyed with a hint on any other shape.
@@ -875,7 +885,8 @@ end
 
 -- Text — keybind styling + placement. The engine (ApplyHotkeyOverride, re-run
 -- via ReapplyDecor and re-asserted in the UpdateHotkeys hook) reads styleData.
--- hotkey. Off = Blizzard's default. Count/Name overrides come in a later pass.
+-- hotkey. Off = Blizzard's default. Count has its own section (session 12);
+-- a Name override remains future work.
 local function buildTextSection(bf, s)
   local function reapply() if GB.Skin then GB.Skin:ReapplyDecor() end end
 
@@ -956,6 +967,73 @@ local function buildTextSection(bf, s)
     fontBtn:SetEnabled(on)
     modTog:SetEnabled(on); modTog:SetAlpha(on and 1 or 0.35)
     for _, e in ipairs(zoneBtns) do e.b:SetActive(on and (h.zone or "extension") == e.z); e.b:SetEnabled(on) end
+  end
+end
+
+-- Charge count — styling + placement for the count text (spell charges, item
+-- stacks). Engine: ApplyCountOverride (re-run via ReapplyDecor) reads
+-- styleData.count. Off = Blizzard's default corner text.
+local function buildCountSection(bf, s)
+  local function reapply() if GB.Skin then GB.Skin:ReapplyDecor() end end
+
+  local lab = newText(bf, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 18, -14); lab:SetText("Custom count")
+  local en = makeToggle(bf, countOn,
+    function(v) local c = ensureCount(); if c then c.enabled = v and true or false end; reapply(); s.refresh() end)
+  en:SetPoint("TOPRIGHT", -18, -12)
+
+  local clab = newText(bf, FONT.body, 12, TEXT, "LEFT"); clab:SetPoint("TOPLEFT", 18, -46); clab:SetText("Color")
+  local cs = colorSwatch(bf,
+    function() local c = countData(); return c and c.color end,
+    function(col) local c = ensureCount(); c.color = col; reapply() end)
+  cs.swatch:SetPoint("TOPRIGHT", -18, -44)
+
+  local sizeRow = sliderRow(bf, -78, "Size", 6, 28, 1,
+    function() local c = countData(); return (c and c.size) or 14 end,
+    function(v) local c = ensureCount(); c.size = v; reapply() end,
+    function(v) return v .. "px" end)
+
+  local flab = newText(bf, FONT.body, 12, TEXT, "LEFT"); flab:SetPoint("TOPLEFT", 18, -122); flab:SetText("Font")
+  local fontBtn = fontDropdown(bf, 150,
+    function() local c = countData(); return c and c.font end,
+    function(name) local c = ensureCount(); c.font = name; reapply() end)
+  fontBtn:SetPoint("TOPRIGHT", -18, -120)
+
+  -- POSITION — zone (Blizzard's corner / centred on the icon / in the plate half).
+  local phdr = newText(bf, FONT.head, 13, COLOR.purple, "LEFT"); phdr:SetPoint("TOPLEFT", 18, -160); phdr:SetText("POSITION")
+  local zlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); zlab:SetPoint("TOPLEFT", 18, -190); zlab:SetText("Zone")
+  local zoneBtns, zPrev = {}, nil
+  for i = 3, 1, -1 do   -- reverse → Corner ends up leftmost
+    local zc = ({ { "corner", "Corner" }, { "center", "Center" }, { "extension", "Plate" } })[i]
+    local b = flatButton(bf, 60, 22, COLOR.heroic, zc[2], 11)
+    if zPrev then b:SetPoint("TOPRIGHT", zPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -188) end
+    b:SetScript("OnClick", function()
+      local c = ensureCount(); c.zone = zc[1]
+      for _, e in ipairs(zoneBtns) do e.b:SetActive(e.z == c.zone) end; reapply()
+    end)
+    zoneBtns[#zoneBtns + 1] = { b = b, z = zc[1] }; zPrev = b
+  end
+
+  local oxRow = sliderRow(bf, -222, "Offset X", -40, 40, 1,
+    function() local c = countData(); return (c and c.offsetX) or 0 end,
+    function(v) local c = ensureCount(); c.offsetX = v; reapply() end,
+    function(v) return v .. "px" end)
+  local oyRow = sliderRow(bf, -266, "Offset Y", -40, 40, 1,
+    function() local c = countData(); return (c and c.offsetY) or 0 end,
+    function(v) local c = ensureCount(); c.offsetY = v; reapply() end,
+    function(v) return v .. "px" end)
+
+  local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
+  hint:SetPoint("TOPLEFT", 18, -306); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Styles the charge / stack / item count. Corner = Blizzard's spot on the icon; Plate centres it in the plate half (2:1 plate shapes only).")
+  bf:SetHeight(344)
+  s.refresh = function()
+    local c = countData()
+    local on = countOn()
+    en:refresh(); cs:refresh(); sizeRow:refresh(); oxRow:refresh(); oyRow:refresh(); fontBtn:refresh()
+    cs.swatch:EnableMouse(on); cs.swatch:SetAlpha(on and 1 or 0.35)
+    sizeRow:setEnabled(on); oxRow:setEnabled(on); oyRow:setEnabled(on)
+    fontBtn:SetEnabled(on)
+    for _, e in ipairs(zoneBtns) do e.b:SetActive(on and ((c and c.zone) or "corner") == e.z); e.b:SetEnabled(on) end
   end
 end
 
@@ -2061,6 +2139,7 @@ local function BuildPanel()
   makeSection("Plate", buildPlateSection)
   makeSection("Decoration layers", buildDecorSection)
   makeSection("Text", buildTextSection)
+  makeSection("Charge count", buildCountSection)
   makeSection("Glows", buildGlowsSection)
   makeSection("Animations", buildAnimsSection)
   makeSection("Cast & channel", buildCastSection)
