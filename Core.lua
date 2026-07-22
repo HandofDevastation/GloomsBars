@@ -198,6 +198,179 @@ function GB:GetStyle()
   if GB.db and GB.db.styleData then return GB.db.styleData end
   return GB.STYLES[(GB.db and GB.db.style) or "none"] or GB.STYLES.none
 end
+
+-- ---------------------------------------------------------------------------
+-- Profiles → presets → per-bar assignment (session 13; Jason's architecture:
+-- "We need profiles. Within the profiles… save different presets. Then… mix
+-- and match and assign different presets to different action bars.")
+--
+-- DATA MODEL — GloomsBarsDB.profiles[name] = {
+--   presets = { [presetName] = <deepcopy of the PRESET_FIELDS subset> },
+--   bars    = { [buttonPrefix] = presetName },   -- per-bar assignment (stage 3 renders it)
+--   edit    = presetName,                        -- the preset the Config edits / working copy mirrors
+-- }; GloomsBarsDB.charProfiles["Char-Realm"] = active profile name (per-
+-- character active, shared account-wide library — Jason, session 13).
+--
+-- GB.db's visual fields stay the WORKING COPY: the engine renders it and the
+-- Config mutates it, exactly as before — so behaviour is unchanged until the
+-- management UI (stage 2) and per-button resolution (stage 3, generalizing the
+-- flyout shapeCtx mechanism) land. Save = snapshot working copy into a preset;
+-- load = write a preset over the working copy + RefreshAll.
+-- ---------------------------------------------------------------------------
+
+-- Every field that constitutes "the look" (the whole-look preset — settled
+-- with Jason). Everything else in the db (schema, skinEnabled, migration
+-- flags, profiles themselves) is global.
+GB.PRESET_FIELDS = {
+  "shape", "style", "zoom", "handShape", "sizeScale", "iconLockAspect",
+  "iconAspect", "iconFill", "sweepOvershoot", "emptySlots", "emptySlotAlpha",
+  "swipeColor", "swipeAlpha", "finishFlash", "finishFlashColor",
+  "availDesaturate", "availUnusable", "availOOM", "rangeTint", "rangeColor",
+  "stateColors", "stateIntensity", "stateWidth", "castFillColor",
+  "castFillAlpha", "castDrainDir", "castInterruptColor", "castInterruptSpeed",
+  "castCompleteColor", "glowColor", "glowAssistColor", "glowIntensity",
+  "glowScale", "glowPulseSpeed", "triggers", "styleData",
+}
+
+function GB:CharKey()
+  local name, realm = UnitName("player"), GetRealmName()
+  return (name or "?") .. "-" .. (realm or "?")
+end
+
+function GB:ActiveProfileName()
+  local db = GB.db
+  if not (db and db.profiles) then return nil end
+  local name = db.charProfiles and db.charProfiles[GB:CharKey()]
+  if name and db.profiles[name] then return name end
+  return (next(db.profiles))   -- unbound character: first available (login binds it)
+end
+
+function GB:ActiveProfile()
+  local name = GB:ActiveProfileName()
+  return name and GB.db.profiles[name], name
+end
+
+-- Snapshot the working copy's visual fields (deepcopied — presets never share
+-- tables with the live db, or edits would silently mutate saved looks).
+function GB:SnapshotPreset()
+  local snap = {}
+  for _, k in ipairs(GB.PRESET_FIELDS) do snap[k] = deepcopy(GB.db[k]) end
+  return snap
+end
+
+-- Save the working copy into the active profile under `pname` (defaults to the
+-- profile's edit target).
+function GB:SavePreset(pname)
+  local prof = GB:ActiveProfile()
+  if not prof then return end
+  pname = pname or prof.edit
+  if not pname then return end
+  prof.presets[pname] = GB:SnapshotPreset()
+  prof.edit = pname
+end
+
+-- Load a preset over the working copy + refresh every renderer. Missing fields
+-- fall back to their current working-copy value (forward-compat with presets
+-- saved before a field existed).
+function GB:LoadPreset(pname)
+  local prof = GB:ActiveProfile()
+  local snap = prof and prof.presets[pname]
+  if not snap then return false end
+  for _, k in ipairs(GB.PRESET_FIELDS) do
+    if snap[k] ~= nil then GB.db[k] = deepcopy(snap[k]) end
+  end
+  prof.edit = pname
+  GB:RefreshAll()
+  return true
+end
+
+-- Profile management (Jason: create, copy, rename, delete + per-character active).
+function GB:CreateProfile(name)
+  local db = GB.db
+  if not db or db.profiles[name] then return false end
+  db.profiles[name] = {
+    presets = { Default = GB:SnapshotPreset() },
+    bars = {}, edit = "Default",
+  }
+  for _, bar in ipairs(GB.BARS) do db.profiles[name].bars[bar.buttonPrefix] = "Default" end
+  return true
+end
+
+function GB:CopyProfile(src, new)
+  local db = GB.db
+  if not (db and db.profiles[src]) or db.profiles[new] then return false end
+  db.profiles[new] = deepcopy(db.profiles[src])
+  return true
+end
+
+function GB:RenameProfile(old, new)
+  local db = GB.db
+  if not (db and db.profiles[old]) or db.profiles[new] or old == new then return false end
+  db.profiles[new] = db.profiles[old]
+  db.profiles[old] = nil
+  for char, p in pairs(db.charProfiles or {}) do
+    if p == old then db.charProfiles[char] = new end
+  end
+  return true
+end
+
+function GB:DeleteProfile(name)
+  local db = GB.db
+  if not (db and db.profiles[name]) then return false end
+  local count = 0
+  for _ in pairs(db.profiles) do count = count + 1 end
+  if count <= 1 then return false end   -- never delete the last profile
+  local wasActive = (GB:ActiveProfileName() == name)
+  db.profiles[name] = nil
+  local fallback = next(db.profiles)
+  for char, p in pairs(db.charProfiles or {}) do
+    if p == name then db.charProfiles[char] = fallback end
+  end
+  if wasActive then
+    local prof = db.profiles[fallback]
+    GB:LoadPreset(prof.edit or next(prof.presets))
+  end
+  return true
+end
+
+function GB:SetActiveProfile(name)
+  local db = GB.db
+  if not (db and db.profiles[name]) then return false end
+  db.charProfiles = db.charProfiles or {}
+  db.charProfiles[GB:CharKey()] = name
+  local prof = db.profiles[name]
+  GB:LoadPreset(prof.edit or next(prof.presets))
+  return true
+end
+
+-- Re-render everything from the (just-rewritten) working copy. Uses the public
+-- refresh surface only; each call is a no-op-safe re-assert.
+function GB:RefreshAll()
+  local S, G, A = GB.Skin, GB.Glows, GB.Anims
+  if S and S.enabled then
+    S:SetHandShape(GB.db.handShape)      -- geometry + decor via refreshIconGeometry
+    S:SetSizeScale(GB.db.sizeScale)
+    S:SetSwipeColor(GB.db.swipeColor)    -- re-runs applySwipeAll
+    S:SetAvailDesaturate(GB.db.availDesaturate)   -- re-runs applyAvailabilityAll
+    S:RefreshEmptySlots()
+    S:RefreshCooldownText()
+    S:RefreshHotkeyText()
+    S:RefreshPlateDim()
+    if S.RefreshPlate then S:RefreshPlate() end
+  end
+  if G and G.enabled then
+    G:RefreshShape(); G:RefreshSize(); G:RefreshState()
+    for k in pairs((GB.db and GB.db.triggers) or {}) do
+      G:RefreshTrigger(k)
+      if A and A.Invalidate then A:Invalidate(k) end
+    end
+  end
+  local C = GB.Config
+  if C then
+    if C.Refresh then C:Refresh() end
+    if C.RefreshPreview then C:RefreshPreview() end
+  end
+end
 local FONT_DIR = GB.MEDIA .. "fonts\\"
 GB.FONT = {
   title = FONT_DIR .. "Khand-SemiBold.ttf",
@@ -419,7 +592,29 @@ loader:SetScript("OnEvent", function(_, event, arg1)
       end
       for _, t in pairs(GB.db.triggers) do t.anims = t.anims or {} end   -- per-trigger animation configs (GB.Anims)
     end
+    -- Profiles migration (session 13) — MUST run after all seeding above so the
+    -- first snapshot captures the complete look. The current working copy
+    -- becomes profile "Default" / preset "Default", assigned to every bar.
+    if GB.db.profiles == nil then
+      GB.db.profiles = {}
+      GB.db.charProfiles = {}
+      GB.db.profiles.Default = {
+        presets = { Default = GB:SnapshotPreset() },
+        bars = {}, edit = "Default",
+      }
+      for _, bar in ipairs(GB.BARS) do GB.db.profiles.Default.bars[bar.buttonPrefix] = "Default" end
+    end
   elseif event == "PLAYER_LOGIN" then
+    -- Bind this character to its profile (per-character active — Jason). New
+    -- characters adopt the first existing profile; CharKey needs the realm,
+    -- which isn't reliable at ADDON_LOADED.
+    if GB.db and GB.db.profiles then
+      GB.db.charProfiles = GB.db.charProfiles or {}
+      local key = GB:CharKey()
+      if not (GB.db.charProfiles[key] and GB.db.profiles[GB.db.charProfiles[key]]) then
+        GB.db.charProfiles[key] = GB:ActiveProfileName() or "Default"
+      end
+    end
     PreloadFonts()
     RegisterMedia()
   end
@@ -932,6 +1127,21 @@ SlashCmdList.GLOOMSBARS = function(input)
   -- (the /gb shine playground was removed — shine-chase is now a Config animation;
   --  /gb glowtest, /gb glowstyle, /gb handglow — the session-8/9 glow bake-off
   --  harness — were removed in session 12: the Config preview chips cover them.)
+  elseif cmd == "profiles" then
+    -- Dev probe (stage-1 verification; the management GUI is stage 2): dump the
+    -- profile library, the active profile's presets + bar assignments.
+    local db = GB.db or {}
+    local activeName = GB:ActiveProfileName()
+    msg(("profiles (character %s → '%s'):"):format(GB:CharKey(), tostring(activeName)))
+    for name, prof in pairs(db.profiles or {}) do
+      local pn = {}
+      for p in pairs(prof.presets or {}) do pn[#pn + 1] = p end
+      print(("  %s%s: presets [%s], editing '%s'"):format(
+        name, name == activeName and " (ACTIVE)" or "", table.concat(pn, ", "), tostring(prof.edit)))
+      for _, bar in ipairs(GB.BARS) do
+        print(("    %s → %s"):format(bar.label, tostring((prof.bars or {})[bar.buttonPrefix])))
+      end
+    end
   elseif cmd == "handshape" then
     local key = (arg or ""):lower()
     if key == "" then
