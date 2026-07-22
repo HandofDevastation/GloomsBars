@@ -509,3 +509,326 @@ function Sparkle:Stop(host)
 end
 
 Anims:Register(Sparkle)
+
+-- ===========================================================================
+-- MODULE: BREATHE — a shape-matched outline that rhythmically scales up/down and pulses
+-- brightness, so the button "breathes". The only SCALE-based module. It draws the shape's
+-- soft outline (<key>-rim, tinted — shown DIRECTLY as art, not as a clip mask, so nothing
+-- to attach and no first-trigger flash) and oscillates its SIZE about the icon centre.
+-- hgAnchor's grow-0 span == icon + min(w,h) per axis, centred — reproduced here via a
+-- centred SetSize so scaling stays shape-aligned. Distinct from the glow's alpha-only
+-- pulse: here the outline visibly grows and shrinks.
+-- ===========================================================================
+local breatheInst = {}    -- [host] = { frame, tex, icon, baseW, baseH, speed, depth, peak, phase }
+local breatheActive = {}
+
+local BREATHE_RATE = 9.0   -- phase advance / sec at speed 1 → ~0.7s/breath; max slider ≈ 0.23s (fast throb)
+local BREATHE_LOW = 0.55   -- alpha floor as a fraction of peak (dims on the out-breath, never vanishes)
+
+local breatheDriver = CreateFrame("Frame"); breatheDriver:Hide()
+breatheDriver:SetScript("OnUpdate", function(_, dt)
+  for inst in pairs(breatheActive) do
+    inst.phase = (inst.phase + dt * inst.speed * BREATHE_RATE) % (2 * math.pi)
+    local b = 0.5 - 0.5 * math.cos(inst.phase)          -- smooth 0 → 1 → 0 breath
+    local scale = 1 + inst.depth * b
+    inst.tex:SetSize(inst.baseW * scale, inst.baseH * scale)   -- centred anchor → scales about the icon
+    inst.tex:SetAlpha(inst.peak * (BREATHE_LOW + (1 - BREATHE_LOW) * b))
+  end
+end)
+
+local Breathe = {
+  id = "breathe",
+  label = "Breathe",
+  defaults = { color = { 1, 0.85, 0.5 }, speed = 1.0, depth = 0.2, blend = "add" },
+  params = {
+    { key = "color", kind = "color",  label = "Colour" },
+    { key = "speed", kind = "range",  label = "Speed", min = 0.3, max = 3.0, step = 0.1 },
+    { key = "depth", kind = "range",  label = "Depth", min = 0.05, max = 0.5, step = 0.05 },
+    { key = "blend", kind = "choice", label = "Style", choices = { { "add", "Glow" }, { "blend", "Solid" } } },
+  },
+}
+
+function Breathe:Start(host, icon, key, p)
+  if not (host and icon and key) then return end
+  local inst = breatheInst[host]
+  if not inst then
+    local frame = CreateFrame("Frame", nil, host)
+    frame:SetFrameLevel(host:GetFrameLevel() + 3)   -- above the glow, below the text (+4)
+    local tex = frame:CreateTexture(nil, "OVERLAY")
+    tex:SetSnapToPixelGrid(false); tex:SetTexelSnappingBias(0)
+    inst = { frame = frame, tex = tex, phase = 0 }
+    breatheInst[host] = inst
+  end
+  local w, h = icon:GetWidth(), icon:GetHeight()
+  local m = math.min(w, h)                     -- hgAnchor grow-0 span == icon + min(w,h) each axis
+  inst.icon = icon
+  inst.baseW, inst.baseH = w + m, h + m
+  inst.speed = p.speed or 1.0
+  inst.depth = p.depth or 0.2
+  inst.peak = 1
+  local color = p.color or { 1, 1, 1 }
+  inst.tex:SetTexture(GB:HandAsset(key, "rim"))
+  inst.tex:SetVertexColor(color[1], color[2], color[3])
+  -- Glow = ADD (a breathing halo; deep colours wash — physics). Solid = BLEND (true-colour outline).
+  inst.tex:SetBlendMode((p.blend == "blend") and "BLEND" or "ADD")
+  inst.tex:ClearAllPoints(); inst.tex:SetPoint("CENTER", icon, "CENTER")
+  inst.tex:SetSize(inst.baseW, inst.baseH); inst.tex:SetAlpha(inst.peak)   -- valid until the driver's first tick
+  inst.tex:Show()
+  inst.frame:Show()
+  breatheActive[inst] = true; breatheDriver:Show()
+end
+
+function Breathe:Stop(host)
+  local inst = breatheInst[host]
+  if inst then
+    inst.frame:Hide()
+    breatheActive[inst] = nil
+    if not next(breatheActive) then breatheDriver:Hide() end
+  end
+end
+
+Anims:Register(Breathe)
+
+-- ===========================================================================
+-- MODULE: BURST RING — the shape outline expands outward from the rim while fading to
+-- nothing, then restarts: a repeating shockwave. Like Breathe it draws <key>-rim
+-- directly (no mask, no first-trigger flash) and scales about the icon centre, but the
+-- motion is a one-way expand+fade (not an oscillation). N rings are phase-staggered so
+-- they overlap into a ripple field; the cycle restarts on each (re)trigger so a hover
+-- emanates immediately.
+-- ===========================================================================
+local burstInst = {}    -- [host] = { frame, texs, n, icon, baseW, baseH, speed, reach, peak, cyclePhase }
+local burstActive = {}
+
+local BURST_BASE = 1.2    -- seconds for one ring to fully expand+fade at speed 1
+local BURST_REACH_MAX = 1.2   -- (reach param caps here) — expansion beyond the rim
+
+local burstDriver = CreateFrame("Frame"); burstDriver:Hide()
+burstDriver:SetScript("OnUpdate", function(_, dt)
+  for inst in pairs(burstActive) do
+    inst.cyclePhase = (inst.cyclePhase + dt * inst.speed / BURST_BASE) % 1
+    for i = 1, inst.n do
+      local tex = inst.texs[i]
+      if tex then
+        local p = (inst.cyclePhase + (i - 1) / inst.n) % 1   -- staggered progress 0..1
+        local scale = 1 + inst.reach * p
+        tex:SetSize(inst.baseW * scale, inst.baseH * scale)  -- centred → expands about the icon
+        tex:SetAlpha(inst.peak * (1 - p))                    -- fades out as it grows
+      end
+    end
+  end
+end)
+
+local Burst = {
+  id = "burst",
+  label = "Burst Ring",
+  defaults = { color = { 1, 0.8, 0.4 }, count = 2, speed = 1.0, reach = 0.7, blend = "add" },
+  params = {
+    { key = "color", kind = "color",  label = "Colour" },
+    { key = "count", kind = "range",  label = "Rings", min = 1, max = 3, step = 1, fmt = "int" },
+    { key = "speed", kind = "range",  label = "Speed", min = 0.3, max = 3.0, step = 0.1 },
+    { key = "reach", kind = "range",  label = "Reach", min = 0.3, max = BURST_REACH_MAX, step = 0.1 },
+    { key = "blend", kind = "choice", label = "Style", choices = { { "add", "Glow" }, { "blend", "Solid" } } },
+  },
+}
+
+function Burst:Start(host, icon, key, p)
+  if not (host and icon and key) then return end
+  local inst = burstInst[host]
+  if not inst then
+    local frame = CreateFrame("Frame", nil, host)
+    frame:SetFrameLevel(host:GetFrameLevel() + 3)   -- above the glow, below the text (+4)
+    inst = { frame = frame, texs = {}, cyclePhase = 0 }
+    burstInst[host] = inst
+  end
+  local n = math.max(1, math.min(3, math.floor(p.count or 2)))
+  local w, h = icon:GetWidth(), icon:GetHeight()
+  local m = math.min(w, h)                      -- hgAnchor grow-0 span == icon + min(w,h) each axis
+  inst.icon = icon
+  inst.baseW, inst.baseH = w + m, h + m
+  inst.speed = p.speed or 1.0
+  inst.reach = p.reach or 0.7
+  inst.peak = 1
+  inst.cyclePhase = 0   -- restart the ripple on every (re)trigger so a hover emanates at once
+  local color = p.color or { 1, 1, 1 }
+  local blend = (p.blend == "blend") and "BLEND" or "ADD"   -- Glow = ADD shockwave; Solid = BLEND true-colour ring
+  local rim = GB:HandAsset(key, "rim")
+  for i = 1, n do
+    local tex = inst.texs[i]
+    if not tex then
+      tex = inst.frame:CreateTexture(nil, "OVERLAY")
+      tex:SetSnapToPixelGrid(false); tex:SetTexelSnappingBias(0)
+      inst.texs[i] = tex
+    end
+    tex:SetTexture(rim); tex:SetBlendMode(blend); tex:SetVertexColor(color[1], color[2], color[3])
+    tex:ClearAllPoints(); tex:SetPoint("CENTER", icon, "CENTER")
+    tex:SetSize(inst.baseW, inst.baseH); tex:SetAlpha(0)   -- driver sets real size/alpha next tick
+    tex:Show()
+  end
+  for i = n + 1, #inst.texs do inst.texs[i]:Hide() end
+  inst.n = n
+  inst.frame:Show()
+  burstActive[inst] = true; burstDriver:Show()
+end
+
+function Burst:Stop(host)
+  local inst = burstInst[host]
+  if inst then
+    inst.frame:Hide()
+    burstActive[inst] = nil
+    if not next(burstActive) then burstDriver:Hide() end
+  end
+end
+
+Anims:Register(Burst)
+
+-- ===========================================================================
+-- MODULE: RIM FLASH — the shape outline blinks: a sharp bright flash, mostly dim between.
+-- Same <key>-rim-drawn-directly base as Breathe/Burst (no mask, no flash), but FIXED size
+-- with an ALPHA-only blink (a sharpened cosine → brief bright peak, long dim tail), so it
+-- reads as an alert beacon rather than a smooth breath. Restarts on trigger → flashes at once.
+-- ===========================================================================
+local rimflashInst = {}
+local rimflashActive = {}
+
+local FLASH_RATE = 6.3     -- phase advance / sec at speed 1 → ~1 flash/sec
+local FLASH_SHARP = 3       -- waveform power: higher = briefer bright peak, longer dim gap
+local FLASH_LOW = 0.06      -- alpha floor between flashes (a faint resting outline, not fully gone)
+
+local rimflashDriver = CreateFrame("Frame"); rimflashDriver:Hide()
+rimflashDriver:SetScript("OnUpdate", function(_, dt)
+  for inst in pairs(rimflashActive) do
+    inst.phase = (inst.phase + dt * inst.speed * FLASH_RATE) % (2 * math.pi)
+    local f = (0.5 + 0.5 * math.cos(inst.phase)) ^ FLASH_SHARP   -- sharp bright peak, mostly dim
+    inst.tex:SetAlpha(inst.peak * (FLASH_LOW + (1 - FLASH_LOW) * f))
+  end
+end)
+
+local RimFlash = {
+  id = "rimflash",
+  label = "Rim Flash",
+  defaults = { color = { 1, 0.45, 0.3 }, speed = 1.0, blend = "add" },
+  params = {
+    { key = "color", kind = "color",  label = "Colour" },
+    { key = "speed", kind = "range",  label = "Speed", min = 0.3, max = 3.0, step = 0.1 },
+    { key = "blend", kind = "choice", label = "Style", choices = { { "add", "Glow" }, { "blend", "Solid" } } },
+  },
+}
+
+function RimFlash:Start(host, icon, key, p)
+  if not (host and icon and key) then return end
+  local inst = rimflashInst[host]
+  if not inst then
+    local frame = CreateFrame("Frame", nil, host)
+    frame:SetFrameLevel(host:GetFrameLevel() + 3)   -- above the glow, below the text (+4)
+    local tex = frame:CreateTexture(nil, "OVERLAY")
+    tex:SetSnapToPixelGrid(false); tex:SetTexelSnappingBias(0)
+    inst = { frame = frame, tex = tex, phase = 0 }
+    rimflashInst[host] = inst
+  end
+  local w, h = icon:GetWidth(), icon:GetHeight()
+  local m = math.min(w, h)                     -- hgAnchor grow-0 span == icon + min(w,h) each axis
+  inst.speed = p.speed or 1.0
+  inst.peak = 1
+  inst.phase = 0   -- flash immediately on (re)trigger
+  local color = p.color or { 1, 1, 1 }
+  inst.tex:SetTexture(GB:HandAsset(key, "rim"))
+  inst.tex:SetVertexColor(color[1], color[2], color[3])
+  -- Glow = ADD (a bright flash; deep colours wash — physics). Solid = BLEND (true-colour blink).
+  inst.tex:SetBlendMode((p.blend == "blend") and "BLEND" or "ADD")
+  inst.tex:ClearAllPoints(); inst.tex:SetPoint("CENTER", icon, "CENTER")
+  inst.tex:SetSize(w + m, h + m); inst.tex:SetAlpha(inst.peak)
+  inst.tex:Show()
+  inst.frame:Show()
+  rimflashActive[inst] = true; rimflashDriver:Show()
+end
+
+function RimFlash:Stop(host)
+  local inst = rimflashInst[host]
+  if inst then
+    inst.frame:Hide()
+    rimflashActive[inst] = nil
+    if not next(rimflashActive) then rimflashDriver:Hide() end
+  end
+end
+
+Anims:Register(RimFlash)
+
+-- ===========================================================================
+-- MODULE: RADAR SWEEP — a wide fading wedge (a scanner / clock hand) rotating over the
+-- icon FACE (<key>-base), clipped to the shape: a glowing beam sweeps across the button
+-- with its trail fading behind it. Comet Chase's rotation+mask mechanic, but a wide
+-- face-filling wedge instead of a point on the rim. Bidirectional (CW/CCW).
+-- ===========================================================================
+local RADAR_TEX = GB.MEDIA .. "art\\radar.png"
+local radarInst = {}
+local radarActive = {}
+
+local RADAR_MIN_REV = 1.4   -- sec/revolution at |spin| = 1
+
+local radarDriver = CreateFrame("Frame"); radarDriver:Hide()
+radarDriver:SetScript("OnUpdate", function(_, dt)
+  for inst in pairs(radarActive) do
+    inst.phase = (inst.phase + dt * inst.w) % (2 * math.pi)   -- inst.w is SIGNED (spin carries direction)
+    inst.tex:SetRotation(inst.phase)
+  end
+end)
+
+local Radar = {
+  id = "radar",
+  label = "Radar Sweep",
+  defaults = { color = { 0.5, 1, 0.7 }, spin = 0.5, blend = "add" },
+  params = {
+    { key = "color", kind = "color",   label = "Colour" },
+    { key = "spin",  kind = "bispeed", label = "Spin", minRev = RADAR_MIN_REV },
+    { key = "blend", kind = "choice",  label = "Style", choices = { { "add", "Glow" }, { "blend", "Solid" } } },
+  },
+}
+
+function Radar:Start(host, icon, key, p)
+  if not (host and icon and key) then return end
+  local inst = radarInst[host]
+  if not inst then
+    local frame = CreateFrame("Frame", nil, host)
+    frame:SetFrameLevel(host:GetFrameLevel() + 3)   -- above the glow, below the text (+4)
+    local tex = frame:CreateTexture(nil, "OVERLAY")
+    tex:SetTexture(RADAR_TEX)
+    tex:SetSnapToPixelGrid(false); tex:SetTexelSnappingBias(0)
+    inst = { frame = frame, tex = tex, mask = frame:CreateMaskTexture(), masked = false, phase = 0 }
+    radarInst[host] = inst
+  end
+  local spin = p.spin; if spin == nil then spin = 0.5 end
+  -- WoW rotation is CCW-positive; negate so positive spin = CLOCKWISE (matches the UI's CW side).
+  local w = -spin * ((2 * math.pi) / RADAR_MIN_REV)   -- signed angular velocity (rad/sec)
+  local cw = w < 0                                     -- mirror the wedge for CW so the trail always TRAILS
+  local color = p.color or { 1, 1, 1 }
+  local s = 1.6 * math.max(icon:GetWidth(), icon:GetHeight())   -- oversize so the sweep covers the face
+  inst.w = w
+  if GB.Skin and GB.Skin.AnchorHandGrown then GB.Skin:AnchorHandGrown(inst.mask, icon, 0) end
+  inst.mask:SetTexture(GB:HandAsset(key, "base"), "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+  inst.tex:ClearAllPoints(); inst.tex:SetSize(s, s); inst.tex:SetPoint("CENTER", icon, "CENTER")
+  inst.tex:SetVertexColor(color[1], color[2], color[3])
+  -- Glow = ADD (a glowing scan; deep colours wash — physics). Solid = BLEND (true-colour beam).
+  inst.tex:SetBlendMode((p.blend == "blend") and "BLEND" or "ADD")
+  if cw then inst.tex:SetTexCoord(1, 0, 0, 1) else inst.tex:SetTexCoord(0, 1, 0, 1) end   -- trail follows motion
+  inst.tex:Show(); inst.tex:SetAlpha(PRIME_ALPHA)   -- prime near-invisible; revealed once the mask binds
+  inst.frame:Show()
+  radarActive[inst] = true; radarDriver:Show()
+  C_Timer.After(0, function()   -- attach the mask + REVEAL after the first render (§2 defers the mask)
+    if inst.frame:IsShown() and inst.tex:IsShown() then
+      if not inst.masked then inst.tex:AddMaskTexture(inst.mask); inst.masked = true end
+      inst.tex:SetAlpha(1)
+    end
+  end)
+end
+
+function Radar:Stop(host)
+  local inst = radarInst[host]
+  if inst then
+    inst.frame:Hide()
+    radarActive[inst] = nil
+    if not next(radarActive) then radarDriver:Hide() end
+  end
+end
+
+Anims:Register(Radar)
