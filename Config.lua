@@ -1805,13 +1805,25 @@ end
 -- engine's playFinishFlash. No-op when the flash is disabled.
 -- Shared burst player: the expanding flash tinted `c` — the cooldown finish flash
 -- and the cast/channel COMPLETE burst both use it, differing only by colour.
+-- Mirrors the bars' playFinishFlash: hand shapes use the shape's own -outer glow
+-- art on the hand-canvas anchor (the art's silhouette occupies the centre half of
+-- its canvas → margins of half the short side land its edge ON the shape edge);
+-- the legacy SDF path keeps the old bloom + uniform grow.
 local function playPreviewBurst(c)
   if not (previewFlash and previewIcon) then return end
-  previewFlash:SetTexture(GB.Skin:GlowArt())
+  local hk = GB.db and GB.db.handShape
+  previewFlash:SetTexture(hk and GB:HandAsset(hk, "outer") or GB.Skin:GlowArt())
   previewFlash:SetVertexColor(c[1], c[2], c[3])
-  -- Anchor the FRAME so the scale bursts from centre; plate mode spans the full 2:1
-  -- construction (the bars' flash traces constructRef), else the icon.
-  anchorPreviewOverlay(previewFlashFrame, (128 / 80 - 1) / 2, 0, previewPlateOn and previewFrame or nil)
+  if hk then
+    -- Plate mode spans the full 2:1 construction (the bars trace constructRef).
+    local ref = previewPlateOn and previewFrame or previewIcon
+    local m0 = 0.5 * math.min(previewFrame:GetWidth(), previewFrame:GetHeight())
+    previewFlashFrame:ClearAllPoints()
+    previewFlashFrame:SetPoint("TOPLEFT", ref, "TOPLEFT", -m0, m0)
+    previewFlashFrame:SetPoint("BOTTOMRIGHT", ref, "BOTTOMRIGHT", m0, -m0)
+  else
+    anchorPreviewOverlay(previewFlashFrame, (128 / 80 - 1) / 2)
+  end
   previewFlashFrame:SetAlpha(1)
   previewFlashAnim:Stop(); previewFlashAnim:Play()
 end
