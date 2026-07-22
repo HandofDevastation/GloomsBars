@@ -466,7 +466,25 @@ local function relayout()
   if bodyContainer then bodyContainer:SetHeight(math.max(total + 4, 10)) end
 end
 
+-- Preview caption: the default explainer line, swapped by the Animations section for a
+-- one-line description of the state being edited (what triggers it / what it means) —
+-- contextual help right in the preview pane. Reset on every section toggle so it never
+-- lingers into a section that has no "state" concept.
+local PREVIEW_CAPTION_DEFAULT = "Sample of the visible skin. Your clickable hit area stays Edit Mode's size."
+local STATE_DESC = {
+  idle     = "Idle: the button's resting look, with nothing active.",
+  cooldown = "Cooldown: while the ability is recharging (the shaped sweep, then a finish flash).",
+  proc     = "Proc: fires when an ability procs (a free or empowered cast becomes ready).",
+  cast     = "Cast: while you're casting a cast-time spell here. Live only; not shown in this preview.",
+  channel  = "Channel: while you're channeling a spell here. Live only; not shown in this preview.",
+  hover    = "Hover: while your mouse is over the button.",
+  selected = "Selected: when the button is toggled on (a stance, form, or toggled aura).",
+  flash    = "Flash: during auto-attack or auto-shot (needs the Attack ability on a bar).",
+  assist   = "Assist: Blizzard's suggested-next-ability highlight. Live only; not shown in this preview.",
+}
+
 function C:ToggleSection(s)
+  if previewCaption then previewCaption:SetText(PREVIEW_CAPTION_DEFAULT) end   -- Animations re-sets it in s.refresh
   local wasOpen = s.open
   for _, x in ipairs(sections) do x.open = false end
   if not wasOpen then s.open = true; if s.refresh then s.refresh() end end   -- reflect current state on open
@@ -1544,6 +1562,9 @@ function C:SetPreviewState(st)
   -- SetPreviewAnim. Clear any preview animation by default so they don't linger.
   if GB.Anims and previewFrame then GB.Anims:PreviewReconcile(previewFrame, previewIcon, GB.db and GB.db.handShape, nil) end
   for s2, chip in pairs(previewChips) do chip:SetActive(s2 == previewState) end
+  -- Caption tracks whatever state is previewed (top chips or a section). SetPreviewAnim
+  -- runs after this and overrides with the animation trigger's own description.
+  if previewCaption then previewCaption:SetText(STATE_DESC[previewState] or PREVIEW_CAPTION_DEFAULT) end
 end
 
 -- Preview the selected trigger's glow (its chip, or idle) PLUS its enabled animations
@@ -1555,6 +1576,7 @@ function C:SetPreviewAnim(triggerKey)
     local trigger = GB.db and GB.db.triggers and GB.db.triggers[triggerKey]
     GB.Anims:PreviewReconcile(previewFrame, previewIcon, GB.db and GB.db.handShape, trigger)
   end
+  if previewCaption then previewCaption:SetText(STATE_DESC[triggerKey] or PREVIEW_CAPTION_DEFAULT) end
 end
 
 -- Animations — the per-trigger animation system (GB.Anims). Pick a trigger, then
@@ -1609,13 +1631,15 @@ local function animParamRow(bf, yTop, id, param, onChange)
     return { h = 44, refresh = function() row:refresh() end, setEnabled = function(on) row:setEnabled(on) end,
       setShown = function(on) row:SetShown(on) end }
   elseif param.kind == "bispeed" then
-    -- One signed slider: centre = still, right half = faster CW, left half = faster CCW.
-    -- Value = velocity in [-1,1]; |v| = 1 is param.minRev sec/rev.
+    -- One signed slider: centre = still, right half = faster (posLabel), left half = faster
+    -- (negLabel). Value = velocity in [-1,1]; |v| = 1 is param.minRev sec/rev. Direction
+    -- labels default to CCW/CW (rotation) but a module can override (e.g. Sheen's L/R sweep).
     local minRev = param.minRev or 0.8
+    local negLabel, posLabel = param.neg or "CCW", param.pos or "CW"
     local lab = newText(bf, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 30, yTop); lab:SetText(param.label)
     local val = newText(bf, FONT.label, 11, TEXT, "RIGHT"); val:SetPoint("TOPRIGHT", -18, yTop)
-    local lccw = newText(bf, FONT.body, 9.5, MUTE, "LEFT"); lccw:SetPoint("TOPLEFT", 18, yTop - 32); lccw:SetText("CCW")
-    local lcw = newText(bf, FONT.body, 9.5, MUTE, "RIGHT"); lcw:SetPoint("TOPRIGHT", -18, yTop - 32); lcw:SetText("CW")
+    local lccw = newText(bf, FONT.body, 9.5, MUTE, "LEFT"); lccw:SetPoint("TOPLEFT", 18, yTop - 32); lccw:SetText(negLabel)
+    local lcw = newText(bf, FONT.body, 9.5, MUTE, "RIGHT"); lcw:SetPoint("TOPRIGHT", -18, yTop - 32); lcw:SetText(posLabel)
     local sl = CreateFrame("Slider", nil, bf)
     sl:SetPoint("TOPLEFT", 18, yTop - 18); sl:SetPoint("TOPRIGHT", -18, yTop - 18); sl:SetHeight(16)
     sl:EnableMouse(true); sl:SetOrientation("HORIZONTAL"); sl:SetMinMaxValues(-1, 1); sl:SetValueStep(0.05); sl:SetObeyStepOnDrag(true)
@@ -1627,7 +1651,7 @@ local function animParamRow(bf, yTop, id, param, onChange)
     local applying = false
     local function show(v)
       if math.abs(v) < 0.04 then val:SetText("still")
-      else val:SetText(string.format("%s %.1fs", v > 0 and "CW" or "CCW", minRev / math.abs(v))) end
+      else val:SetText(string.format("%s %.1fs", v > 0 and posLabel or negLabel, minRev / math.abs(v))) end
     end
     sl:SetScript("OnValueChanged", function(_, v) if not applying then animSet(id, param.key, v); onChange() end; show(v) end)
     local function seek(self)
@@ -1862,7 +1886,7 @@ local function buildPreviewPane(parent)
 
   local cap = newText(pane, FONT.body, 10, MUTE, "CENTER")
   cap:SetPoint("TOP", frame, "BOTTOM", 0, -16); cap:SetPoint("LEFT", 10, 0); cap:SetPoint("RIGHT", -10, 0)
-  cap:SetJustifyH("CENTER"); cap:SetText("Sample of the visible skin. Your clickable hit area stays Edit Mode's size.")
+  cap:SetJustifyH("CENTER"); cap:SetText(PREVIEW_CAPTION_DEFAULT)
   previewCaption = cap   -- RefreshPreview re-anchors it below the construction (below the plate)
 end
 

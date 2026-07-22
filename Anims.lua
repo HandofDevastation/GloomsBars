@@ -90,6 +90,13 @@ end
 -- (Media/art/shine.png) is spun over the icon and clipped to the shape's rim mask
 -- (<key>-rim.png); N comets are phase-spaced 360/N apart and driven by one OnUpdate.
 -- ===========================================================================
+-- All animation modules attach their clip mask with a DEFERRED C_Timer.After(0) because
+-- AddMaskTexture silently fails on a never-rendered texture (§2). To avoid the graphic
+-- flashing UNMASKED for that one render frame (visible on the FIRST trigger of each host),
+-- prime the texture near-invisible (PRIME_ALPHA — non-zero so it still definitely renders),
+-- then attach the mask AND reveal together in the deferred callback.
+local PRIME_ALPHA = 0.02
+
 local SHINE_TEX = GB.MEDIA .. "art\\shine.png"
 local shineInst = {}    -- [host] = { frame, mask, texs, masked, n, w, dir, phase }
 local shineActive = {}  -- set of running instances
@@ -148,18 +155,20 @@ function Shine:Start(host, icon, key, p)
     tex:ClearAllPoints(); tex:SetSize(s, s); tex:SetPoint("CENTER", icon, "CENTER")
     tex:SetVertexColor(color[1], color[2], color[3])
     if cw then tex:SetTexCoord(1, 0, 0, 1) else tex:SetTexCoord(0, 1, 0, 1) end   -- tail trails per motion
-    tex:Show()
+    tex:Show(); tex:SetAlpha(PRIME_ALPHA)   -- prime near-invisible; revealed once the mask binds
   end
   for i = n + 1, #inst.texs do inst.texs[i]:Hide() end
   inst.n = n
   inst.w = w
   inst.frame:Show()
   shineActive[inst] = true; shineDriver:Show()
-  C_Timer.After(0, function()   -- mask after first render (AddMaskTexture fails on a never-rendered texture — §2)
-    if inst.frame:IsShown() then
-      for i = 1, inst.n do
-        local tex = inst.texs[i]
-        if tex and tex:IsShown() and not inst.masked[i] then tex:AddMaskTexture(inst.mask); inst.masked[i] = true end
+  C_Timer.After(0, function()   -- attach the mask + REVEAL after the first render (§2 defers the mask)
+    if not inst.frame:IsShown() then return end
+    for i = 1, inst.n do
+      local tex = inst.texs[i]
+      if tex and tex:IsShown() then
+        if not inst.masked[i] then tex:AddMaskTexture(inst.mask); inst.masked[i] = true end
+        tex:SetAlpha(1)
       end
     end
   end)
@@ -175,3 +184,328 @@ function Shine:Stop(host)
 end
 
 Anims:Register(Shine)
+
+-- ===========================================================================
+-- MODULE: MARCHING LINES — N dashes marching around the shape's rim. The dash
+-- (Media/art/march.png) is a symmetric angular wedge spun over the icon and clipped to
+-- the shape's THIN LINE mask (<key>-line.png — its OWN tight band, NOT the comet's wide
+-- soft <key>-rim; the mask sets the line's radial thickness, so a thin band reads as a
+-- crisp dash and the comet band read as a fat blob). N dashes are phase-spaced 360/N
+-- apart and driven by one OnUpdate, so they read as an evenly-spaced dashed track
+-- marching around any silhouette. Same mechanic as Comet Chase, minus the tail/mirroring
+-- — the dash is symmetric, so it's direction-agnostic.
+-- ===========================================================================
+local MARCH_TEX = GB.MEDIA .. "art\\march.png"
+local marchInst = {}    -- [host] = { frame, mask, texs, masked, n, w, phase }
+local marchActive = {}  -- set of running instances
+
+local marchDriver = CreateFrame("Frame"); marchDriver:Hide()
+marchDriver:SetScript("OnUpdate", function(_, dt)
+  for inst in pairs(marchActive) do
+    inst.phase = (inst.phase + dt * inst.w) % (2 * math.pi)   -- inst.w is SIGNED (spin carries direction)
+    local step = (2 * math.pi) / inst.n
+    for i = 1, inst.n do
+      if inst.texs[i] then inst.texs[i]:SetRotation(inst.phase + (i - 1) * step) end
+    end
+  end
+end)
+
+-- spin is a single SIGNED velocity in [-1,1] (sign = direction, magnitude = speed, 0 =
+-- still); |spin| = 1 is MARCH_MIN_REV sec/revolution. Slower than the comet: a dashed
+-- ring reads best marching gently, and with more dashes each covers less arc per second.
+local MARCH_MIN_REV = 2.2
+local March = {
+  id = "march",
+  label = "Marching Lines",
+  defaults = { color = { 0.8, 0.92, 1 }, count = 8, spin = 0.35 },
+  params = {
+    { key = "color", kind = "color",   label = "Colour" },
+    { key = "count", kind = "range",   label = "Dashes", min = 2, max = 12, step = 1, fmt = "int" },
+    { key = "spin",  kind = "bispeed", label = "March", minRev = MARCH_MIN_REV },
+  },
+}
+
+function March:Start(host, icon, key, p)
+  if not (host and icon and key) then return end
+  local inst = marchInst[host]
+  if not inst then
+    local frame = CreateFrame("Frame", nil, host)
+    frame:SetFrameLevel(host:GetFrameLevel() + 3)   -- above the glow, below the text (+4)
+    inst = { frame = frame, mask = frame:CreateMaskTexture(), texs = {}, masked = {}, phase = 0 }
+    marchInst[host] = inst
+  end
+  local n = math.max(2, math.min(12, math.floor(p.count or 8)))
+  local spin = p.spin; if spin == nil then spin = 0.35 end
+  -- WoW rotation is CCW-positive; negate so positive spin = CLOCKWISE (matches the UI's CW side).
+  local w = -spin * ((2 * math.pi) / MARCH_MIN_REV)   -- signed angular velocity (rad/sec)
+  local color = p.color or { 1, 1, 1 }
+  local s = 1.6 * math.max(icon:GetWidth(), icon:GetHeight())   -- oversize so the spin covers the rim
+  if GB.Skin and GB.Skin.AnchorHandGrown then GB.Skin:AnchorHandGrown(inst.mask, icon, 0) end
+  inst.mask:SetTexture(GB:HandAsset(key, "line"), "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+  for i = 1, n do
+    local tex = inst.texs[i]
+    if not tex then
+      tex = inst.frame:CreateTexture(nil, "OVERLAY")
+      -- BLEND, not ADD: a marching line should be its ACTUAL colour. ADD only adds light
+      -- (washes every tint toward white, can't be deeply saturated, vanishes over a bright
+      -- icon); BLEND paints the true tint over the background. Glows want ADD; a line wants BLEND.
+      tex:SetTexture(MARCH_TEX); tex:SetBlendMode("BLEND")
+      tex:SetSnapToPixelGrid(false); tex:SetTexelSnappingBias(0)
+      inst.texs[i] = tex
+    end
+    tex:ClearAllPoints(); tex:SetSize(s, s); tex:SetPoint("CENTER", icon, "CENTER")
+    tex:SetVertexColor(color[1], color[2], color[3])
+    tex:SetTexCoord(0, 1, 0, 1)   -- symmetric dash: no tail, so no direction-mirroring
+    tex:Show(); tex:SetAlpha(PRIME_ALPHA)   -- prime near-invisible; revealed once the mask binds
+  end
+  for i = n + 1, #inst.texs do inst.texs[i]:Hide() end
+  inst.n = n
+  inst.w = w
+  inst.frame:Show()
+  marchActive[inst] = true; marchDriver:Show()
+  C_Timer.After(0, function()   -- attach the mask + REVEAL after the first render (§2 defers the mask)
+    if not inst.frame:IsShown() then return end
+    for i = 1, inst.n do
+      local tex = inst.texs[i]
+      if tex and tex:IsShown() then
+        if not inst.masked[i] then tex:AddMaskTexture(inst.mask); inst.masked[i] = true end
+        tex:SetAlpha(1)
+      end
+    end
+  end)
+end
+
+function March:Stop(host)
+  local inst = marchInst[host]
+  if inst then
+    inst.frame:Hide()
+    marchActive[inst] = nil
+    if not next(marchActive) then marchDriver:Hide() end
+  end
+end
+
+Anims:Register(March)
+
+-- ===========================================================================
+-- MODULE: SHEEN SWEEP — a bright diagonal bar that slides across the icon FACE (not the
+-- rim). Unlike the rim effects, the bar (Media/art/sheen.png, a plain vertical stripe)
+-- is clipped by the icon's OWN silhouette (<key>-base.png), tilted (SetRotation), scaled
+-- for thickness (SetSize width), and TRANSLATED under the fixed base mask (SetPoint
+-- offset) — so a gleam sweeps the whole face of any shape, with a pause between passes.
+-- Style toggle: Glow = ADD (a light gleam) · Solid = BLEND (a true-colour bar).
+-- ===========================================================================
+local SHEEN_TEX = GB.MEDIA .. "art\\sheen.png"
+local sheenInst = {}    -- [host] = { frame, tex, mask, masked, icon, dir, travel, period, t }
+local sheenActive = {}  -- set of running instances
+
+local SHEEN_TILT = math.rad(20)   -- baked-in lean of the sweep bar
+local SHEEN_SCALE = 1.8            -- texture size vs the icon's long side (oversize to cover when tilted)
+local SHEEN_MIN_PERIOD = 1.0       -- full cycle (sweep + pause) in seconds at |sweep| = 1
+local SHEEN_SWEEP_FRAC = 0.42      -- portion of the cycle that is the actual sweep; the rest is a pause
+
+local sheenDriver = CreateFrame("Frame"); sheenDriver:Hide()
+sheenDriver:SetScript("OnUpdate", function(_, dt)
+  for inst in pairs(sheenActive) do
+    if not inst.ready then
+      -- priming: leave the tiny prime alpha untouched so the texture renders for the
+      -- mask attach (§2); the C_Timer flips ready once the mask is bound.
+    elseif not inst.period then
+      inst.tex:SetAlpha(0)                       -- ~zero speed = no sweep
+    else
+      inst.t = inst.t + dt
+      local ph = (inst.t % inst.period) / inst.period
+      if ph < SHEEN_SWEEP_FRAC then
+        local p = ph / SHEEN_SWEEP_FRAC          -- 0..1 across the sweep
+        inst.tex:SetPoint("CENTER", inst.icon, "CENTER", inst.dir * (-1 + 2 * p) * inst.travel, 0)
+        inst.tex:SetAlpha(1)
+      else
+        inst.tex:SetAlpha(0)                     -- pause between gleams
+      end
+    end
+  end
+end)
+
+-- sweep is a SIGNED velocity in [-1,1]: sign = direction (L/R), magnitude = speed,
+-- 0 = no sweep; |sweep| = 1 is SHEEN_MIN_PERIOD sec/cycle.
+local Sheen = {
+  id = "sheen",
+  label = "Sheen Sweep",
+  defaults = { color = { 1, 1, 0.9 }, width = 1.0, sweep = 0.5, blend = "add" },
+  params = {
+    { key = "color", kind = "color",   label = "Colour" },
+    { key = "width", kind = "range",   label = "Width", min = 0.4, max = 2.0, step = 0.1 },
+    { key = "sweep", kind = "bispeed", label = "Sweep", minRev = SHEEN_MIN_PERIOD, neg = "L", pos = "R" },
+    { key = "blend", kind = "choice",  label = "Style", choices = { { "add", "Glow" }, { "blend", "Solid" } } },
+  },
+}
+
+function Sheen:Start(host, icon, key, p)
+  if not (host and icon and key) then return end
+  local inst = sheenInst[host]
+  if not inst then
+    local frame = CreateFrame("Frame", nil, host)
+    frame:SetFrameLevel(host:GetFrameLevel() + 3)   -- above the glow, below the text (+4)
+    local tex = frame:CreateTexture(nil, "OVERLAY")
+    tex:SetTexture(SHEEN_TEX)
+    tex:SetSnapToPixelGrid(false); tex:SetTexelSnappingBias(0)
+    tex:SetRotation(SHEEN_TILT)
+    inst = { frame = frame, tex = tex, mask = frame:CreateMaskTexture(), masked = false, t = 0 }
+    sheenInst[host] = inst
+  end
+  local dim = math.max(icon:GetWidth(), icon:GetHeight())
+  local width = p.width or 1.0
+  local speed = p.sweep; if speed == nil then speed = 0.5 end
+  local aspd = math.abs(speed)
+  inst.icon = icon
+  inst.dir = (speed >= 0) and 1 or -1
+  inst.travel = 0.85 * dim
+  inst.period = (aspd < 0.04) and nil or (SHEEN_MIN_PERIOD / aspd)
+  inst.t = 0   -- restart the cycle on every (re)trigger so a hover sweeps IMMEDIATELY,
+               -- not after the leftover pause from the last time it ran (the felt "lag")
+  local color = p.color or { 1, 1, 1 }
+  inst.tex:SetSize(SHEEN_SCALE * dim * width, SHEEN_SCALE * dim)     -- width scales thickness only
+  inst.tex:SetVertexColor(color[1], color[2], color[3])
+  -- Glow = ADD (a light gleam; deep colours wash — that's physics). Solid = BLEND (true-colour bar).
+  inst.tex:SetBlendMode(p.blend == "blend" and "BLEND" or "ADD")
+  if GB.Skin and GB.Skin.AnchorHandGrown then GB.Skin:AnchorHandGrown(inst.mask, icon, 0) end
+  inst.mask:SetTexture(GB:HandAsset(key, "base"), "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+  -- Prime near-invisible OFF-icon so the mask can attach (AddMaskTexture fails on a
+  -- never-rendered texture — §2) WITHOUT a visible flash; the driver holds until `ready`,
+  -- then sweeps it under the fixed base mask.
+  inst.ready = false
+  inst.tex:ClearAllPoints(); inst.tex:SetPoint("CENTER", icon, "CENTER", 3 * inst.travel, 0)
+  inst.tex:SetAlpha(PRIME_ALPHA); inst.tex:Show()
+  inst.frame:Show()
+  sheenActive[inst] = true; sheenDriver:Show()
+  C_Timer.After(0, function()   -- attach the mask, then let the driver reveal (kills the 1st-trigger flash)
+    if inst.frame:IsShown() and inst.tex:IsShown() then
+      if not inst.masked then inst.tex:AddMaskTexture(inst.mask); inst.masked = true end
+      inst.ready = true
+    end
+  end)
+end
+
+function Sheen:Stop(host)
+  local inst = sheenInst[host]
+  if inst then
+    inst.frame:Hide()
+    sheenActive[inst] = nil
+    if not next(sheenActive) then sheenDriver:Hide() end
+  end
+end
+
+Anims:Register(Sheen)
+
+-- ===========================================================================
+-- MODULE: SPARKLES — N little twinkles scattered at RANDOM spots on the icon face, each
+-- fading in -> peak -> out then respawning elsewhere. Unlike the looping modules, every
+-- sparkle runs its own randomised lifecycle (position, size, rotation, duration), so the
+-- effect reads as organic glitter rather than a mechanical path. One shared star
+-- (Media/art/sparkle.png) clipped to the icon's own silhouette (<key>-base.png).
+-- ===========================================================================
+local SPARKLE_TEX = GB.MEDIA .. "art\\sparkle.png"
+local sparkleInst = {}    -- [host] = { frame, mask, sparks = { {tex, masked, t, life}, .. }, n, icon, iconW, iconH, base, rate }
+local sparkleActive = {}  -- set of running instances
+
+local SPARK_SIZE_DEFAULT = 0.40  -- default sparkle size (fraction of the icon's long side); live via the Size param
+local SPARK_SPREAD = 0.40  -- placement box half-extent as a fraction of the icon W/H
+local SPARK_LIFE = 0.9     -- base lifecycle (fade in+out) in seconds, before the rate scale
+
+local function frand(a, b) return a + math.random() * (b - a) end
+
+-- Re-roll a sparkle: fresh random spot inside the icon box, size, rotation, duration.
+local function sparkleRespawn(inst, sp)
+  sp.t = 0
+  sp.life = SPARK_LIFE * frand(0.7, 1.3)
+  local sc = inst.base * frand(0.7, 1.2)
+  sp.tex:SetSize(sc, sc)
+  sp.tex:SetRotation(frand(0, math.pi / 2))   -- 4-fold star → a quarter-turn covers every look
+  sp.tex:ClearAllPoints()
+  sp.tex:SetPoint("CENTER", inst.icon, "CENTER",
+    frand(-SPARK_SPREAD, SPARK_SPREAD) * inst.iconW,
+    frand(-SPARK_SPREAD, SPARK_SPREAD) * inst.iconH)
+end
+
+local sparkleDriver = CreateFrame("Frame"); sparkleDriver:Hide()
+sparkleDriver:SetScript("OnUpdate", function(_, dt)
+  for inst in pairs(sparkleActive) do
+    local rate = inst.rate or 1
+    for i = 1, inst.n do
+      local sp = inst.sparks[i]
+      if sp and sp.masked then    -- animate only once masked (per-sparkle prime → reveal, no flash)
+        sp.t = sp.t + dt * rate
+        if sp.t >= sp.life then sparkleRespawn(inst, sp) end
+        sp.tex:SetAlpha(math.sin(math.pi * (sp.t / sp.life)))   -- 0 → peak → 0 twinkle envelope
+      end
+    end
+  end
+end)
+
+local Sparkle = {
+  id = "sparkle",
+  label = "Sparkles",
+  defaults = { color = { 1, 1, 0.95 }, count = 5, size = SPARK_SIZE_DEFAULT, twinkle = 1.0, blend = "add" },
+  params = {
+    { key = "color",   kind = "color",  label = "Colour" },
+    { key = "count",   kind = "range",  label = "Count", min = 1, max = 10, step = 1, fmt = "int" },
+    { key = "size",    kind = "range",  label = "Size", min = 0.15, max = 0.7, step = 0.05 },
+    { key = "twinkle", kind = "range",  label = "Twinkle", min = 0.3, max = 2.5, step = 0.1 },
+    { key = "blend",   kind = "choice", label = "Style", choices = { { "add", "Glow" }, { "blend", "Solid" } } },
+  },
+}
+
+function Sparkle:Start(host, icon, key, p)
+  if not (host and icon and key) then return end
+  local inst = sparkleInst[host]
+  if not inst then
+    local frame = CreateFrame("Frame", nil, host)
+    frame:SetFrameLevel(host:GetFrameLevel() + 3)   -- above the glow, below the text (+4)
+    inst = { frame = frame, mask = frame:CreateMaskTexture(), sparks = {} }
+    sparkleInst[host] = inst
+  end
+  local n = math.max(1, math.min(10, math.floor(p.count or 5)))
+  inst.icon = icon
+  inst.iconW = icon:GetWidth(); inst.iconH = icon:GetHeight()
+  inst.base = (p.size or SPARK_SIZE_DEFAULT) * math.max(inst.iconW, inst.iconH)
+  inst.rate = p.twinkle or 1.0
+  local color = p.color or { 1, 1, 1 }
+  local blend = (p.blend == "blend") and "BLEND" or "ADD"   -- Glow = ADD twinkle; Solid = BLEND true-colour star
+  if GB.Skin and GB.Skin.AnchorHandGrown then GB.Skin:AnchorHandGrown(inst.mask, icon, 0) end
+  inst.mask:SetTexture(GB:HandAsset(key, "base"), "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+  for i = 1, n do
+    local sp = inst.sparks[i]
+    if not sp then
+      local tex = inst.frame:CreateTexture(nil, "OVERLAY")
+      tex:SetTexture(SPARKLE_TEX); tex:SetSnapToPixelGrid(false); tex:SetTexelSnappingBias(0)
+      sp = { tex = tex, masked = false }
+      inst.sparks[i] = sp
+    end
+    sp.tex:SetBlendMode(blend)
+    sp.tex:SetVertexColor(color[1], color[2], color[3])
+    sparkleRespawn(inst, sp)
+    sp.t = math.random() * sp.life   -- stagger initial ages so they don't twinkle in unison
+    sp.tex:Show(); sp.tex:SetAlpha(PRIME_ALPHA)   -- prime near-invisible; masked & revealed by the driver
+  end
+  for i = n + 1, #inst.sparks do inst.sparks[i].tex:Hide() end
+  inst.n = n
+  inst.frame:Show()
+  sparkleActive[inst] = true; sparkleDriver:Show()
+  C_Timer.After(0, function()   -- attach each sparkle's mask after its first render (§2)
+    if not inst.frame:IsShown() then return end
+    for i = 1, inst.n do
+      local sp = inst.sparks[i]
+      if sp and sp.tex:IsShown() and not sp.masked then sp.tex:AddMaskTexture(inst.mask); sp.masked = true end
+    end
+  end)
+end
+
+function Sparkle:Stop(host)
+  local inst = sparkleInst[host]
+  if inst then
+    inst.frame:Hide()
+    sparkleActive[inst] = nil
+    if not next(sparkleActive) then sparkleDriver:Hide() end
+  end
+end
+
+Anims:Register(Sparkle)
