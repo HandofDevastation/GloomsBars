@@ -1,14 +1,172 @@
 # Gloom's Bars — Session Handoff
-**Last updated: end of session 11 (2026-07-21). ⇒ Read SESSION 11 FIRST. It (A) COMPLETED the 8-animation
-catalog, (B) built PLATE MODE (the North Star "plate" look) for the 2:1 portrait shapes, and (C) landed several
-fixes — BUT ended with 3 KNOWN BUGS (see the ⚠ list). Everything is committed. Sessions 2–10 remain the valid
-foundation; the FROZEN docs [SHAPE-CATALOG.md](SHAPE-CATALOG.md) / [EFFECTS-MATRIX.md](EFFECTS-MATRIX.md) /
-[ART-SPEC.md](ART-SPEC.md) still apply.**
+**Last updated: end of session 12 (2026-07-22). ⇒ Read SESSION 12 FIRST. A very high-throughput,
+fully-QA'd session (17 commits, everything verified in-game unless noted): the 3 session-11 bugs FIXED,
+plate Stage 4 COMPLETE, plate dim-on-cooldown (a NEW Midnight duration-object pattern — proven), the
+effects-matrix gaps CLOSED (new Highlight glow trigger), charge-count + countdown-number text styling,
+empty-slot dim/hide, a big preview-pane upgrade (13 state chips + linked captions + live cast drain),
+ALL text styling consolidated into one Text section, and the dormant SDF glow code removed. Sessions
+2–11 remain the valid foundation; the FROZEN docs [SHAPE-CATALOG.md](SHAPE-CATALOG.md) /
+[EFFECTS-MATRIX.md](EFFECTS-MATRIX.md) / [ART-SPEC.md](ART-SPEC.md) still apply.**
 
-## ▶ FIRST THING NEXT SESSION (session 12): fix the 3 KNOWN BUGS in SESSION 11 → "⚠ KNOWN BUGS", then finish
-PLATE Stage 4 (preview-pane mirror + keybind-in-plate). HEAD = `d194637` (session-11 WIP commit). Jason is
-switching models (Fable) to tackle the bugs fresh — the prior attempts over-complicated; keep fixes SMALL and
-verify ONE at a time in-game. Nothing is mid-flight in code (all committed), but 3 behaviours are still wrong.
+## ▶ FIRST THING NEXT SESSION (session 13): nothing is broken or mid-flight — everything committed + QA'd.
+The open items are SCOPE CALLS for Jason (ask which he wants): (a) **Name-text override** (the macro-name
+label — becomes a 4th chip in the Text section, mirror the count block + an ApplyNameOverride in Skin.lua);
+(b) **Flyout member skinning** (the popup buttons of flyout actions — the LAST square art anywhere; a new
+button set beyond the v1 bars); (c) the two Config stubs **Bar layout** / **Apply to bars**; (d) possibly a
+**release tag** (last shipped v0.2.0 — sessions 9–12 have landed since; tag push → packager → WoWUp).
+Watch-items from this session: the green equipped-item border fix (bug #2) had no deterministic repro —
+Jason is keeping an eye out; same for finish-flash behaviour over long rotations.
+
+## ★★★ SESSION 12 (2026-07-21→22) — BUGS FIXED + PLATE COMPLETE + BIG QoL/PREVIEW WAVE. ALL committed + QA'd.
+Commits, in order: `8498c4c` (the 3 bug fixes), `2de95ad` (dim-on-cooldown), `f78de4f` (Stage 4a keybind),
+`67845be` (Stage 4b preview plate), `634d8da` (effects-matrix gaps + Highlight trigger), `dcae0e5` (charge-count
+styling), `e5bf43d` (SDF cleanup), `74c62c8` (empty slots), `8b597e0`+`f7d7d5b` (preview keybind chip built then
+REVERTED — Jason didn't want it), `adcbddb` (13 preview chips), `6de407c`/`91e99c9`/`f3c632b`/`e63c9f2` (caption
+evolution), `dc1db56` (spacing + cast-drain preview + countdown controls), `4173b77`/`bfc2174`/`802d967`
+(cast-complete preview burst added → fixed → REMOVED per Jason), `8104465` (Text consolidation), `2b36c72`
+(preview CD number hidden).
+
+### PART A — The 3 session-11 bugs, fixed (`8498c4c`):
+1. **Finish flash GCD false-fires.** Root cause: chained casts keep `gbRunning` true so `gbStart` goes stale —
+   after ~2s of rotation every button's "elapsed" clears `FLASH_MIN_CD` and a GCD boundary flashed whole bars.
+   Fix (the handoff's suspected one): **frame-batch the flash decisions** — `queueFinishFlash` collects
+   qualifying buttons, resolves one frame later (C_Timer.After(0)); ≥`FLASH_GCD_GROUP` (3) together = a GCD
+   wave → suppress the whole batch (a real CD ends on ONE button; a GCD on MANY in the same frame). No secrets.
+2. **Green equipped-item border reappearing.** Root cause FOUND in client source (`ActionBarActionButtonMixin:
+   Update()` ~line 596): `border:SetVertexColor(0, 1, 0, 0.5)` — **on a Texture the 4th SetVertexColor arg IS
+   the alpha**, silently undoing our `SetAlpha(0)` on every button refresh (target swap, page flip — far more
+   paths than the reassert-frame events). Fix: one-time per-button post-hook on `Border:SetVertexColor`
+   re-asserting alpha 0 while the skin is enabled (in `Suppress`). ⚠ No deterministic repro — Jason watching.
+3. **Plate cooldown ellipse (Jason's design call: icon-square-only).** `AlignCooldowns` hand path now anchors
+   all three cooldowns to the **ICON** (= the square half in plate mode; identical to before otherwise since
+   `constructRef` returned the icon in non-plate). NEW half-swipe art: `<key>-swipe-t/-b.png` for the five 2:1
+   shapes (`half_swipes()` in generate-hand-swipes.py — crops the icon half of the base; 256² pow2, no
+   pre-distortion needed; -t = icon-on-top silhouette). `handSwipePart()` picks by `plateIconSide`; folded into
+   `applyShapeArt`'s artKey so side flips re-set it. **The plate gradient moved to its OWN frame at btn+1**
+   (`rec.plategradFrame` + a DEDICATED same-frame mask via buildMask — cross-frame mask attach is unproven §2):
+   Blizzard's cooldowns are `useParentLevel` (btn+0), so the gradient now draws ABOVE the sweep and the sweep's
+   hard midline edge hides under the opaque end of the fade (Jason's "no weird bottom edge" ask). Still below
+   decor (+2) / cast fill (+3) / text (+4).
+
+### PART B — Plate dim-on-cooldown (`2de95ad`) — ★ a NEW PROVEN PATTERN (verified in-game):
+The plate colour (fill + gradient) dims to `PLATE_DIM` (0.45×) while the action's REAL (non-GCD) cooldown runs.
+**We may not READ the cooldown clock (secret), but Midnight has a sanctioned indirect route:** a hidden per-button
+proxy Cooldown widget is fed `C_ActionBar.GetActionCooldownDuration(action, ignoreGCD=true)` (returns a
+LuaDurationObject) via `proxy:SetCooldownFromDurationObject(dur)` (clearIfZero defaults true), and we react to
+the WIDGET's rendered lifecycle: `IsShown()` sync after each feed + OnCooldownDone/OnHide → undim. No secret
+value ever touches Lua — same react-to-rendered-output principle as the usability tints. Both calls pcall-wrapped
+(fail soft). Refreshed from the existing `ActionButton_UpdateCooldown` post-hook. `rec.plateDim` → ApplyDecor
+paints with the multiplier. Config: Plate → **"Dim on cooldown"** (`plate.dimCD`, default off).
+**NOTE:** this proxy pattern could someday replace bug #1's GCD heuristic (fire the flash from the proxy's
+OnCooldownDone — GCD-proof by construction). Not done — the heuristic is QA'd; don't churn unless it misbehaves.
+(Also checked: Blizzard does NOT desaturate icons on cooldown — only level-link — so there was no rendered-output
+signal to react to; hence the proxy. `duration:IsZero()` is NOT flagged ReturnsNeverSecret — do NOT branch on it.)
+
+### PART C — Plate Stage 4 complete:
+- **4a (`f78de4f`): keybind-in-plate.** `ApplyHotkeyOverride`: zone "extension" + `plateActive()` → the hotkey
+  centres in the half OPPOSITE the icon (`CENTER, btn, ±pw/2` — the platefill's math). Offsets still nudge.
+- **4b (`67845be`): the Config preview mirrors plate mode.** Key move: `sref` = the SHAPE reference rect
+  (= previewFrame in plate mode — the full 2:1 IS the frame — else previewIcon; they're geometrically identical
+  non-plate, so all other shapes render unchanged). The icon shrinks to a pw×pw square in the chosen half
+  (square TexCoord crop); plate fill + midline gradient render via the plate pool (masked by sref-anchored
+  masks); handAnchor/border/outer/inner/anims/flash all re-point at sref; previewCD keeps tracking previewIcon
+  (the square) with the half-swipe. `Anims:PreviewReconcile` receives the plate-aware ref (bars use ConstructRef).
+
+### PART D — Effects-matrix gaps closed (`634d8da`) + a NEW glow trigger:
+- **`SpellHighlightTexture` → the "highlight" trigger.** ★ LEARNED: it's NOT a combat suggestion — it's the
+  **spellbook/talent-hover locator** ("this spell sits HERE on your bars"; drivers: SpellBookItem OnEnter +
+  ClassTalentButton ShowActionBarHighlights → UpdateOnBarHighlightMarksBySpell). Blizzard pulses a square via
+  `SharedActionButton_RefreshSpellHighlight(button, shown)` with a LOOPING Alpha anim (0→1→0) — a one-shot
+  alpha-0 LOSES to it, so the post-hook **Stops the anim + Hides the texture**, then routes the state to
+  `SetSource(btn, "highlight", shown)`. Priority: just below proc. Pulses. Seeded in Core's trigger seeding
+  (warm yellow); gets the Glows-matrix row + Animations chip for free. QA'd via spellbook hover.
+- **`NewActionTexture` + `CooldownFlash` (GCD flipbook):** both Show/Hide-driven → durable alpha-0 in
+  `Suppress`, restored on disable. **Flyout member background stays deferred** (outside the v1 bar set).
+
+### PART E — Text styling: two new engines + ONE home for all of it:
+- **Charge count (`dcae0e5`):** `ApplyCountOverride` (styleData.count) — zones corner (Blizzard's spot) /
+  center / extension (plate half, keybind math), offsets, LSM font, size, colour; pristine stash + exact
+  restore. Applied from ApplyDecor — ★ Blizzard re-anchors Count ONLY in SmallActionButtonMixin's OnLoad
+  (UpdateCount just SetText()s), so NO re-assert hook is needed.
+- **Countdown numbers (`dc1db56`):** `styleCooldownText` (styleData.cdtext) — show/hide + colour/size/font/
+  offsets for the Cooldown widget's number. ★ The widget creates its FontString LAZILY on the first visible
+  countdown (find via GetRegions; one-frame retry), and Blizzard re-drives the hidden state from the
+  countdownForCooldowns CVar callback → re-asserted from the UpdateCooldown post-hook + a hook on
+  `ActionButton_UpdateCooldownNumberHidden`. **cdtext ABSENT = never touch anything** (the game CVar rules).
+- **Consolidation (`8104465`, Jason: "scattered and nonintuitive"):** the **Text section** now has a CHIP ROW
+  (Keybind · Charge count · Countdown — the Animations-section pattern); each element's block shows below and
+  the section resizes (`bf:SetHeight` + `relayout()`). The standalone Charge-count section is GONE; the
+  COUNTDOWN block moved OUT of Cooldown & availability. A future Name override = a 4th chip.
+
+### PART F — Empty slots (`74c62c8`): dim or hide slots with no action.
+Config section "Empty slots": **Normal / Dim / Hidden** + a dim-opacity slider (`db.emptySlots` /
+`db.emptySlotAlpha`). **Alpha-only on the secure button** (`btn:SetAlpha` — NOT a protected operation; the
+pure-skin wall holds — we never Show/Hide). "Empty" = reacting to rendered output: Blizzard's Update() Hide()s
+the icon when a slot has no action → `icon:IsShown()` is the signal, re-checked in a per-button `Update`
+post-hook. ★ `ACTIONBAR_SHOWGRID`/`HIDEGRID` (still live in this build) lift the treatment while an action is
+on the cursor, so drop targets stay visible. Restored on disable.
+
+### PART G — SDF cleanup (`e5bf43d`): −259 lines + 4 assets.
+★ KEY FACT: `db.handShape` is ALWAYS seeded (Core ADDON_LOADED, legacy-shape migration) → `handKey()` is never
+nil → the SDF soft-bloom fallback in Glows:Refresh was UNREACHABLE. Removed: GetGlow + the `glows` pool +
+anchorGlow/currentGlowTex/glowScale/tintFor + dead public setters ApplyStyle/SetColor (zero callers) + the
+whole session-8 bake-off harness (`/gb glowtest|glowstyle|handglow`, ForceTest/SetTestArt/HandPreview, the
+`test` source, gbtest-glow-*.png, generate-art.py's glow_A/B/C+gen_test). Refresh is now unconditionally the
+multi-part hand path. **KEPT deliberately:** GB.SHAPES + Media/masks + the per-shape ring/swipe SDF art — still
+wired as live texture fallbacks in shared paths (applyShapeArt rings, preview fallbacks); removing them is a
+bigger, riskier pull for a dedicated pass.
+
+### PART H — Preview-pane upgrade (Jason drove the design; several iterations):
+- **13 state chips (`adcbddb`):** + Highlight/Assist/Cast/Channel (real multi-part glow per trigger;
+  assist+highlight breathe — PREVIEW_PULSING mirrors the bars) and Unusable/Out of mana/Out of range (tint the
+  sample icon via the SAME db fields computeIconTint reads; range = desaturate+wash). 2×7 grid;
+  PREVIEW_CENTER_Y −290. Every Glows row + Animations trigger flips the preview to its own chip.
+- **Captions (`6de407c`→`e63c9f2`):** each state = { bold Semibold HEADING, Jason's descriptive prose, a bold
+  **"Styled in:" bullet list** of clickable section links }. Links = `|Hgbsec:<title>|h` in caret orange on a
+  mouse-enabled `SetHyperlinksEnabled` frame → `C:OpenSection(title)`, then **re-set the preview state**
+  (some sections hijack it on open — Glows s.refresh → proc). Muted notes mark partial coverage ("Cast &
+  channel — fill & bursts", "Text — countdown numbers"). ALL left-aligned (Jason: you can't centre a bullet
+  list). ★ FontStrings can't mix fonts inline → the bold state name is its own heading line.
+- **Cast/channel drain preview (`dc1db56`):** a looping 2.4s fake fill (previewCastFillFrame) mirroring
+  CastFillOnUpdate's geometry exactly — cast fills up / channel drains, all 4 castDrainDir values, colour/alpha
+  live from db; fresh same-frame mask per refresh + a first-show one-frame retry (§2 never-rendered quirk).
+  Cast & channel fill setters poke the Cast chip so edits animate live.
+- **Cast-complete burst: REMOVED (`802d967`).** Tried twice (`4173b77` shared burst player; `bfc2174` fixed it
+  from legacy-SDF-square art to the hand `-outer` + hand anchor — which DID fix the finish-flash preview, kept).
+  ★ But the REAL completion burst is **Blizzard's EndBurst animation replayed inside their widget** — a
+  lookalike from our flash player reads wrong. Jason's rule: **better no preview than an unfaithful one.**
+  (The cooldown finish-flash preview stays — it mirrors OUR OWN bar animation 1:1.)
+- **Preview keybind chip: REVERTED (`f7d7d5b`).** Jason: bars show the real thing; not worth preview drift.
+  Same reasoning killed the preview countdown number (`2b36c72` — SetHideCountdownNumbers on previewCD).
+
+### ★★ HARD-WON LEARNINGS this session (do NOT rediscover):
+- **`SetVertexColor(r,g,b,a)` on a Texture SETS ITS ALPHA** — Blizzard's equipped-border tint silently undid
+  our alpha-0 suppression. Any alpha-0 suppression of a texture Blizzard SetVertexColor's needs a hook.
+- **Button cooldowns are `useParentLevel` (btn+0)** — a frame at btn+1 draws OVER the swipe (the plate
+  gradient trick). TextOverlayContainer +4, cast fill +3, decor +2 unchanged.
+- **GCD wave heuristic:** a GCD ends on MANY buttons in the SAME frame; a real cooldown on ONE. Frame-batching
+  OnCooldownDone (resolve via C_Timer.After(0), threshold 3) separates them with zero secret reads.
+- **The Midnight duration-object proxy pattern WORKS in combat** (Part B) — the sanctioned way to know "a real
+  cooldown is running" without reading the clock. `GetActionCooldownDuration(action, ignoreGCD)` +
+  `SetCooldownFromDurationObject` + widget lifecycle. pcall both.
+- **SpellHighlight is the spellbook/talent locator pulse** (not combat); its looping Alpha anim beats one-shot
+  alpha-0 → Stop()+Hide() in the `SharedActionButton_RefreshSpellHighlight` post-hook.
+- **Blizzard never re-anchors Count at runtime** (only SmallActionButtonMixin OnLoad) → count override needs no
+  hook. The countdown FontString IS lazy + CVar-driven → needs both hooks (Part E).
+- **`db.handShape` is always seeded** → the SDF fallbacks were dead; `handKey()` nil-paths can be pruned.
+- **Preview honesty is a Jason design principle:** preview elements must mirror the ENGINE's exact art +
+  anchors (the burst drew legacy SDF art because the preview player predated hand shapes); if a Blizzard
+  internal can't be reproduced faithfully, OMIT it rather than fake it; don't render text the preview can't
+  style truthfully (keybind/count/countdown chips all removed for this reason).
+- **Jason interrupted a design I was about to build and supplied his own** (caption links → his bullet-list
+  spec). When he starts "Wait—", STOP and let him finish before writing code.
+
+### ✔ CLOSED / DROPPED this session:
+- **Coexistence QA: CLOSED** — Jason's full addon ecosystem (ArcUI, EnhanceQoL, etc.) was enabled THE WHOLE
+  TIME with zero issues; the handoff's standing "re-test with addons enabled" item is done.
+- **Per-trigger glow spread/softness: DROPPED by Jason** — obsolete now that the per-trigger matrix exists.
+- **Out-of-range is the ONLY state that touches keybind text** (Blizzard's range indicator colours it red;
+  we recolour to match). OOM/unusable tint the icon only. (Answered for Jason.)
 
 ## ★★★ SESSION 11 (2026-07-21) — ANIMATION CATALOG COMPLETE (8/8) + PLATE MODE (2:1 shapes) + fixes. 3 BUGS OPEN.
 A very long session. Commits: `8dc1349` (marching/sheen/sparkles), `cd5c2d1` (breathe/burst/rimflash/radar),
@@ -544,6 +702,7 @@ probes), `Skin.lua` (skin + decoration engine), `Glows.lua` (proc glow engine),
 | 8 | Cooldown sweep + cast fill/burst + finish flash trace the hand silhouette | ✅ VERIFIED (session 9) — hand `-swipe` generated from the base; fill/burst mask from `-base` |
 | 9 | Per-trigger glow matrix (colour/opacity/layers/enable per state) + flash-square fix | ✅ VERIFIED IN-GAME (session 10) — GUI-configured; disabled trigger drops to next; no square on auto-attack |
 | 10 | Per-trigger ANIMATION SYSTEM: Comet Chase rides the winning glow; masked rim-chase on any shape; per-state independent | ✅ VERIFIED IN-GAME (session 10) — GUI + preview; SetRotation under a fixed rim mask; one animation per state |
+| 11 | Midnight duration-object proxy: GetActionCooldownDuration(ignoreGCD) → SetCooldownFromDurationObject → react to widget lifecycle = a combat-safe "real cooldown running" signal, no secret reads | ✅ VERIFIED IN-GAME (session 12) — drives plate dim-on-cooldown; GCDs never trigger it |
 
 ## Hard-won LEARNINGS (verified — do NOT rediscover; details in API-NOTES)
 - **Masks**: fresh masks render; editing a live mask's texture never re-renders; runtime
