@@ -2317,6 +2317,9 @@ local function buildPreviewPane(parent)
   previewIcon = frame:CreateTexture(nil, "ARTWORK"); previewIcon:SetAllPoints()
   previewCD = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate"); previewCD:SetAllPoints(previewIcon)
   previewCD:SetDrawEdge(false); previewCD:SetDrawBling(false); previewCD:Hide()
+  -- No countdown number on the preview sweep: it ignores the Text→Countdown
+  -- styling and the enlarged preview makes its size/position wrong anyway (Jason).
+  if previewCD.SetHideCountdownNumbers then previewCD:SetHideCountdownNumbers(true) end
   previewRing = frame:CreateTexture(nil, "OVERLAY"); previewRing:SetPoint("TOPLEFT", -4, 4); previewRing:SetPoint("BOTTOMRIGHT", 4, -4)
   previewRing:SetBlendMode("ADD"); previewRing:Hide()
   previewBorder = frame:CreateTexture(nil, "BACKGROUND", nil, -2)   -- behind the icon; peeks out as the border
