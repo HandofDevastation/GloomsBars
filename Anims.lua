@@ -53,7 +53,8 @@ function Anims:Reconcile(btn, triggerKey, trigger)
   if not st then st = {}; activeState[btn] = st end
   if st.key == triggerKey then return end
   st.key = triggerKey
-  local icon = btn.icon or btn.Icon
+  -- In plate mode the animation spans the full 2:1 plate (ConstructRef), not the half icon.
+  local icon = (GB.Skin and GB.Skin.ConstructRef and GB.Skin:ConstructRef(btn)) or btn.icon or btn.Icon
   local key = GB.db and GB.db.handShape
   for _, id in ipairs(self.order) do
     local mod = self.modules[id]

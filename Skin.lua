@@ -261,6 +261,27 @@ end
 -- (icon + extension) with the same math the overlays use.
 function Skin:AnchorOverlay(tex, icon, ratio, extraPx) return AnchorConstruction(tex, icon, ratio, extraPx) end
 
+-- The reference rect an OVERLAY (glow / cooldown / cast / animation) should span. In plate
+-- mode it's the full-2:1 plateRect (so overlays trace the whole plate, not the half-height
+-- square icon); otherwise the icon. plateRect exists once ApplyDecor has run in plate mode.
+local function constructRef(btn, icon)
+  icon = icon or btn.icon or btn.Icon
+  if plateActive() and icon then
+    local rec = records[btn]
+    local pw = icon:GetWidth()
+    if rec and pw and pw > 0 then
+      -- Create + size the plate rect ON DEMAND so it's ready for ANY overlay that asks,
+      -- regardless of call order (AlignCooldowns runs before ApplyDecor). W×2W, centred.
+      rec.plateRect = rec.plateRect or CreateFrame("Frame", nil, btn)
+      rec.plateRect:SetSize(pw, pw * 2)
+      rec.plateRect:ClearAllPoints(); rec.plateRect:SetPoint("CENTER", btn, "CENTER", 0, 0)
+      return rec.plateRect
+    end
+  end
+  return icon
+end
+function Skin:ConstructRef(btn) return constructRef(btn, btn.icon or btn.Icon) end
+
 -- Public: the glow art matching the CURRENT construction. Normally the shape's
 -- own glow; but in continuous-OFF mode the construction is a rounded icon on a
 -- SQUARE plate, so a fully-rounded glow floats off the plate — pick the MIXED-
@@ -521,6 +542,9 @@ local function PlayEndBurstRed(f)
   end
 end
 
+-- Set by styleCast to the button whose cast anim just fired — the ONLY button that should
+-- drain (UnitCastingInfo is global, so the fill frames can't tell casts apart on their own).
+local castCurrentBtn
 local function CastFillOnUpdate(f, elapsed)
   if f.blizzFill then f.blizzFill:SetAlpha(0) end
   if f.innerGlow then f.innerGlow:SetAlpha(0) end   -- hand shape: shaped glow replaces the rounded-square inner glow
@@ -538,25 +562,27 @@ local function CastFillOnUpdate(f, elapsed)
     local _, _, _, hs, he = UnitChannelInfo("player")
     if hs then s, e, channel = hs, he, true end
   end
-  if not (s and e and e > s) then
-    -- Cast ended: clear the shaped casting glow (success or cancel — the burst,
-    -- below, is a separate one-shot).
-    if f.gbBtn and GB.Glows and GB.Glows.SetCast then GB.Glows:SetCast(f.gbBtn, nil) end
-    -- Cast ended BEFORE completing (interrupted/cancelled)? Replay Blizzard's real
-    -- completion burst, red. A clean finish (lastP ≈ 1) does nothing here — its own
-    -- (gold) EndBurst already played.
-    if f.lastP and f.lastP < 0.85 and not f.flashed then
-      f.flashed = true
-      PlayEndBurstRed(f)
+  -- UnitCastingInfo is GLOBAL — it can't tell which button's spell is casting. Gate the
+  -- drain on the CURRENT caster (castCurrentBtn, set in styleCast when THIS button's cast
+  -- anim fired); else a button still in its 1.5s post-cast grace re-drains to your NEXT
+  -- cast → the "channel drain on multiple buttons" bug.
+  local mine = (f.gbBtn == castCurrentBtn) and s and e and e > s
+  if not mine then
+    if f.draining then
+      -- THIS button's cast just ended (finished/cancelled, or another button took over):
+      -- clear its shaped glow; if interrupted (lastP < ~1) replay the red completion burst
+      -- (a clean finish already showed its own gold EndBurst).
+      f.draining = false
+      if f.gbBtn and GB.Glows and GB.Glows.SetCast then GB.Glows:SetCast(f.gbBtn, nil) end
+      if f.lastP and f.lastP < 0.85 and not f.flashed then f.flashed = true; PlayEndBurstRed(f) end
     end
     f.tex:Hide()
-    -- Keep suppressing Blizzard's fill + interrupt square for a grace window (the
-    -- cast frame itself is hidden by the EndBurst OnFinished, so the burst plays
-    -- through fully regardless of its speed).
+    -- Grace window: keep suppressing Blizzard's fill/interrupt square while the burst plays.
     f.grace = (f.grace or 1.5) - (elapsed or 0)
     if f.grace <= 0 then f.lastP, f.flashed = nil, nil; f:Hide() end
     return
   end
+  f.draining = true
   f.grace, f.flashed = nil, nil
   local p = (GetTime() - s / 1000) / ((e - s) / 1000)
   if p < 0 then p = 0 elseif p > 1 then p = 1 end
@@ -581,6 +607,7 @@ local function styleCast(btn, rec, icon, castType)
   local cast = btn.SpellCastAnimFrame
   if not cast then return end
   local ext = ExtensionHeight(icon)
+  local ref = constructRef(btn, icon)   -- full 2:1 plate in plate mode; else the icon
   -- Cast fill spans the whole construction, so in continuous-OFF it needs the
   -- mixed-corner mask (rounded icon end, square plate end) to hug the square plate
   -- — otherwise it draws rounded bottom corners floating off the plate.
@@ -597,7 +624,7 @@ local function styleCast(btn, rec, icon, castType)
     local slot = rec.castBurst or {}; rec.castBurst = slot
     if burst.EndMask and not slot.blizzRemoved then burst.GlowRing:RemoveMaskTexture(burst.EndMask); slot.blizzRemoved = true end
     if slot.mask then burst.GlowRing:RemoveMaskTexture(slot.mask) end
-    slot.mask = buildMask(burst, icon, ext, src)
+    slot.mask = buildMask(burst, ref, ext, src)
     burst.GlowRing:AddMaskTexture(slot.mask)
     local cc = (GB.db and GB.db.castCompleteColor) or { 1, 0.9, 0.5 }
     burst.GlowRing:SetVertexColor(cc[1], cc[2], cc[3])
@@ -617,9 +644,9 @@ local function styleCast(btn, rec, icon, castType)
   -- The fill is a DRAINING rectangle, so the frame must stay icon-sized (drains over
   -- the icon height); the mask (hand base via buildMask → hgAnchor) does the shaping.
   -- (Do NOT hgAnchor the frame — that's the 2x hand-canvas size and would drain over 2x.)
-  AnchorConstruction(f, icon, GROW_RATIO)
+  AnchorConstruction(f, ref, GROW_RATIO)      -- span the full plate in plate mode (ref); else the icon
   if f.mask then f.tex:RemoveMaskTexture(f.mask) end
-  f.mask = buildMask(f, icon, ext, src)       -- fresh aspect pill mask, clips the tint to the shape
+  f.mask = buildMask(f, ref, ext, src)        -- fresh shape mask, clips the tint to the silhouette
   f.tex:AddMaskTexture(f.mask)
   local col = (GB.db and GB.db.castFillColor) or { 1, 0.85, 0.4 }
   local a = (GB.db and GB.db.castFillAlpha) or 0.55
@@ -633,7 +660,8 @@ local function styleCast(btn, rec, icon, castType)
   -- the one-shot in StyleCastInnerGlow alone leaves a rounded-square overlay).
   f.innerGlow = hk and cast.Fill and cast.Fill.InnerGlowTexture or nil
   f.interrupt = btn.InterruptDisplay               -- and Blizzard's red square (we replay EndBurst instead)
-  f.grace, f.lastP, f.flashed, f.bursting = nil, nil, nil, nil   -- fresh cast (clear prior interrupt state)
+  f.grace, f.lastP, f.flashed, f.bursting, f.draining = nil, nil, nil, nil, nil   -- fresh cast
+  castCurrentBtn = btn                        -- THIS button is the current caster (gates the drain)
   f:Show()                                    -- OnUpdate polls the live cast/channel + hides at the end
 end
 
@@ -756,14 +784,7 @@ local function ApplyDecor(btn)
   -- Plate mode routes the SHAPE mask to a full-2:1 construction rect (plateRect), so a
   -- SQUARE icon (only half the height) doesn't squish the silhouette; the same mask then
   -- clips BOTH the icon and the plate fill, each showing only in its own half.
-  local shapeRef = icon
-  if plate then
-    rec.plateRect = rec.plateRect or CreateFrame("Frame", nil, btn)
-    local pw = icon:GetWidth()
-    rec.plateRect:SetSize(pw, pw * 2)
-    rec.plateRect:ClearAllPoints(); rec.plateRect:SetPoint("CENTER", btn, "CENTER", 0, 0)
-    shapeRef = rec.plateRect
-  end
+  local shapeRef = constructRef(btn, icon)   -- plateRect (create-on-demand) in plate mode; else icon
   local maskSrc, maskKey = maskPlan(icon, maskExt)
   maskKey = maskKey .. (continuous and "|c1" or "|c0") .. (plate and "|plate" or "")
   if rec.mask and rec.maskKey == maskKey then
@@ -1057,9 +1078,10 @@ local function AlignCooldowns(btn)
   for _, cd in ipairs({ btn.cooldown, btn.lossOfControlCooldown, btn.chargeCooldown }) do
     if cd then
       if hk then
+        local ref = constructRef(btn, icon)   -- full 2:1 plate in plate mode; else the icon
         cd:ClearAllPoints()
-        cd:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0)
-        cd:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
+        cd:SetPoint("TOPLEFT", ref, "TOPLEFT", 0, 0)
+        cd:SetPoint("BOTTOMRIGHT", ref, "BOTTOMRIGHT", 0, 0)
       else
         AnchorConstruction(cd, icon, GROW_RATIO, 0.75)
       end
@@ -1101,12 +1123,13 @@ function Skin:SetFinishFlashColor(c) if GB.db then GB.db.finishFlashColor = c en
 -- ---------------------------------------------------------------------------
 -- Finish flash — OUR OWN shape-masked burst when a real cooldown ends (replaces
 -- Blizzard's square bling, which can't follow a non-square shape). Fired from the
--- Cooldown's OnCooldownDone script (a plain event — never reads secret timing).
--- The GCD (~1.5s) also fires OnCooldownDone, so it's filtered by the GAME CLOCK:
--- a SetCooldown hook stamps rec.cdStart = GetTime() (we ignore the secret duration
--- arg), and we only flash when the elapsed wall-time clears FLASH_MIN_CD. The
--- flash reuses the shape's soft glow bloom (already shape-following), tinted +
--- anchored fresh each play so it tracks the live shape / size / construction.
+-- Cooldown finish flash. The GCD also fires OnCooldownDone, so it's filtered by the GAME
+-- CLOCK: a SetCooldown hook stamps gbStart = GetTime() and we flash only when the elapsed
+-- wall-time clears FLASH_MIN_CD. The cooldown DURATION is a protected/secret value —
+-- comparing it taints (confirmed in-game) — so we never read it. OnCooldownDone also
+-- CLEARS gbStart, so a new cooldown racing in at a GCD boundary must re-stamp instead of
+-- inheriting a stale start that spanned several GCDs (which false-flashed whole rotations).
+-- The flash reuses the shape's soft glow bloom, tinted + anchored fresh each play.
 -- ---------------------------------------------------------------------------
 local FLASH_MIN_CD = 2.0        -- seconds of real cooldown below which we skip (≈ GCD)
 local FLASH_DURATION = 0.45
@@ -1123,25 +1146,24 @@ local function playFinishFlash(btn)
   rec.flashTex:SetVertexColor(c[1], c[2], c[3])
   -- Hand shape: the outer glow art's silhouette maps to the icon (bloom in the
   -- margin), and the burst's scale-out expands it. Else the SDF construction anchor.
-  if hk then hgAnchor(rec.flashFrame, icon, 0)
+  if hk then hgAnchor(rec.flashFrame, constructRef(btn, icon), 0)   -- full 2:1 plate in plate mode
   else AnchorConstruction(rec.flashFrame, icon, (FLASH_SCALE - 1) / 2) end
   rec.flashFrame:SetAlpha(1)
   rec.flashAnim:Stop(); rec.flashAnim:Play()
 end
--- Hook ONE cooldown frame for the flash. Timing lives on the cd frame (gbStart/
--- gbRunning) so the normal + charge cooldowns each keep their own clock. We stamp
--- the GAME clock, never the (secret) duration; SPELL_UPDATE_COOLDOWN re-runs
--- SetCooldown with the SAME values whenever ANY other ability fires, so gbRunning
--- ignores those re-sets until OnCooldownDone clears it (else the timer resets and
--- the GCD filter breaks).
+-- Hook ONE cooldown frame for the flash. SetCooldown records whether THIS cooldown is a
+-- real one (duration > a GCD); OnCooldownDone flashes only if so. Reacting to the length
+-- Blizzard draws sidesteps the old wall-clock timer's race at GCD boundaries (which
+-- false-flashed whole rotations). Normal + charge cooldowns each keep their own flag.
 local function hookFlashCooldown(btn, cd)
   if not (cd and cd.HookScript) then return end
   cd:HookScript("OnCooldownDone", function()
     local elapsed = cd.gbStart and (GetTime() - cd.gbStart)
-    cd.gbRunning = false
+    cd.gbRunning, cd.gbStart = false, nil   -- clear: a new cooldown must re-stamp (kills the
+                                            -- GCD-boundary race where a stale start false-flashed)
     if elapsed and elapsed >= FLASH_MIN_CD then playFinishFlash(btn) end
   end)
-  hooksecurefunc(cd, "SetCooldown", function()
+  hooksecurefunc(cd, "SetCooldown", function()   -- no args read → the secret duration is never touched
     if not cd.gbRunning then cd.gbStart = GetTime(); cd.gbRunning = true end
   end)
 end

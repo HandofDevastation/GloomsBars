@@ -223,7 +223,8 @@ local function applyHandGlow(btn, tint, pulse, peak, layers)
   if not outerArt then return false end
   local hg = getHandGlow(btn)
   if not hg then return false end
-  anchorHandGlow(hg, btn.icon or btn.Icon)
+  -- In plate mode the glow spans the full 2:1 plate (ConstructRef), not the half-height icon.
+  anchorHandGlow(hg, (GB.Skin and GB.Skin.ConstructRef and GB.Skin:ConstructRef(btn)) or (btn.icon or btn.Icon))
   hg.outer:SetTexture(outerArt); hg.inner:SetTexture(innerArt)
   hg.outer:SetVertexColor(tint[1], tint[2], tint[3]); hg.inner:SetVertexColor(tint[1], tint[2], tint[3])
   peak = peak or glowPeak()
