@@ -336,11 +336,64 @@ end
 function GB:SetActiveProfile(name)
   local db = GB.db
   if not (db and db.profiles[name]) then return false end
+  if GB:ActiveProfileName() == name then return true end
+  GB:SavePreset()   -- persist the outgoing profile's working copy first
   db.charProfiles = db.charProfiles or {}
   db.charProfiles[GB:CharKey()] = name
   local prof = db.profiles[name]
   GB:LoadPreset(prof.edit or next(prof.presets))
   return true
+end
+
+-- Preset management within the active profile (the stage-2 GUI drives these).
+-- Presets AUTO-SAVE: the edit preset is a live document like the style always
+-- was — snapshotted back on preset/profile switches and logout, no Save button.
+function GB:CreatePreset(name)
+  local prof = GB:ActiveProfile()
+  if not prof or not name or name == "" or prof.presets[name] then return false end
+  GB:SavePreset()                            -- keep the outgoing edit target fresh
+  prof.presets[name] = GB:SnapshotPreset()   -- the new preset starts as the current look
+  prof.edit = name
+  return true
+end
+
+function GB:RenamePreset(old, new)
+  local prof = GB:ActiveProfile()
+  if not (prof and prof.presets[old]) or not new or new == "" or prof.presets[new] or old == new then return false end
+  prof.presets[new] = prof.presets[old]
+  prof.presets[old] = nil
+  if prof.edit == old then prof.edit = new end
+  for barKey, p in pairs(prof.bars or {}) do
+    if p == old then prof.bars[barKey] = new end
+  end
+  return true
+end
+
+function GB:DeletePreset(name)
+  local prof = GB:ActiveProfile()
+  if not (prof and prof.presets[name]) then return false end
+  local count = 0
+  for _ in pairs(prof.presets) do count = count + 1 end
+  if count <= 1 then return false end   -- never delete the last preset
+  prof.presets[name] = nil
+  local fallback = (prof.edit ~= name and prof.presets[prof.edit] and prof.edit) or next(prof.presets)
+  for barKey, p in pairs(prof.bars or {}) do
+    if p == name then prof.bars[barKey] = fallback end
+  end
+  if prof.edit == name or not prof.presets[prof.edit] then
+    prof.edit = fallback
+    GB:LoadPreset(fallback)
+  end
+  return true
+end
+
+-- Switch the EDIT preset: snapshot the outgoing look, load the incoming one.
+function GB:SwitchPreset(name)
+  local prof = GB:ActiveProfile()
+  if not (prof and prof.presets[name]) then return false end
+  if prof.edit == name then return true end
+  GB:SavePreset()
+  return GB:LoadPreset(name)
 end
 
 -- Re-render everything from the (just-rewritten) working copy. Uses the public
@@ -521,7 +574,14 @@ local DB_DEFAULTS = {
 local loader = CreateFrame("Frame")
 loader:RegisterEvent("ADDON_LOADED")
 loader:RegisterEvent("PLAYER_LOGIN")
+loader:RegisterEvent("PLAYER_LOGOUT")
 loader:SetScript("OnEvent", function(_, event, arg1)
+  if event == "PLAYER_LOGOUT" then
+    -- Presets auto-save: snapshot the working copy into the edit preset so
+    -- saved presets are never staler than the last session.
+    if GB.db and GB.db.profiles then GB:SavePreset() end
+    return
+  end
   if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
     GloomsBarsDB = GloomsBarsDB or {}
     for k, v in pairs(DB_DEFAULTS) do

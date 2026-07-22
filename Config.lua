@@ -573,6 +573,84 @@ local function makeSection(title, build)
   return s
 end
 
+-- Flat text input (ported from GloomsAuras Config.lua — the family pattern):
+-- no Blizzard template, faint purple fill + brighter fill on focus, no border.
+local function flatEditBox(parent, w, h)
+  local e = CreateFrame("EditBox", nil, parent)
+  e:SetSize(w, h); e:SetAutoFocus(false)
+  setFont(e, FONT.body, 12); e:SetTextColor(TEXT.r, TEXT.g, TEXT.b)
+  e:SetTextInsets(6, 6, 0, 0)
+  local bg = e:CreateTexture(nil, "BACKGROUND"); bg:SetAllPoints()
+  bg:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 0.10)
+  e:SetScript("OnEditFocusGained", function() bg:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 0.22) end)
+  e:SetScript("OnEditFocusLost",  function() bg:SetColorTexture(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b, 0.10) end)
+  return e
+end
+
+-- Small skinned text-entry dialog (GloomsAuras pattern — avoids StaticPopup's
+-- default chrome). onAccept(name) fires on OK / Enter; ESC closes.
+local nameDlgFrame, nameDlgBox, nameDlgTitle, nameDlgOnAccept
+local function BuildNameDialog()
+  local W, H = 300, 132
+  local f = CreateFrame("Frame", "GloomsBarsNameDialog", UIParent)
+  f:SetSize(W, H); f:SetPoint("CENTER"); f:SetFrameStrata("FULLSCREEN_DIALOG"); f:EnableMouse(true)
+  skinPlate(f)
+  nameDlgTitle = newText(f, FONT.title, 17, COLOR.purple, "CENTER")
+  nameDlgTitle:SetPoint("TOP", 0, -14)
+  nameDlgBox = flatEditBox(f, W - 48, 24); nameDlgBox:SetPoint("TOP", 0, -50)
+  local okB = flatButton(f, 100, 26, COLOR.purple, "OK", 13); okB:SetPoint("BOTTOMLEFT", 26, 16)
+  local cancelB = flatButton(f, 100, 26, COLOR.heroic, "Cancel", 13); cancelB:SetPoint("BOTTOMRIGHT", -26, 16)
+  local function accept()
+    local name = nameDlgBox:GetText()
+    local cb = nameDlgOnAccept; nameDlgOnAccept = nil
+    f:Hide()
+    if cb then cb(name) end
+  end
+  local function cancel() nameDlgOnAccept = nil; f:Hide() end
+  okB:SetScript("OnClick", accept)
+  cancelB:SetScript("OnClick", cancel)
+  nameDlgBox:SetScript("OnEnterPressed", accept)
+  nameDlgBox:SetScript("OnEscapePressed", cancel)
+  tinsert(UISpecialFrames, "GloomsBarsNameDialog")
+  f:Hide()
+  nameDlgFrame = f
+end
+local function OpenNameDialog(titleText, initial, onAccept)
+  if not nameDlgFrame then BuildNameDialog() end
+  nameDlgOnAccept = onAccept
+  nameDlgTitle:SetText(titleText or "Name")
+  nameDlgBox:SetText(initial or ""); nameDlgBox:SetCursorPosition(0)
+  nameDlgFrame:Show(); nameDlgFrame:Raise()
+  nameDlgBox:SetFocus(); nameDlgBox:HighlightText()
+end
+
+-- Family-styled hover tooltip (dark plate, purple title, GeneralSans body —
+-- the name-dialog language; GameTooltip's Blizzard chrome clashes with the
+-- panel). One shared frame; attachTip(frame, title, body) wires OnEnter/
+-- OnLeave via HookScript so it coexists with existing hover scripts.
+local tipFrame, tipTitle, tipBody
+local function showTip(owner, title, body)
+  if not tipFrame then
+    tipFrame = CreateFrame("Frame", nil, UIParent)
+    tipFrame:SetFrameStrata("TOOLTIP")
+    skinPlate(tipFrame)
+    tipTitle = newText(tipFrame, FONT.bodyM, 12, COLOR.purple, "LEFT")
+    tipTitle:SetPoint("TOPLEFT", 10, -8)
+    tipBody = newText(tipFrame, FONT.body, 11, TEXT, "LEFT")
+    tipBody:SetPoint("TOPLEFT", 10, -26); tipBody:SetWidth(220); tipBody:SetJustifyH("LEFT")
+  end
+  tipTitle:SetText(title or "")
+  tipBody:SetText(body or "")
+  tipFrame:ClearAllPoints()
+  tipFrame:SetPoint("BOTTOMRIGHT", owner, "TOPRIGHT", 0, 4)
+  tipFrame:SetSize(240, 34 + tipBody:GetStringHeight())
+  tipFrame:Show()
+end
+local function attachTip(f, title, body)
+  f:HookScript("OnEnter", function() showTip(f, title, body) end)
+  f:HookScript("OnLeave", function() if tipFrame then tipFrame:Hide() end end)
+end
+
 -- Placeholder body for sections not yet wired (increment 1).
 local function stubBody(bf)
   local t = newText(bf, FONT.body, 11, MUTE, "LEFT")
@@ -2360,6 +2438,131 @@ local function buildAnimsSection(bf, s)
   end
 end
 
+-- Profiles — profile picker (per-character active, account-wide library) +
+-- preset picker (the whole-look every section below edits). Presets AUTO-SAVE:
+-- the edit preset is a live document — switching preset/profile snapshots the
+-- outgoing look first (Core SwitchPreset/SetActiveProfile), logout too — so
+-- there is no Save button. Per-bar assignment arrives with Apply to bars.
+local function buildProfilesSection(bf, s)
+  local function sortedNames(t)
+    local o = {}
+    for name in pairs(t or {}) do o[#o + 1] = { value = name, label = name } end
+    table.sort(o, function(a, b) return a.label < b.label end)
+    return o
+  end
+  local function profNames() return sortedNames(GB.db and GB.db.profiles) end
+  local function presetNames() local prof = GB:ActiveProfile(); return sortedNames(prof and prof.presets) end
+  local function editName() local prof = GB:ActiveProfile(); return (prof and prof.edit) or "?" end
+
+  local msgLine   -- inline feedback (name taken / can't delete the last one)
+  local function note(text) msgLine:SetText(text or "") end
+  -- Two-click destructive confirm (no popup): first click arms, second fires.
+  local function confirmable(b, label, fn)
+    b:SetScript("OnClick", function()
+      if b._armed then
+        b._armed = nil; b:SetText(label); fn()
+      else
+        b._armed = true; b:SetText("Sure?")
+        C_Timer.After(3, function() if b._armed then b._armed = nil; b:SetText(label) end end)
+      end
+    end)
+  end
+  local function actionButton(y, prev, label)
+    local b = flatButton(bf, 62, 20, COLOR.heroic, label, 11); b:SetBase(0.2)
+    if prev then b:SetPoint("TOPRIGHT", prev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, y) end
+    return b
+  end
+
+  -- PROFILE row.
+  local plab = newText(bf, FONT.body, 12, TEXT, "LEFT"); plab:SetPoint("TOPLEFT", 18, -14); plab:SetText("Profile")
+  local pdd = animDropdown(bf, 150,
+    function() return GB:ActiveProfileName() or "?" end,
+    profNames,
+    function() return GB:ActiveProfileName() end,
+    function(v) note(""); GB:SetActiveProfile(v); s.refresh() end)
+  pdd:SetPoint("TOPRIGHT", -18, -12)
+
+  local pDel = actionButton(-40, nil, "Delete")
+  local pRen = actionButton(-40, pDel, "Rename")
+  local pCopy = actionButton(-40, pRen, "Copy")
+  local pNew = actionButton(-40, pCopy, "New")
+  pNew:SetScript("OnClick", function()
+    OpenNameDialog("New profile", "", function(name)
+      if name == "" then return end
+      if GB:CreateProfile(name) then GB:SetActiveProfile(name); s.refresh()
+      else note("A profile with that name already exists.") end
+    end)
+  end)
+  pCopy:SetScript("OnClick", function()
+    local active = GB:ActiveProfileName()
+    OpenNameDialog("Copy profile", (active or "") .. " copy", function(name)
+      if name == "" then return end
+      if GB:CopyProfile(active, name) then GB:SetActiveProfile(name); s.refresh()
+      else note("A profile with that name already exists.") end
+    end)
+  end)
+  pRen:SetScript("OnClick", function()
+    local active = GB:ActiveProfileName()
+    OpenNameDialog("Rename profile", active or "", function(name)
+      if name == "" then return end
+      if GB:RenameProfile(active, name) then s.refresh()
+      else note("A profile with that name already exists.") end
+    end)
+  end)
+  confirmable(pDel, "Delete", function()
+    if not GB:DeleteProfile(GB:ActiveProfileName()) then note("Can't delete the last profile.") end
+    s.refresh(); C:Refresh()
+  end)
+  attachTip(pdd, "Profile", "The active profile for this character. Each character remembers its own; the profile library is shared account-wide.")
+  attachTip(pNew, "New profile", "Creates a profile starting from the current look, and switches to it.")
+  attachTip(pCopy, "Copy profile", "Duplicates this profile — presets, bar assignments and all — and switches to the copy.")
+  attachTip(pRen, "Rename profile", "Renames this profile. Characters using it follow the new name.")
+  attachTip(pDel, "Delete profile", "Deletes this profile (click twice to confirm). Characters using it fall back to another profile. The last profile can't be deleted.")
+
+  local div = hLine(bf); div:SetPoint("TOPLEFT", 18, -72); div:SetPoint("TOPRIGHT", -18, -72)
+
+  -- PRESET row (the edit target).
+  local slab = newText(bf, FONT.body, 12, TEXT, "LEFT"); slab:SetPoint("TOPLEFT", 18, -88); slab:SetText("Preset (being edited)")
+  local sdd = animDropdown(bf, 150,
+    editName,
+    presetNames,
+    editName,
+    function(v) note(""); GB:SwitchPreset(v); s.refresh() end)
+  sdd:SetPoint("TOPRIGHT", -18, -86)
+
+  local sDel = actionButton(-114, nil, "Delete")
+  local sRen = actionButton(-114, sDel, "Rename")
+  local sNew = actionButton(-114, sRen, "New")
+  sNew:SetScript("OnClick", function()
+    OpenNameDialog("New preset", "", function(name)
+      if name == "" then return end
+      if GB:CreatePreset(name) then s.refresh()
+      else note("A preset with that name already exists.") end
+    end)
+  end)
+  sRen:SetScript("OnClick", function()
+    OpenNameDialog("Rename preset", editName(), function(name)
+      if name == "" then return end
+      if GB:RenamePreset(editName(), name) then s.refresh()
+      else note("A preset with that name already exists.") end
+    end)
+  end)
+  confirmable(sDel, "Delete", function()
+    if not GB:DeletePreset(editName()) then note("Can't delete the last preset.") end
+    s.refresh(); C:Refresh()
+  end)
+  attachTip(sdd, "Preset", "The look being edited — every section below edits this preset, and it saves automatically as you edit. Picking another preset swaps the whole look.")
+  attachTip(sNew, "New preset", "Creates a preset starting as a copy of the current look, and makes it the one being edited.")
+  attachTip(sRen, "Rename preset", "Renames this preset. Bars assigned to it follow the new name.")
+  attachTip(sDel, "Delete preset", "Deletes this preset (click twice to confirm). Bars assigned to it fall back to another preset. The last preset can't be deleted.")
+
+  msgLine = newText(bf, FONT.body, 11, MUTE, "LEFT")
+  msgLine:SetPoint("TOPLEFT", 18, -142); msgLine:SetPoint("RIGHT", bf, "RIGHT", -16, 0); msgLine:SetJustifyH("LEFT")
+
+  bf:SetHeight(164)
+  s.refresh = function() pdd:refresh(); sdd:refresh() end
+end
+
 local function buildPreviewPane(parent)
   local pane = CreateFrame("Frame", nil, parent)
   pane:SetPoint("TOPLEFT", 0, TITLE_DIV_Y - 1)
@@ -2558,7 +2761,9 @@ local function BuildPanel()
     b:SetPoint("TOPRIGHT", -4, TITLE_DIV_Y - 2); b:SetPoint("BOTTOMRIGHT", -4, FOOTER_H + 2)
   end)
 
-  -- Sections (mockup order). Bar layout + Apply to bars are still stubs.
+  -- Sections (mockup order). Profiles first — it decides what everything below
+  -- edits. Bar layout (roadmap) + Apply to bars (stage 3) are still stubs.
+  makeSection("Profiles", buildProfilesSection)
   makeSection("Shape & icon", buildShapeSection)
   makeSection("Plate", buildPlateSection)
   makeSection("Decoration layers", buildDecorSection)
