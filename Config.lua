@@ -309,7 +309,7 @@ local GROW_RATIO = (256 / 240 - 1) / 2
 -- The construction (icon + extension) is centered vertically at this pane-Y so a
 -- plate growing above OR below stays put and never rides into the state chips or
 -- the caption (max construction ≈ 104 + 0.9·104 ≈ 198px, so ±99 clears both).
-local PREVIEW_CENTER_Y = -220
+local PREVIEW_CENTER_Y = -290    -- pushed down for the 7-row state-chip grid (session 12)
 
 local panel, bodyContainer
 local sections = {}
@@ -476,13 +476,16 @@ local STATE_DESC = {
   idle     = "Idle: the button's resting look, with nothing active.",
   cooldown = "Cooldown: while the ability is recharging (the shaped sweep, then a finish flash).",
   proc     = "Proc: fires when an ability procs (a free or empowered cast becomes ready).",
-  highlight = "Highlight: Blizzard's \"press this\" suggestion pulse. Live only; not shown in this preview.",
-  cast     = "Cast: while you're casting a cast-time spell here. Live only; not shown in this preview.",
-  channel  = "Channel: while you're channeling a spell here. Live only; not shown in this preview.",
+  highlight = "Highlight: Blizzard's \"press this\" pulse — where a hovered spellbook/talent spell sits on your bars.",
+  cast     = "Cast: while you're casting a cast-time spell on this button (in-game it also drains a fill).",
+  channel  = "Channel: while you're channeling a spell on this button (in-game it also drains a fill).",
   hover    = "Hover: while your mouse is over the button.",
   selected = "Selected: when the button is toggled on (a stance, form, or toggled aura).",
   flash    = "Flash: during auto-attack or auto-shot (needs the Attack ability on a bar).",
-  assist   = "Assist: Blizzard's suggested-next-ability highlight. Live only; not shown in this preview.",
+  assist   = "Assist: Blizzard's suggested-next-ability rotation highlight.",
+  unusable = "Unusable: wrong form/stance, silenced, or missing a resource. Tint in Cooldown & availability.",
+  oom      = "Out of mana: not enough mana/power. Tint in Cooldown & availability.",
+  range    = "Out of range: target too far — icon wash + keybind recolour. Enable in Cooldown & availability.",
 }
 
 function C:ToggleSection(s)
@@ -1199,12 +1202,13 @@ local function opacityCell(bf, xLeft, yTop, key, onChange)
   return cell
 end
 
--- The triggers, in priority (display) order. Third field = the preview chip to flip
--- to on edit (cast/channel/assist have no chip, so they leave the preview as-is).
+-- The triggers, in priority (display) order. Third field = the preview chip to
+-- flip to on edit — every trigger has one now (session 12).
 local GLOW_ROWS = {
-  { "proc", "Proc", "proc" }, { "highlight", "Highlight" }, { "cast", "Cast" }, { "channel", "Channel" },
+  { "proc", "Proc", "proc" }, { "highlight", "Highlight", "highlight" },
+  { "cast", "Cast", "cast" }, { "channel", "Channel", "channel" },
   { "hover", "Hover", "hover" }, { "selected", "Selected", "selected" },
-  { "flash", "Flash", "flash" }, { "assist", "Assist" },
+  { "flash", "Flash", "flash" }, { "assist", "Assist", "assist" },
 }
 local GX_TOG, GX_SW, GX_LAY, GX_SLIDE = 92, 142, 180, 236
 local function buildGlowsSection(bf, s)
@@ -1352,8 +1356,13 @@ local function sampleIconTexture()
 end
 
 local PREVIEW_STATES = {
-  { "idle", "Idle" }, { "proc", "Proc" }, { "cooldown", "Cooldown" },
-  { "hover", "Hover" }, { "selected", "Selected" }, { "flash", "Flash" },
+  { "idle", "Idle" }, { "proc", "Proc" },
+  { "highlight", "Highlight" }, { "assist", "Assist" },
+  { "cast", "Cast" }, { "channel", "Channel" },
+  { "hover", "Hover" }, { "selected", "Selected" },
+  { "flash", "Flash" }, { "cooldown", "Cooldown" },
+  { "unusable", "Unusable" }, { "oom", "Out of mana" },
+  { "range", "Out of range" },
 }
 local RING_TINT = { hover = { 1, 0.82, 0.35 }, selected = { 0.45, 0.75, 1 }, flash = { 1, 0.25, 0.25 } }
 
@@ -1696,11 +1705,13 @@ function C:PlayPreviewFlash()
   previewFlashAnim:Stop(); previewFlashAnim:Play()
 end
 
--- Multi-part preview glow: for a hand shape, the Proc/Hover/Selected/Flash chips
--- show the real outer+inner glow tinted by that trigger's colour / opacity / layers
+-- Multi-part preview glow: for a hand shape, every glow-trigger chip (proc /
+-- highlight / assist / cast / channel / hover / selected / flash) shows the real
+-- outer+inner glow tinted by that trigger's colour / opacity / layers
 -- (art + anchor set in RefreshPreview). Respects `enabled` (off → blank chip).
-local GLOW_STATES = { proc = true, hover = true, selected = true, flash = true }
-local PREVIEW_PULSING = { proc = true, flash = true }   -- which chips breathe (mirror the bars)
+local GLOW_STATES = { proc = true, highlight = true, assist = true, cast = true,
+  channel = true, hover = true, selected = true, flash = true }
+local PREVIEW_PULSING = { proc = true, flash = true, assist = true, highlight = true }   -- mirror the bars' PULSING
 local function applyPreviewGlow(key)
   local t = (GB.db and GB.db.triggers and GB.db.triggers[key]) or {}
   if t.enabled == false then previewOuter:Hide(); previewInner:Hide(); previewPulsing = false; return end
@@ -1742,7 +1753,26 @@ function C:SetPreviewState(st)
       previewCD:Show(); previewCD:SetCooldown(GetTime(), 12)
     else previewCD:Hide() end
   end
-  if previewIcon then previewIcon:SetDesaturated(previewState == "cooldown") end
+  -- Icon tint: the availability chips mirror the engine's computeIconTint (range =
+  -- desaturate + wash; oom / unusable = the configured vertex tint — same db fields
+  -- the bars read); cooldown keeps its desaturated look; everything else full colour.
+  if previewIcon then
+    local adb = GB.db or {}
+    if previewState == "range" then
+      local c = adb.rangeColor or { 1, 0.2, 0.2 }
+      previewIcon:SetDesaturated(true); previewIcon:SetVertexColor(c[1], c[2], c[3])
+    elseif previewState == "oom" then
+      local c = adb.availOOM or { 0.5, 0.5, 1 }
+      previewIcon:SetDesaturated(false); previewIcon:SetVertexColor(c[1], c[2], c[3])
+    elseif previewState == "unusable" then
+      local c = adb.availUnusable or { 0.4, 0.4, 0.4 }
+      previewIcon:SetDesaturated(adb.availDesaturate and true or false)
+      previewIcon:SetVertexColor(c[1], c[2], c[3])
+    else
+      previewIcon:SetDesaturated(previewState == "cooldown")
+      previewIcon:SetVertexColor(1, 1, 1)
+    end
+  end
   local isRing = RING_TINT[previewState] ~= nil
   if previewRing then
     previewRing:SetShown((not hk) and isRing)
@@ -1764,9 +1794,9 @@ end
 
 -- Preview the selected trigger's glow (its chip, or idle) PLUS its enabled animations
 -- on the preview host — the live-feedback surface for the Animations section.
-local ANIM_PREVIEW_STATE = { proc = "proc", hover = "hover", selected = "selected", flash = "flash" }
+-- Every animation trigger has a matching state chip now (session 12).
 function C:SetPreviewAnim(triggerKey)
-  self:SetPreviewState(ANIM_PREVIEW_STATE[triggerKey] or "idle")
+  self:SetPreviewState(triggerKey or "idle")
   if GB.Anims and previewFrame and previewIcon then
     local trigger = GB.db and GB.db.triggers and GB.db.triggers[triggerKey]
     -- Plate mode: animations span the full 2:1 construction (the bars' ConstructRef).
