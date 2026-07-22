@@ -387,6 +387,18 @@ function GB:DeletePreset(name)
   return true
 end
 
+-- Per-bar preset assignment (the Apply-to-bars grid): the bar renders that
+-- preset's snapshot — except the EDIT preset, which renders the working copy
+-- live. SavePreset first so a just-edited look is never stale when assigned.
+function GB:AssignBarPreset(barKey, pname)
+  local prof = GB:ActiveProfile()
+  if not (prof and prof.presets[pname]) then return false end
+  prof.bars[barKey] = pname
+  GB:SavePreset()
+  GB:RefreshAll()
+  return true
+end
+
 -- Switch the EDIT preset: snapshot the outgoing look, load the incoming one.
 function GB:SwitchPreset(name)
   local prof = GB:ActiveProfile()
@@ -652,27 +664,32 @@ loader:SetScript("OnEvent", function(_, event, arg1)
       end
       for _, t in pairs(GB.db.triggers) do t.anims = t.anims or {} end   -- per-trigger animation configs (GB.Anims)
     end
-    -- Profiles migration (session 13) — MUST run after all seeding above so the
-    -- first snapshot captures the complete look. The current working copy
-    -- becomes profile "Default" / preset "Default", assigned to every bar.
+    -- Profiles migration (session 13): just the containers. The first profile
+    -- is created per character at PLAYER_LOGIN ("Name - Realm", the
+    -- GloomsAuras convention), seeded from the working copy — which is fully
+    -- seeded by the blocks above.
     if GB.db.profiles == nil then
       GB.db.profiles = {}
       GB.db.charProfiles = {}
-      GB.db.profiles.Default = {
-        presets = { Default = GB:SnapshotPreset() },
-        bars = {}, edit = "Default",
-      }
-      for _, bar in ipairs(GB.BARS) do GB.db.profiles.Default.bars[bar.buttonPrefix] = "Default" end
     end
   elseif event == "PLAYER_LOGIN" then
-    -- Bind this character to its profile (per-character active — Jason). New
-    -- characters adopt the first existing profile; CharKey needs the realm,
-    -- which isn't reliable at ADDON_LOADED.
+    -- Bind this character to its profile. A character's FIRST login creates
+    -- its OWN profile — "Name - Realm", the GloomsAuras convention (Jason,
+    -- session 13: characters must not share a profile by default) — seeded
+    -- from the current look. Existing bindings are honored (switching stays
+    -- manual). Runs at LOGIN because CharKey needs the realm.
     if GB.db and GB.db.profiles then
       GB.db.charProfiles = GB.db.charProfiles or {}
       local key = GB:CharKey()
       if not (GB.db.charProfiles[key] and GB.db.profiles[GB.db.charProfiles[key]]) then
-        GB.db.charProfiles[key] = GB:ActiveProfileName() or "Default"
+        local cname, realm = UnitName("player"), GetRealmName()
+        local pname = (cname or "?") .. " - " .. (realm or "?")
+        if not GB.db.profiles[pname] then
+          local prof = { presets = { Default = GB:SnapshotPreset() }, bars = {}, edit = "Default" }
+          for _, bar in ipairs(GB.BARS) do prof.bars[bar.buttonPrefix] = "Default" end
+          GB.db.profiles[pname] = prof
+        end
+        GB.db.charProfiles[key] = pname
       end
     end
     PreloadFonts()

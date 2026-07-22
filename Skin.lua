@@ -298,6 +298,26 @@ local function flyoutShapeFor(btn)
   return k and (FLYOUT_1X1[k] or k) or nil
 end
 
+-- Exports for the sibling engines: Glows/Anims share Skin's ONE ctx + funnel,
+-- so a Glows-initiated chain that lands back in Skin (anchor math, hand art)
+-- resolves the same button's preset. Enter/Leave nest (they save/restore).
+function Skin:PV(field) return pv(field) end
+function Skin:PresetFor(btn) return presetFor(btn) end
+function Skin:ShapeKeyFor(btn)
+  local rec = records[btn]
+  if rec and rec.shapeOverride then return rec.shapeOverride end
+  local p = presetFor(btn)
+  return (p and p.handShape) or (GB.db and GB.db.handShape)
+end
+function Skin:EnterButtonCtx(btn)
+  local prevP, prevS = presetCtx, shapeCtx
+  local rec = records[btn]
+  presetCtx = presetFor(btn) or prevP
+  shapeCtx = (rec and rec.shapeOverride) or prevS
+  return prevP, prevS
+end
+function Skin:LeaveButtonCtx(prevP, prevS) presetCtx, shapeCtx = prevP, prevS end
+
 -- Plate mode (session 11): a 2:1 PORTRAIT hand shape rendered as a SQUARE icon filling
 -- one half + a solid-colour PLATE filling the other half (the colour then fading up over
 -- the icon). Only the 2:1 portrait shapes halve into two clean squares, so plate mode is
@@ -1702,7 +1722,10 @@ local function handIconSize(btn)
   local info = GB:HandShapeInfo(hk)
   local nat = (btn.GetWidth and btn:GetWidth()) or 0
   if not (nat and nat > 0) then nat = 45 end
-  local scale = pv("sizeScale") or 1
+  -- Flyout members clamp to their natural size: Blizzard spaces them for it,
+  -- so a preset's size scale would overlap neighbours (Jason, session 13).
+  local mrec = records[btn]
+  local scale = (mrec and mrec.flyoutMember) and 1 or (pv("sizeScale") or 1)
   local short = math.max(8, math.floor(nat * scale + 0.5))
   if info.orient == "portrait" then return short, math.floor(short * info.aspect + 0.5)
   elseif info.orient == "landscape" then return math.floor(short * info.aspect + 0.5), short
@@ -1917,9 +1940,6 @@ local function ApplyButton(btn, bar)
   if not rec then
     rec = {}
     records[btn] = rec
-    -- Which bar owns this button (ForEachButton passes it; flyout members get
-    -- their OWNER's bar in sweepFlyout) → the profile's per-bar preset lookup.
-    if bar then rec.barKey = bar.buttonPrefix end
     local ext0 = ExtensionHeight(icon)
     local src0, key0 = maskPlan(icon, ext0)
     rec.mask = buildMask(btn, icon, ext0, src0)
@@ -2080,6 +2100,10 @@ local function ApplyButton(btn, bar)
       if Skin.enabled and r and r.active then refreshRange(b, checksRange, inRange) end
     end)
   end
+  -- Which bar owns this button (ForEachButton passes it; flyout members get
+  -- their OWNER's bar in sweepFlyout) → the profile's per-bar preset lookup.
+  -- Set on EVERY apply pass, not just record creation, so re-enables heal too.
+  if bar then rec.barKey = bar.buttonPrefix end
   if not rec.textStyled then
     StyleText(btn)
     rec.textStyled = true
@@ -2221,6 +2245,7 @@ local function sweepFlyout(_, flyoutButton)
     if not rec then flyoutButtons[#flyoutButtons + 1] = btn end
     if rec and rec.active then
       rec.barKey = ownerBar or rec.barKey
+      rec.flyoutMember = true
       rec.shapeOverride = sibling   -- track shape/preset swaps made since last open
       ApplyDecor(btn)
     else
@@ -2230,7 +2255,15 @@ local function sweepFlyout(_, flyoutButton)
       shapeCtx, presetCtx = sibling, ownerPreset
       ApplyButton(btn)
       shapeCtx, presetCtx = nil, nil
-      if records[btn] then records[btn].shapeOverride = sibling; records[btn].barKey = ownerBar end
+      if records[btn] then
+        records[btn].shapeOverride = sibling
+        records[btn].barKey = ownerBar
+        records[btn].flyoutMember = true
+        -- Re-size under the member flag (ApplyButton's sizing pass ran before
+        -- the record carried it → it used the preset's scale).
+        applyIconSize(btn)
+        AlignCooldowns(btn)
+      end
     end
     i = i + 1
   end
@@ -2245,16 +2278,85 @@ local function hookFlyout()
   hooksecurefunc(fly, "Toggle", sweepFlyout)
 end
 
+-- ---------------------------------------------------------------------------
+-- Bar ping (session 13 QoL): pulse a whole bar's buttons while its Apply-to-
+-- bars row is hovered or its list is open, so it's obvious WHICH bar is being
+-- re-dressed (Jason: several bars on screen look alike). Renders the shape's
+-- -inner glow art tinted family purple on a btn+3 frame (shaped art needs NO
+-- mask — the proven multi-part-glow mechanism; +3 = above decor, below text),
+-- pulsed by one shared driver. Transient: nothing saves; Disable clears it.
+local pingButtons = {}
+local pingPhase = 0
+local PING_TINT = { 0.58, 0.42, 1 }   -- family purple #936bff
+local pingDriver = CreateFrame("Frame")
+pingDriver:Hide()
+pingDriver:SetScript("OnUpdate", function(_, dt)
+  pingPhase = pingPhase + dt
+  local a = 0.25 + 0.45 * (0.5 + 0.5 * math.cos(pingPhase * 6))
+  for btn in pairs(pingButtons) do
+    local rec = records[btn]
+    if rec and rec.pingTex then rec.pingTex:SetAlpha(a) end
+  end
+end)
+local function pingOff(btn)
+  local rec = records[btn]
+  if rec and rec.pingTex then rec.pingTex:SetAlpha(0); rec.pingFrame:Hide() end
+  pingButtons[btn] = nil
+end
+-- on=true: light the bar. on=false: clear it (barKey nil = clear everything).
+function Skin:PingBar(barKey, on)
+  if not on then
+    for btn in pairs(pingButtons) do
+      local rec = records[btn]
+      if not barKey or (rec and rec.barKey == barKey) then pingOff(btn) end
+    end
+    if not next(pingButtons) then pingDriver:Hide() end
+    return
+  end
+  if not self.enabled then return end
+  GB:ForEachButton(function(btn, bar)
+    if bar.buttonPrefix ~= barKey then return end
+    local rec = records[btn]
+    local icon = btn.icon or btn.Icon
+    if not (rec and rec.active and icon) then return end
+    local prevP, prevS = Skin:EnterButtonCtx(btn)   -- the bar's PRESET shape
+    local key = handKey()
+    if key then
+      if not rec.pingTex then
+        local f = CreateFrame("Frame", nil, btn)
+        f:SetFrameLevel(btn:GetFrameLevel() + 3)
+        f:SetAllPoints(btn)
+        local t = f:CreateTexture(nil, "OVERLAY")
+        t:SetBlendMode("ADD")
+        rec.pingFrame, rec.pingTex = f, t
+      end
+      rec.pingTex:SetTexture(GB:HandAsset(key, "inner"))
+      rec.pingTex:SetVertexColor(PING_TINT[1], PING_TINT[2], PING_TINT[3])
+      hgAnchor(rec.pingTex, icon, 0)
+      rec.pingTex:SetAlpha(0)
+      rec.pingFrame:Show()
+      pingButtons[btn] = true
+    end
+    Skin:LeaveButtonCtx(prevP, prevS)
+  end)
+  if next(pingButtons) then pingPhase = 0; pingDriver:Show() end
+end
+
 function Skin:Enable()
   self.enabled = true
   if GB.db then GB.db.skinEnabled = true end
   local count = 0
-  GB:ForEachButton(function(btn)
-    ApplyButton(btn)
+  GB:ForEachButton(function(btn, bar)
+    ApplyButton(btn, bar)   -- the bar arg feeds rec.barKey → per-bar preset lookup
     count = count + 1
   end)
   hookFlyout()
   sweepFlyout()   -- members that already exist from an earlier open
+  -- Second decor pass: ApplyButton's FIRST pass resolves its preset ctx before
+  -- rec.barKey exists (the wrapper runs before the body sets it), so bars
+  -- assigned to non-edit presets would render the working copy until the next
+  -- refresh. Re-decor now that every record knows its bar.
+  self:ReapplyDecor()
   GB.msg(("skin ON — %d buttons styled. Persists across /reload; /gb skin to turn off."):format(count))
   if GB.Glows then GB.Glows:SetEnabled(true) end
   self:RefreshEmptySlots()   -- initial empty-slot dim/hide pass
@@ -2277,6 +2379,7 @@ end
 function Skin:Disable()
   self.enabled = false
   if GB.db then GB.db.skinEnabled = false end
+  self:PingBar(nil, false)   -- clear any hover ping
   GB:ForEachButton(function(btn) RestoreButton(btn) end)
   for _, btn in ipairs(flyoutButtons) do RestoreButton(btn) end
   if SpellFlyout and SpellFlyout.Background then SpellFlyout.Background:SetAlpha(1) end

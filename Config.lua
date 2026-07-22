@@ -2336,6 +2336,9 @@ local function openAnimFlyout(anchor, options, current, onPick)
 end
 local function animDropdown(parent, w, getLabel, getOptions, getCurrent, onPick)
   local b = flatButton(parent, w, 22, COLOR.heroic, "", 11); b:SetBase(0.2); b.text:SetWordWrap(false)
+  -- Inset the label so long names truncate (…) instead of running under the
+  -- caret (Jason: "Gloomfury - Stormrage" collided). Justify stays centered.
+  b.text:ClearAllPoints(); b.text:SetPoint("LEFT", 8, 0); b.text:SetPoint("RIGHT", -18, 0); b.text:SetJustifyH("CENTER")
   local car = b:CreateTexture(nil, "ARTWORK"); car:SetTexture(CARET_TEX)   -- ▾ down-caret (same asset as the accordion)
   car:SetVertexColor(COLOR.orange.r, COLOR.orange.g, COLOR.orange.b)
   car:SetSize(8, 8); car:SetPoint("RIGHT", -8, 0); car:SetRotation(CARET_DOWN)
@@ -2475,7 +2478,7 @@ local function buildProfilesSection(bf, s)
 
   -- PROFILE row.
   local plab = newText(bf, FONT.body, 12, TEXT, "LEFT"); plab:SetPoint("TOPLEFT", 18, -14); plab:SetText("Profile")
-  local pdd = animDropdown(bf, 150,
+  local pdd = animDropdown(bf, 200,   -- wide: "Name - Realm" profile names
     function() return GB:ActiveProfileName() or "?" end,
     profNames,
     function() return GB:ActiveProfileName() end,
@@ -2505,7 +2508,7 @@ local function buildProfilesSection(bf, s)
     local active = GB:ActiveProfileName()
     OpenNameDialog("Rename profile", active or "", function(name)
       if name == "" then return end
-      if GB:RenameProfile(active, name) then s.refresh()
+      if GB:RenameProfile(active, name) then C:Refresh()
       else note("A profile with that name already exists.") end
     end)
   end)
@@ -2543,7 +2546,7 @@ local function buildProfilesSection(bf, s)
   sRen:SetScript("OnClick", function()
     OpenNameDialog("Rename preset", editName(), function(name)
       if name == "" then return end
-      if GB:RenamePreset(editName(), name) then s.refresh()
+      if GB:RenamePreset(editName(), name) then C:Refresh()
       else note("A preset with that name already exists.") end
     end)
   end)
@@ -2561,6 +2564,58 @@ local function buildProfilesSection(bf, s)
 
   bf:SetHeight(164)
   s.refresh = function() pdd:refresh(); sdd:refresh() end
+end
+
+-- Apply to bars — the per-bar preset assignment grid (Jason's architecture:
+-- mix and match presets across bars). One row per Edit-Mode bar: label +
+-- preset dropdown. Assigning the preset being edited = that bar renders your
+-- edits LIVE; any other preset = its saved look.
+local function buildApplySection(bf, s)
+  local rows = {}
+  local function presetOptions()
+    local prof = GB:ActiveProfile()
+    local o = {}
+    for name in pairs((prof and prof.presets) or {}) do o[#o + 1] = { value = name, label = name } end
+    table.sort(o, function(a, b) return a.label < b.label end)
+    return o
+  end
+  for i, bar in ipairs(GB.BARS) do
+    local y = -12 - (i - 1) * 28
+    local lab = newText(bf, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 18, y - 4); lab:SetText(bar.label)
+    local dd = animDropdown(bf, 150,
+      function() local prof = GB:ActiveProfile(); return (prof and prof.bars and prof.bars[bar.buttonPrefix]) or "?" end,
+      presetOptions,
+      function() local prof = GB:ActiveProfile(); return prof and prof.bars and prof.bars[bar.buttonPrefix] end,
+      function(v) GB:AssignBarPreset(bar.buttonPrefix, v) end)
+    dd:SetPoint("TOPRIGHT", -18, y)
+    attachTip(dd, bar.label, "Which preset this bar wears. The preset being edited renders live as you tweak it; any other preset shows its saved look. Flyouts follow the bar they pop from.")
+    -- Ping the real bar on screen while its row is hovered or its list is open
+    -- (Jason: with several bars visible it's hard to tell which is which).
+    dd:HookScript("OnEnter", function()
+      if GB.Skin and GB.Skin.PingBar then GB.Skin:PingBar(bar.buttonPrefix, true) end
+    end)
+    dd:HookScript("OnLeave", function()
+      if animFlyout and animFlyout:IsShown() and animFlyout.gbPingBar == bar.buttonPrefix then return end
+      if GB.Skin and GB.Skin.PingBar then GB.Skin:PingBar(bar.buttonPrefix, false) end
+    end)
+    dd:HookScript("OnClick", function()
+      if not (animFlyout and animFlyout:IsShown()) then return end
+      if animFlyout.gbPingBar and animFlyout.gbPingBar ~= bar.buttonPrefix and GB.Skin then
+        GB.Skin:PingBar(animFlyout.gbPingBar, false)   -- another row's list was open
+      end
+      animFlyout.gbPingBar = bar.buttonPrefix
+      if not animFlyout.gbPingHooked then
+        animFlyout.gbPingHooked = true
+        animFlyout:HookScript("OnHide", function(f)
+          if f.gbPingBar and GB.Skin and GB.Skin.PingBar then GB.Skin:PingBar(f.gbPingBar, false) end
+          f.gbPingBar = nil
+        end)
+      end
+    end)
+    rows[#rows + 1] = dd
+  end
+  bf:SetHeight(12 + #GB.BARS * 28 + 8)
+  s.refresh = function() for _, dd in ipairs(rows) do dd:refresh() end end
 end
 
 local function buildPreviewPane(parent)
@@ -2774,7 +2829,7 @@ local function BuildPanel()
   makeSection("Cooldown & availability", buildCooldownSection)
   makeSection("Empty slots", buildEmptySection)
   makeSection("Bar layout", stubBody)
-  makeSection("Apply to bars", stubBody)
+  makeSection("Apply to bars", buildApplySection)
 
   -- All sections start CLOSED (Jason 2026-07-20 — easier to find the one you want
   -- than scrolling past a large open panel).

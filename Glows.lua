@@ -70,7 +70,7 @@ local handGlows = {}   -- [btn] = { outer, innerFrame, inner }
 
 -- The current shape's outer/inner glow art.
 local function handGlowArt()
-  local key = GB.db and GB.db.handShape
+  local key = (GB.Skin and GB.Skin.PV) and GB.Skin:PV("handShape") or (GB.db and GB.db.handShape)
   if not key then return nil end
   return GB:HandAsset(key, "outer"), GB:HandAsset(key, "inner")
 end
@@ -174,7 +174,15 @@ end
 -- flash/highlight pulse; cast/channel/hover/selected are steady. Always the
 -- multi-part hand glow (db.handShape is always seeded).
 local PULSING = { proc = true, assist = true, flash = true, highlight = true }   -- which triggers pulse
-local function trig(key) return GB.db and GB.db.triggers and GB.db.triggers[key] end
+-- Stage-3 per-bar presets: reads funnel through Skin's PV (ONE ctx, owned by
+-- Skin — see Skin:EnterButtonCtx), so a bar wearing another preset resolves
+-- ITS triggers/shape. Outside any ctx this is exactly the old working-copy read.
+local function skinPV(field)
+  local S = GB.Skin
+  if S and S.PV then return S:PV(field) end
+  return GB.db and GB.db[field]
+end
+local function trig(key) local ts = skinPV("triggers"); return ts and ts[key] end
 local function enabledTrig(key) local t = trig(key); if t and t.enabled ~= false then return t end end
 
 -- The winning trigger key + record for a button's live sources, in priority order,
@@ -210,6 +218,21 @@ local function SetSource(btn, key, value)
   if s[key] == value then return end   -- unchanged → skip the refresh churn (esp. the frequent state event)
   s[key] = value
   Refresh(btn)
+end
+
+-- Stage-3: enter the button's preset ctx around the reconciler, so trig()/
+-- handGlowArt() AND any Skin-side math in the chain (anchor growth, hand
+-- art) resolve this button's preset. Closures capture the local → every
+-- caller above gets the wrapped version.
+do
+  local inner = Refresh
+  Refresh = function(btn)
+    local S = GB.Skin
+    if not (S and S.EnterButtonCtx) then return inner(btn) end
+    local pP, pS = S:EnterButtonCtx(btn)
+    inner(btn)
+    S:LeaveButtonCtx(pP, pS)
+  end
 end
 
 -- Cast / channel source. Blizzard's PlaySpellCastAnim (hooked in Skin.lua's decoration
@@ -317,24 +340,35 @@ end
 -- Shape change: re-point the multi-part glow art at the new shape + re-anchor any
 -- SHOWN glow. Plain SetTexture (no mask quirk), so it swaps live.
 function Glows:RefreshShape()
-  local outerArt, innerArt = handGlowArt()
+  local S = GB.Skin
   for btn, hg in pairs(handGlows) do
-    if isOurs(btn) and outerArt then
-      hg.outer:SetTexture(outerArt); hg.inner:SetTexture(innerArt)
-      if hg.outer:IsShown() then
-        local icon = btn.icon or btn.Icon
-        if icon then anchorHandGlow(hg, icon) end
+    if isOurs(btn) then
+      -- Art + anchors resolve PER BUTTON now (bars can wear different presets).
+      local pP, pS; if S and S.EnterButtonCtx then pP, pS = S:EnterButtonCtx(btn) end
+      local outerArt, innerArt = handGlowArt()
+      if outerArt then
+        hg.outer:SetTexture(outerArt); hg.inner:SetTexture(innerArt)
+        if hg.outer:IsShown() then
+          local icon = btn.icon or btn.Icon
+          if icon then anchorHandGlow(hg, icon) end
+        end
       end
+      if S and S.LeaveButtonCtx then S:LeaveButtonCtx(pP, pS) end
     end
   end
 end
 
 -- Icon resized → re-anchor every shown glow so it keeps the icon's new size/aspect.
 function Glows:RefreshSize()
+  local S = GB.Skin
   for btn, hg in pairs(handGlows) do
     if isOurs(btn) and hg.outer:IsShown() then
       local icon = btn.icon or btn.Icon
-      if icon then anchorHandGlow(hg, icon) end
+      if icon then
+        local pP, pS; if S and S.EnterButtonCtx then pP, pS = S:EnterButtonCtx(btn) end
+        anchorHandGlow(hg, icon)
+        if S and S.LeaveButtonCtx then S:LeaveButtonCtx(pP, pS) end
+      end
     end
   end
 end
@@ -346,8 +380,15 @@ end
 -- the WINNER on any button (a disabled trigger drops to the next), so it refreshes all.
 -- ---------------------------------------------------------------------------
 function Glows:RefreshTrigger(key)
+  local S = GB.Skin
   for btn, s in pairs(sources) do
-    if isOurs(btn) and winningTrigger(s) == key then Refresh(btn) end
+    if isOurs(btn) then
+      -- The winner check reads trig() → resolve it under the button's ctx too.
+      local pP, pS; if S and S.EnterButtonCtx then pP, pS = S:EnterButtonCtx(btn) end
+      local isWinner = winningTrigger(s) == key
+      if S and S.LeaveButtonCtx then S:LeaveButtonCtx(pP, pS) end
+      if isWinner then Refresh(btn) end
+    end
   end
 end
 function Glows:SetTriggerColor(key, c)
