@@ -1,16 +1,113 @@
 # Gloom's Bars — Session Handoff
-**Last updated: end of session 10 (2026-07-21). ⇒ Read SESSION 10 FIRST — it (A) finished the glow polish
-(per-trigger glow MATRIX + flash-square fix + honest preview chips) and (B) built the per-trigger ANIMATION
-SYSTEM — a plug-in framework whose FIRST module is "Comet Chase" (the rotating shine on the rim). All committed
-+ QA'd in-game via the GUI. Session 9 (shape selection + glow-to-triggers) and sessions 2–8 remain the valid
+**Last updated: end of session 11 (2026-07-21). ⇒ Read SESSION 11 FIRST. It (A) COMPLETED the 8-animation
+catalog, (B) built PLATE MODE (the North Star "plate" look) for the 2:1 portrait shapes, and (C) landed several
+fixes — BUT ended with 3 KNOWN BUGS (see the ⚠ list). Everything is committed. Sessions 2–10 remain the valid
 foundation; the FROZEN docs [SHAPE-CATALOG.md](SHAPE-CATALOG.md) / [EFFECTS-MATRIX.md](EFFECTS-MATRIX.md) /
 [ART-SPEC.md](ART-SPEC.md) still apply.**
 
-## ▶ FIRST THING NEXT SESSION (session 11): pick up at SESSION 10 → "▶▶ NEXT (session 11)".
-Nothing is mid-flight — session 10 ends clean, everything committed (HEAD = the handoff commit). The animation
-FRAMEWORK is done + QA'd with Comet Chase as the reference module; the other 7 animation types (marching lines
-next) each slot into the same "Animations" section as a new module. Also open: glow per-state spread (optional),
-Animations UI polish (dropdown caret, None-height), effects-matrix gaps.
+## ▶ FIRST THING NEXT SESSION (session 12): fix the 3 KNOWN BUGS in SESSION 11 → "⚠ KNOWN BUGS", then finish
+PLATE Stage 4 (preview-pane mirror + keybind-in-plate). HEAD = `d194637` (session-11 WIP commit). Jason is
+switching models (Fable) to tackle the bugs fresh — the prior attempts over-complicated; keep fixes SMALL and
+verify ONE at a time in-game. Nothing is mid-flight in code (all committed), but 3 behaviours are still wrong.
+
+## ★★★ SESSION 11 (2026-07-21) — ANIMATION CATALOG COMPLETE (8/8) + PLATE MODE (2:1 shapes) + fixes. 3 BUGS OPEN.
+A very long session. Commits: `8dc1349` (marching/sheen/sparkles), `cd5c2d1` (breathe/burst/rimflash/radar),
+`ccddd0f` (plate mode Stages 1–3 + Config UX polish), `d194637` (plate overlays + cast/cooldown/taint fixes, WIP
+with the known bugs). `0f9adc5` earlier (Cast/Channel SetCast regression fix — see below).
+
+### PART A — Animation catalog COMPLETE (8/8). All QA'd in-game.
+The plug-in registry (`Anims.lua`, `GB.Anims`) now has all eight modules; each auto-appears in the Config
+Animations dropdown with its param UI generated from its schema (no per-module Config wiring):
+1. **Comet Chase** (`shine`) — session 10. 2. **Marching Lines** (`march`) — dashes on the rim; its OWN thin
+`<key>-line` masks (generate-march.py) + BLEND (true colour, not the washed-out ADD). 3. **Sheen Sweep**
+(`sheen`) — a diagonal gleam across the icon FACE; first use of the `choice` param kind (Style: Glow=ADD/
+Solid=BLEND) + custom bispeed L/R labels; restarts on each trigger for instant hover. 4. **Sparkles** (`sparkle`)
+— randomised twinkles on the face; live Size param. 5. **Breathe** (`breathe`) — the outline scales in/out
+(the only SCALE module; draws `<key>-rim` directly, no mask); rate bumped ~3× so Speed reaches a fast throb.
+6. **Burst Ring** (`burst`) — N phase-staggered outline shockwaves expand+fade. 7. **Rim Flash** (`rimflash`)
+— the outline blinks (sharp alpha). 8. **Radar Sweep** (`radar`) — a wide fading wedge rotates over the icon
+FACE (a scanner; reimagines the catalog's weak "full-glow spin"); new `radar.png`.
+- **Shared masking fix — prime-then-reveal (`PRIME_ALPHA`).** AddMaskTexture defers a frame (§2), which flashed
+  the graphic UNMASKED on the first trigger of each button. Every masked module now primes near-invisible for
+  that render frame, then attaches the mask + reveals together. (Breathe/Burst/RimFlash are mask-free — the rim
+  art IS the shaped outline — so they skip this.)
+- **Config UX polish (done + QA'd):** preview-pane caption now describes the selected state (what triggers it),
+  synced from BOTH the Animations state chips AND the top preview chips (`STATE_DESC`, in `SetPreviewState`/
+  `SetPreviewAnim`); the Animation dropdown got a ▾ caret; the Animations section sizes to the SELECTED module
+  (per-block `bottom` → `heightFor`/`setSectionHeight`), no dead space under a short module / None.
+
+### PART B — PLATE MODE for 2:1 portrait shapes (the North Star "plate" look). `styleData.plate`.
+Rebuilds the "plate" reference look on the FIVE 2:1 portrait hand shapes only (`pill21`, `square21`,
+`roundsq1-21`, `roundsq2-21`, `roundsq3-21` — a 2:1 silhouette halves into two clean squares; other aspects
+don't, so plate mode is GATED to these via `plateActive()`). A SQUARE icon fills one half, a solid-colour plate
+fills the other, and that colour fades up over the icon.
+- **Engine (`Skin.lua`):** `plateActive()`/`plateStyle()`/`plateIconSide()` near `handKey()`. `applyIconSize`
+  puts a square W×W icon in the chosen half (±W/2). `ApplyDecor` routes the SHAPE mask to a full-2:1 construction
+  rect `rec.plateRect` (W×2W, centred) so a half-height square icon doesn't squish the silhouette; the same mask
+  clips the icon, the **plate fill** (`rec.platefill`, tinted WHITE8X8, the opposite half) and the **plate
+  gradient** (`rec.plategrad`, WHITE8X8 + `SetGradient`, opaque at the midline → transparent across `fadeStart`
+  of the icon). The old decoration-layer gradient loop is skipped in plate mode. `Skin:RefreshPlate` applies
+  enable/side changes (colour/fade → `ReapplyDecor`).
+- **`Skin:ConstructRef(btn)` / `constructRef`** — the reference rect an OVERLAY should span: `plateRect` in plate
+  mode (CREATED ON DEMAND — AlignCooldowns runs before ApplyDecor, so lazy creation avoids the square-icon
+  fallback), else the icon. Glows/Anims/cooldown/cast-fill/burst/finish-flash all route through it so overlays
+  trace the WHOLE plate. (This is the `d194637` work.)
+- **Config `Plate` section** (repurposed from the now-dead "Construction"): Enable · Icon side (top/bottom) ·
+  Plate colour · Fade start. Colour + fade start stay in sync with the Decoration-Layers gradient BOTH ways
+  (mirrored in the setters). Greyed with a hint on any non-2:1 shape. Helpers `plateData`/`ensurePlate`/
+  `plateShapeOK`.
+- **DONE + QA'd:** the split geometry, colour, gradient, side toggle, colour/fade sync, and the glow + animation
+  + cast-fill overlays tracing the full plate. **NOT done — plate Stage 4:** the Config PREVIEW PANE does not
+  mirror plate mode yet (test on real bars), and the keybind-in-plate (centre the hotkey in the plate half).
+
+### PART C — Fixes this session.
+- **Cast/Channel regression (`0f9adc5`, QA'd):** session 10's rewrite dropped `Glows:SetCast`, but Skin.lua's
+  PlaySpellCastAnim hook still called it (guarded → silent no-op) → NO cast glow/animation during casting.
+  Restored `SetCast` as a thin wrapper over the internal source model.
+- **Cast/channel drain on MULTIPLE buttons (QA'd FIXED):** the cast fill OnUpdate reads the GLOBAL
+  `UnitCastingInfo("player")`, and each fill frame stays alive 1.5s after its own cast (grace window), so a
+  button you cast a moment ago re-drained to your NEXT cast. Now gated on `castCurrentBtn` (set in `styleCast` to
+  the button whose cast anim fired) + a per-frame `f.draining` flag. Minor known tradeoff: same spell on two bars
+  → only the last-fired one drains.
+- **Taint (finish-flash) REVERTED:** an attempt read the `SetCooldown` `duration` argument and compared it — that
+  arg is a PROTECTED/SECRET number, so `duration > 2` THREW "attempt to compare a secret number value" every
+  cooldown tick. Reverted to the game-clock timer; ALSO now clears `gbStart` on `OnCooldownDone` to reduce the
+  GCD-boundary race. **This did NOT fully fix the flash — see bug #1.**
+
+### ⚠ KNOWN BUGS (session 12 — fix these FIRST, one at a time, verify in-game):
+1. **Finish flash false-fires on MULTIPLE buttons after a GCD.** The game-clock GCD filter (`hookFlashCooldown`
+   in Skin.lua, `FLASH_MIN_CD = 2.0`) still lets GCD-length cooldowns flash on many buttons at once at a GCD
+   boundary. **Root constraint:** we CANNOT read the secret cooldown duration to tell a GCD from a real CD
+   (that's the taint above). **SUSPECTED best fix (non-secret):** a GCD ends MANY buttons in the SAME frame; a
+   real cooldown ends ONE. So COUNT `OnCooldownDone` events across all buttons per frame/tick — if ≥N fire
+   together, treat it as a GCD and suppress the flash. (Alt: find a non-secret GCD-duration API, e.g. the GCD
+   spell's cooldown, and skip flashing when elapsed ≈ the current GCD.) Cheap interim: default Finish flash OFF.
+2. **Green equipped-item border reappears on trinkets/equipped items.** It's Blizzard's `btn.Border`, suppressed
+   via `btn.Border:SetAlpha(0)` in `Suppress(btn)` (Skin.lua ~line 137). My changes don't touch it, so it's
+   PRE-EXISTING. **SUSPECT:** Blizzard re-shows/re-alphas it on an event we don't re-suppress on (equip /
+   `PLAYER_EQUIPMENT_CHANGED` / bag update / `UpdateButtonArt` for that button) — needs a re-assert hook, OR the
+   plate render path skips `Suppress` for some buttons. Check whether `Suppress` runs for the trinket at all.
+3. **Cooldown radial sweep looks elliptical/diagonal on the tall plate.** Blizzard's cooldown is a RADIAL wedge;
+   on a 2:1 widget it stretches into an ellipse (inherent to radial-on-tall). We CANNOT draw a custom LINEAR fill
+   (cooldown REMAINING time is secret — unlike cast time). **DESIGN DECISION for Jason:** (a) accept the radial
+   look on plates, or (b) anchor the cooldown to the ICON SQUARE only (clean circular sweep, but the plate half
+   stays lit during cooldown). This is a taste call, not a code bug.
+
+### ★★ HARD-WON LEARNINGS this session (do NOT rediscover):
+- **The `SetCooldown` `duration` argument is a SECRET/PROTECTED value — comparing it TAINTS** ("attempt to
+  compare a secret number value"). Confirms the session-7 "game clock, never read the duration" decision. The
+  cooldown REMAINING/duration is off-limits; the CAST time (`UnitCastingInfo`) is readable (that's why the cast
+  fill can be linear but a cooldown can't).
+- **`UnitCastingInfo("player")` is GLOBAL** — a per-button cast fill can't tell whose spell is casting from it
+  alone; gate on the current-caster button (`castCurrentBtn`, set from the PlaySpellCastAnim hook).
+- **`plateActive()` is GLOBAL** (checks `db.handShape` is a 2:1 portrait + `db.plate.enabled`) — so when a 2:1
+  plate shape is active, EVERY button renders as a plate (trinkets included).
+- **`constructRef` must create `plateRect` ON DEMAND** — `refreshIconGeometry` calls `AlignCooldowns` (step 5)
+  BEFORE `ApplyDecor` (step 6), and plateRect used to be created only in ApplyDecor → the cooldown fell back to
+  the square icon and the swipe showed a squished shape ("dark remnant behind the glow").
+- **The cooldown `-swipe` un-distorts ONLY on a widget of the shape's aspect** — a 2:1 swipe on a SQUARE widget
+  stays squished; on a 2:1 widget it traces the pill (session-4 mechanic). Plate mode must anchor the cooldown to
+  the 2:1 plateRect, not the square icon.
 
 ## ★★★ SESSION 10 (2026-07-21) — GLOW POLISH (#1) + the PER-TRIGGER ANIMATION SYSTEM (#2). ALL committed + QA'd.
 A long, high-throughput session done GUI-first (Jason HATES slash commands — see below). Two big deliverables.
