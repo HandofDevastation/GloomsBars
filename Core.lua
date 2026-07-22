@@ -302,6 +302,10 @@ local DB_DEFAULTS = {
   iconAspect = 1,          -- the locked height/width ratio (captured when lock is enabled)
   iconFill = "fill",       -- "fill" (cover: keep art aspect, crop) or "stretch"
   sweepOvershoot = 0.75,   -- px the cooldown sweep extends past the icon circle
+  -- Empty-slot treatment (Config → Empty slots): "normal" | "dim" | "hide".
+  -- Alpha-only — the secure button is never shown/hidden (pure-skin wall).
+  emptySlots = "normal",
+  emptySlotAlpha = 0.35,   -- button alpha in "dim" mode
   -- Cooldown sweep appearance (Config → Cooldown & availability).
   swipeColor = { 0, 0, 0 },        -- cooldown sweep tint (SetSwipeColor rgb)
   swipeAlpha = 0.8,                -- cooldown sweep opacity (SetSwipeColor alpha; template default)

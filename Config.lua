@@ -1037,6 +1037,44 @@ local function buildCountSection(bf, s)
   end
 end
 
+-- Empty slots — dim or hide bar slots with no action. Alpha-only (the secure
+-- button is never shown/hidden — pure-skin wall); while an action is on the
+-- cursor the slots return automatically so drop targets stay visible.
+local function buildEmptySection(bf, s)
+  local function mode() return (GB.db and GB.db.emptySlots) or "normal" end
+  local mlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); mlab:SetPoint("TOPLEFT", 18, -14); mlab:SetText("Empty slots")
+  local modeBtns, prev = {}, nil
+  local function setMode(v)
+    if GB.Skin and GB.Skin.SetEmptySlots then GB.Skin:SetEmptySlots(v)
+    elseif GB.db then GB.db.emptySlots = v end
+    s.refresh()
+  end
+  for i = 3, 1, -1 do   -- reverse → Normal ends up leftmost
+    local mc = ({ { "normal", "Normal" }, { "dim", "Dim" }, { "hide", "Hidden" } })[i]
+    local b = flatButton(bf, 60, 22, COLOR.heroic, mc[2], 11)
+    if prev then b:SetPoint("TOPRIGHT", prev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -12) end
+    b:SetScript("OnClick", function() setMode(mc[1]) end)
+    modeBtns[#modeBtns + 1] = { b = b, v = mc[1] }; prev = b
+  end
+
+  local dimRow = sliderRow(bf, -46, "Dim opacity", 0.05, 0.9, 0.05,
+    function() return (GB.db and GB.db.emptySlotAlpha) or 0.35 end,
+    function(v)
+      if GB.Skin and GB.Skin.SetEmptySlotAlpha then GB.Skin:SetEmptySlotAlpha(v)
+      elseif GB.db then GB.db.emptySlotAlpha = v end
+    end,
+    function(v) return math.floor(v * 100 + 0.5) .. "%" end)
+
+  local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
+  hint:SetPoint("TOPLEFT", 18, -90); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Slots with no action fade or vanish. They come back on their own while you drag a spell, so drop targets stay visible.")
+  bf:SetHeight(124)
+  s.refresh = function()
+    for _, e in ipairs(modeBtns) do e.b:SetActive(e.v == mode()) end
+    dimRow:setEnabled(mode() == "dim"); dimRow:refresh()
+  end
+end
+
 -- Cast & channel — our pill-shaped fill (replaces Blizzard's square drain) and
 -- the cancel/interrupt burst. All db-level (not per-style); the engine reads
 -- these live on the NEXT cast (styleCast / CastFillOnUpdate / PlayEndBurstRed in
@@ -2144,6 +2182,7 @@ local function BuildPanel()
   makeSection("Animations", buildAnimsSection)
   makeSection("Cast & channel", buildCastSection)
   makeSection("Cooldown & availability", buildCooldownSection)
+  makeSection("Empty slots", buildEmptySection)
   makeSection("Bar layout", stubBody)
   makeSection("Apply to bars", stubBody)
 

@@ -162,6 +162,37 @@ local function Suppress(btn)
 end
 
 -- ---------------------------------------------------------------------------
+-- Empty-slot treatment (session 12): dim or hide slots with no action. We NEVER
+-- Show/Hide the secure button (the pure-skin hard wall) — only its ALPHA, which
+-- is not a protected operation. "Empty" is read from Blizzard's rendered output:
+-- their Update() Hide()s the icon when the slot has no action texture (no API
+-- call, no secret). Re-applied from a per-button Update post-hook. While the
+-- drag grid is up (an action on the cursor, ACTIONBAR_SHOWGRID) empty slots
+-- return to full alpha so drop targets stay visible.
+-- ---------------------------------------------------------------------------
+local gridShown = false
+local function applyEmptyAlpha(btn)
+  local rec = records[btn]
+  if not (rec and rec.active) then return end
+  local mode = (GB.db and GB.db.emptySlots) or "normal"
+  local a = 1
+  if mode ~= "normal" and not gridShown then
+    local icon = btn.icon or btn.Icon
+    if not (icon and icon:IsShown()) then
+      a = (mode == "hide") and 0 or ((GB.db and GB.db.emptySlotAlpha) or 0.35)
+    end
+  end
+  if rec.emptyAlpha ~= a then
+    rec.emptyAlpha = a
+    btn:SetAlpha(a)
+  end
+end
+local function setGridShown(shown)
+  gridShown = shown
+  if Skin.enabled then GB:ForEachButton(function(b) applyEmptyAlpha(b) end) end
+end
+
+-- ---------------------------------------------------------------------------
 -- Decoration engine — interprets GB.STYLES recipes (the design north star).
 -- Plates are pooled per button (textures can't be destroyed, only reused) and
 -- clipped by fresh per-plate shape masks (our-own-texture + fresh-mask = the
@@ -1700,6 +1731,13 @@ local function ApplyButton(btn)
         end
       end)
     end
+    -- Empty-slot alpha tracks every content refresh (slot change, page flip,
+    -- world enter — Update runs on all of them and Hide()s the icon when empty).
+    if btn.Update then
+      hooksecurefunc(btn, "Update", function(b)
+        if Skin.enabled then applyEmptyAlpha(b) end
+      end)
+    end
     if btn.UpdateAssistedCombatRotationFrame then
       hooksecurefunc(btn, "UpdateAssistedCombatRotationFrame", function(b)
         if Skin.enabled then StyleAssistedFrame(b) end
@@ -1848,6 +1886,7 @@ local function RestoreButton(btn)
   if btn.Border then btn.Border:SetAlpha(1) end
   if btn.NewActionTexture then btn.NewActionTexture:SetAlpha(1) end
   if btn.CooldownFlash then btn.CooldownFlash:SetAlpha(1) end
+  btn:SetAlpha(1); rec.emptyAlpha = nil   -- undo any empty-slot dim/hide
   if rec.plates then
     for _, plate in ipairs(rec.plates) do plate.tex:Hide() end
   end
@@ -1888,6 +1927,21 @@ function Skin:Enable()
   end)
   GB.msg(("skin ON — %d buttons styled. Persists across /reload; /gb skin to turn off."):format(count))
   if GB.Glows then GB.Glows:SetEnabled(true) end
+  self:RefreshEmptySlots()   -- initial empty-slot dim/hide pass
+end
+
+-- Empty-slot treatment: re-sync every button (Config setters + enable call this).
+function Skin:RefreshEmptySlots()
+  if not self.enabled then return end
+  GB:ForEachButton(function(btn) applyEmptyAlpha(btn) end)
+end
+function Skin:SetEmptySlots(mode)
+  if GB.db then GB.db.emptySlots = mode end
+  self:RefreshEmptySlots()
+end
+function Skin:SetEmptySlotAlpha(v)
+  if GB.db then GB.db.emptySlotAlpha = v end
+  self:RefreshEmptySlots()
 end
 
 function Skin:Disable()
@@ -1922,4 +1976,13 @@ reassert:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 reassert:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 reassert:SetScript("OnEvent", function()
   if Skin.enabled then GB:ForEachButton(function(b) Suppress(b) end) end
+end)
+
+-- Drag grid: an action on the cursor must see every empty slot as a drop target,
+-- so empty-slot dim/hide lifts for the drag and re-applies when it ends.
+local grid = CreateFrame("Frame")
+grid:RegisterEvent("ACTIONBAR_SHOWGRID")
+grid:RegisterEvent("ACTIONBAR_HIDEGRID")
+grid:SetScript("OnEvent", function(_, event)
+  setGridShown(event == "ACTIONBAR_SHOWGRID")
 end)
