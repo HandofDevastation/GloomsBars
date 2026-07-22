@@ -315,6 +315,7 @@ local panel, bodyContainer
 local sections = {}
 local previewFrame, previewIcon, previewMask, previewGlow, previewRing, previewCD
 local previewBorder, previewBorderMask, previewCaption
+local previewPlateOn = false             -- plate mode live in the preview (set by RefreshPreview)
 local previewOuter, previewInner          -- multi-part shaped glow (hand shapes; mirrors the bars)
 local previewFlashFrame, previewFlash, previewFlashAnim   -- finish-flash preview
 local previewPlates = {}                 -- pooled gradient-plate textures (created lazily)
@@ -1254,13 +1255,14 @@ end
 -- construction (icon + extension), mirroring Skin.AnchorConstruction so overlays
 -- follow the full pill and not just the icon. `ratio` = padding grow per axis,
 -- `extra` = extra px overshoot.
-local function anchorPreviewOverlay(tex, ratio, extra)
+local function anchorPreviewOverlay(tex, ratio, extra, ref)
   extra = extra or 0
-  local gx = previewIcon:GetWidth() * ratio + extra
-  local gy = (previewIcon:GetHeight() + previewExtH) * ratio + extra
+  ref = ref or previewIcon   -- plate mode passes previewFrame for full-construction overlays
+  local gx = ref:GetWidth() * ratio + extra
+  local gy = (ref:GetHeight() + previewExtH) * ratio + extra
   tex:ClearAllPoints()
-  tex:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -gx, gy + previewExtT)
-  tex:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", gx, -(gy + previewExtB))
+  tex:SetPoint("TOPLEFT", ref, "TOPLEFT", -gx, gy + previewExtT)
+  tex:SetPoint("BOTTOMRIGHT", ref, "BOTTOMRIGHT", gx, -(gy + previewExtB))
 end
 
 -- Pooled gradient-plate texture (textures can't be freed, only reused/hidden).
@@ -1299,9 +1301,26 @@ function C:RefreshPreview()
   end
   previewFrame:SetSize(pw, ph)
 
+  -- Plate mode (Stage 4b): mirror the bars — the SQUARE icon fills one half of the
+  -- 2:1 silhouette, the plate colour the other. The full 2:1 rect IS previewFrame,
+  -- so shape anchors (mask/glows/border) point at `sref` (the frame in plate mode)
+  -- while the icon shrinks to its half. Non-plate: icon spans the frame, sref ==
+  -- previewIcon, so nothing changes for the other shapes.
+  previewPlateOn = (plateShapeOK() and plateData() and plateData().enabled) and true or false
+  local plateSide = (plateData() and plateData().iconSide) or "top"
+  previewIcon:ClearAllPoints()
+  if previewPlateOn then
+    previewIcon:SetSize(pw, pw)
+    local e = (plateSide == "bottom") and "BOTTOM" or "TOP"
+    previewIcon:SetPoint(e, previewFrame, e, 0, 0)
+  else
+    previewIcon:SetAllPoints(previewFrame)
+  end
+  local sref = previewPlateOn and previewFrame or previewIcon   -- the SHAPE reference rect
+
   -- Per-axis hand-mask growth (mirrors Skin.hgAnchor): a hand silhouette fills a
   -- different fraction of its canvas per axis, so grow each edge to land `grow` px
-  -- out (caps stay round). Anchored to previewIcon's corners using pw/ph directly
+  -- out (caps stay round). Anchored to sref's corners using pw/ph directly
   -- (no reliance on GetWidth mid-refresh). grow=0 → icon edge; grow=t → border.
   local function handAnchor(tex, grow)
     grow = grow or 0
@@ -1311,8 +1330,8 @@ function C:RefreshPreview()
     local mx = m0 + (pw <= ph and 2 * grow or addL)
     local my = m0 + (ph < pw and 2 * grow or addL)
     tex:ClearAllPoints()
-    tex:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -mx, my)
-    tex:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", mx, -my)
+    tex:SetPoint("TOPLEFT", sref, "TOPLEFT", -mx, my)
+    tex:SetPoint("BOTTOMRIGHT", sref, "BOTTOMRIGHT", mx, -my)
   end
 
   -- Construction = icon + extension (a plate above/below). Mirror the engine:
@@ -1358,7 +1377,12 @@ function C:RefreshPreview()
   end
   previewIcon:AddMaskTexture(previewMask)
   -- Same cover-fit crop as the engine so the preview matches the bars (part a).
-  previewIcon:SetTexCoord(GB.Skin:TexCoordFor(previewIcon:GetWidth(), previewIcon:GetHeight()))
+  -- Plate mode: the icon is the pw×pw square half → square crop, like the bars.
+  if previewPlateOn then
+    previewIcon:SetTexCoord(GB.Skin:TexCoordFor(pw, pw))
+  else
+    previewIcon:SetTexCoord(GB.Skin:TexCoordFor(previewIcon:GetWidth(), previewIcon:GetHeight()))
+  end
 
   -- Overlay art + span follow the construction shape/aspect, like the bars.
   previewGlow:SetTexture(GB.Skin:GlowArt() or shp.glow)   -- SDF-fallback proc bloom (non-hand shapes)
@@ -1372,8 +1396,10 @@ function C:RefreshPreview()
     previewOuter:SetTexture(GB:HandAsset(hk, "outer")); handAnchor(previewOuter, bg)
     previewInner:SetTexture(GB:HandAsset(hk, "inner")); handAnchor(previewInner, 2)
   end
-  -- Cooldown sweep traces the hand silhouette (its -swipe) on hand shapes, else the SDF swipe.
-  if previewCD.SetSwipeTexture then previewCD:SetSwipeTexture((hk and GB:HandAsset(hk, "swipe")) or GB.Skin:AspectSwipe(pw, ph + maskExt) or shp.swipe) end
+  -- Cooldown sweep traces the hand silhouette (its -swipe) on hand shapes, else the SDF
+  -- swipe. Plate mode: the icon-half swipe (the CD chip tracks previewIcon = the square).
+  local swipePart = previewPlateOn and ((plateSide == "bottom") and "swipe-b" or "swipe-t") or "swipe"
+  if previewCD.SetSwipeTexture then previewCD:SetSwipeTexture((hk and GB:HandAsset(hk, swipePart)) or GB.Skin:AspectSwipe(pw, ph + maskExt) or shp.swipe) end
 
   -- Gradient plate layers — mirror Skin.ApplyDecor's directional renderer. Each
   -- layer is a shape-masked (continuous) or square (off) fade; when an extension
@@ -1396,7 +1422,36 @@ function C:RefreshPreview()
     plate.mask = m
   end
   local used = 0
-  for _, layer in ipairs(style.layers or {}) do
+  -- Plate mode draws its OWN fill + gradient and skips the decoration layers,
+  -- exactly like the engine (ApplyDecor's plate blocks).
+  if previewPlateOn then
+    local pd = plateData()
+    local pc = (pd and pd.color) or { 0.1, 0.1, 0.13 }
+    local fadeStart = (pd and pd.fadeStart) or 0.5
+    -- Fill: the solid square half OPPOSITE the icon, clipped by the silhouette mask.
+    used = used + 1
+    local fill = getPreviewPlate(used); plateMask(fill)
+    local e = (plateSide == "bottom") and "TOP" or "BOTTOM"
+    fill.tex:ClearAllPoints()
+    fill.tex:SetPoint(e, previewFrame, e, 0, 0); fill.tex:SetSize(pw, pw)
+    local fc = CreateColor(pc[1], pc[2], pc[3], 1)
+    fill.tex:SetGradient("VERTICAL", fc, fc)   -- solid (clears any pooled gradient)
+    fill.tex:Show()
+    -- Gradient: opaque at the midline, fading across fadeStart of the icon half.
+    used = used + 1
+    local grad = getPreviewPlate(used); plateMask(grad)
+    local fromC, toC = CreateColor(pc[1], pc[2], pc[3], 1), CreateColor(pc[1], pc[2], pc[3], 0)
+    grad.tex:ClearAllPoints(); grad.tex:SetHeight(math.max(0.01, pw * fadeStart))
+    if plateSide == "bottom" then   -- icon in the BOTTOM half → opaque at its TOP, fading DOWN
+      grad.tex:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", 0, 0); grad.tex:SetPoint("TOPRIGHT", previewIcon, "TOPRIGHT", 0, 0)
+      grad.tex:SetGradient("VERTICAL", toC, fromC)
+    else                            -- icon in the TOP half → opaque at its BOTTOM, fading UP
+      grad.tex:SetPoint("BOTTOMLEFT", previewIcon, "BOTTOMLEFT", 0, 0); grad.tex:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", 0, 0)
+      grad.tex:SetGradient("VERTICAL", fromC, toC)
+    end
+    grad.tex:Show()
+  end
+  for _, layer in ipairs((not previewPlateOn and style.layers) or {}) do
     if layer.enabled ~= false and layer.kind == "gradient" then
       local c = layer.color or { 1, 1, 1 }
       local fromC = CreateColor(c[1], c[2], c[3], layer.fromAlpha or 1)
@@ -1452,8 +1507,8 @@ function C:RefreshPreview()
     local t, col = bd.thickness, bd.color or { 0, 0, 0 }
     local a = bd.alpha or 1
     previewBorder:ClearAllPoints()
-    previewBorder:SetPoint("TOPLEFT", previewIcon, "TOPLEFT", -t, t + mExtT)
-    previewBorder:SetPoint("BOTTOMRIGHT", previewIcon, "BOTTOMRIGHT", t, -(mExtB + t))
+    previewBorder:SetPoint("TOPLEFT", sref, "TOPLEFT", -t, t + mExtT)
+    previewBorder:SetPoint("BOTTOMRIGHT", sref, "BOTTOMRIGHT", t, -(mExtB + t))
     if bd.color2 then
       local c2 = bd.color2
       local orient = (bd.gradDir == "left" or bd.gradDir == "right") and "HORIZONTAL" or "VERTICAL"
@@ -1517,7 +1572,9 @@ function C:PlayPreviewFlash()
   previewFlash:SetTexture(GB.Skin:GlowArt())
   local c = GB.db.finishFlashColor or { 1, 0.9, 0.5 }
   previewFlash:SetVertexColor(c[1], c[2], c[3])
-  anchorPreviewOverlay(previewFlashFrame, (128 / 80 - 1) / 2)   -- anchor the FRAME so the scale bursts from centre
+  -- Anchor the FRAME so the scale bursts from centre; plate mode spans the full 2:1
+  -- construction (the bars' flash traces constructRef), else the icon.
+  anchorPreviewOverlay(previewFlashFrame, (128 / 80 - 1) / 2, 0, previewPlateOn and previewFrame or nil)
   previewFlashFrame:SetAlpha(1)
   previewFlashAnim:Stop(); previewFlashAnim:Play()
 end
@@ -1581,7 +1638,7 @@ function C:SetPreviewState(st)
   end
   -- Glow chips don't show animations; the Animations section re-adds them via
   -- SetPreviewAnim. Clear any preview animation by default so they don't linger.
-  if GB.Anims and previewFrame then GB.Anims:PreviewReconcile(previewFrame, previewIcon, GB.db and GB.db.handShape, nil) end
+  if GB.Anims and previewFrame then GB.Anims:PreviewReconcile(previewFrame, previewPlateOn and previewFrame or previewIcon, GB.db and GB.db.handShape, nil) end
   for s2, chip in pairs(previewChips) do chip:SetActive(s2 == previewState) end
   -- Caption tracks whatever state is previewed (top chips or a section). SetPreviewAnim
   -- runs after this and overrides with the animation trigger's own description.
@@ -1595,7 +1652,8 @@ function C:SetPreviewAnim(triggerKey)
   self:SetPreviewState(ANIM_PREVIEW_STATE[triggerKey] or "idle")
   if GB.Anims and previewFrame and previewIcon then
     local trigger = GB.db and GB.db.triggers and GB.db.triggers[triggerKey]
-    GB.Anims:PreviewReconcile(previewFrame, previewIcon, GB.db and GB.db.handShape, trigger)
+    -- Plate mode: animations span the full 2:1 construction (the bars' ConstructRef).
+    GB.Anims:PreviewReconcile(previewFrame, previewPlateOn and previewFrame or previewIcon, GB.db and GB.db.handShape, trigger)
   end
   if previewCaption then previewCaption:SetText(STATE_DESC[triggerKey] or PREVIEW_CAPTION_DEFAULT) end
 end
