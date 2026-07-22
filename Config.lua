@@ -314,7 +314,7 @@ local PREVIEW_CENTER_Y = -290    -- pushed down for the 7-row state-chip grid (s
 local panel, bodyContainer
 local sections = {}
 local previewFrame, previewIcon, previewMask, previewGlow, previewRing, previewCD
-local previewBorder, previewBorderMask, previewCaption
+local previewBorder, previewBorderMask, previewCaption, previewCaptionHead
 local previewPlateOn = false             -- plate mode live in the preview (set by RefreshPreview)
 local previewOuter, previewInner          -- multi-part shaped glow (hand shapes; mirrors the bars)
 local previewFlashFrame, previewFlash, previewFlashAnim   -- finish-flash preview
@@ -472,30 +472,59 @@ end
 -- contextual help right in the preview pane. Reset on every section toggle so it never
 -- lingers into a section that has no "state" concept.
 local PREVIEW_CAPTION_DEFAULT = "Sample of the visible skin. Your clickable hit area stays Edit Mode's size."
--- Each entry: what triggers the state in-game + WHERE its controls live (the
--- accordion section names, in caps so they read as locations — Jason, session 12).
+-- Section-name hyperlink: |Hgbsec:<title>|h in caret orange (#FF7729); the caption
+-- frame's OnHyperlinkClick opens that accordion section. Display = the title in caps.
+local function secLink(title)
+  return ("|Hgbsec:%s|h|cffFF7729%s|r|h"):format(title, title:upper())
+end
+local L_GLOWS, L_ANIMS = secLink("Glows"), secLink("Animations")
+local L_CDA, L_CAST = secLink("Cooldown & availability"), secLink("Cast & channel")
+-- Each entry = { HEADING, body }: the state name (bold GeneralSans-Semibold line)
+-- + what triggers it in-game + clickable section links (Jason's copy, session 12).
 local STATE_DESC = {
-  idle     = "Idle: the button's resting look, with nothing active. Styled in SHAPE & ICON, PLATE, DECORATION LAYERS and TEXT.",
-  cooldown = "Cooldown: while the ability is recharging (the shaped sweep, then a finish flash). Styled in COOLDOWN & AVAILABILITY.",
-  proc     = "Proc: fires when an ability procs (a free or empowered cast becomes ready). Styled in GLOWS and ANIMATIONS.",
-  highlight = "Highlight: Blizzard's \"press this\" pulse — where a hovered spellbook/talent spell sits on your bars. Styled in GLOWS and ANIMATIONS.",
-  cast     = "Cast: while you're casting a cast-time spell on this button. Glow in GLOWS and ANIMATIONS; the drain fill & end bursts in CAST & CHANNEL.",
-  channel  = "Channel: while you're channeling a spell on this button. Glow in GLOWS and ANIMATIONS; the drain fill & end bursts in CAST & CHANNEL.",
-  hover    = "Hover: while your mouse is over the button. Styled in GLOWS and ANIMATIONS.",
-  selected = "Selected: when the button is toggled on (a stance, form, or toggled aura). Styled in GLOWS and ANIMATIONS.",
-  flash    = "Flash: during auto-attack or auto-shot (needs the Attack ability on a bar). Styled in GLOWS and ANIMATIONS.",
-  assist   = "Assist: Blizzard's suggested-next-ability rotation highlight. Styled in GLOWS and ANIMATIONS.",
-  unusable = "Unusable: wrong form/stance, silenced, or missing a resource. Styled in COOLDOWN & AVAILABILITY.",
-  oom      = "Out of mana: not enough mana/power to cast. Styled in COOLDOWN & AVAILABILITY.",
-  range    = "Out of range: the target is too far — icon wash + keybind recolour. Enable & style in COOLDOWN & AVAILABILITY.",
+  idle      = { "IDLE", ("The button's resting/default look with nothing active. Styled in %s, %s, %s and %s.")
+                :format(secLink("Shape & icon"), secLink("Plate"), secLink("Decoration layers"), secLink("Text")) },
+  proc      = { "PROC", "Triggered when an ability procs (a free or empowered cast becomes ready). Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
+  highlight = { "HIGHLIGHT", "Indicates the current location (if any) on your action bars when hovering over an ability or talent in your spellbook or talent tree. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
+  assist    = { "ASSIST", "Triggered by Blizzard's Combat Assistant/Assisted Highlight feature to indicate the suggested next rotation ability. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
+  cast      = { "CAST", "Shows while activating an ability with a cast time. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "; the casting fill bar and end burst and canceled/interrupted bursts are styled in " .. L_CAST .. "." },
+  channel   = { "CHANNEL", "Shows while activating a channeled ability. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "; the channel progress drain and end burst and canceled/interrupted bursts are styled in " .. L_CAST .. "." },
+  hover     = { "HOVER", "Shows while hovering your pointer over an icon in your action bars. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
+  selected  = { "SELECTED", "Displays when a button is toggled on (a stance, form or aura). Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
+  flash     = { "FLASH", "Appears when auto-attack or auto-shot is active — typically needs the related auto-attack ability to be on the action bar. Not commonly seen. Styled in " .. L_GLOWS .. " and " .. L_ANIMS .. "." },
+  cooldown  = { "COOLDOWN", "A swipe animation and finish flash to indicate that an ability is recharging or ready. Styled in " .. L_CDA .. "." },
+  unusable  = { "UNUSABLE", "Indicates an ability is unusable due to wrong talent, form/stance, weapon type, silenced, missing resource, etc. Styled in " .. L_CDA .. "." },
+  oom       = { "OUT OF MANA", "Indicates you have insufficient mana or other resource/power to cast. Styled in " .. L_CDA .. "." },
+  range     = { "OUT OF RANGE", "Shows when the target is too far for the ability to be cast. Tints the icon and recolors the keybind text (if shown). Enabled and styled in " .. L_CDA .. "." },
 }
+-- Set the caption pair: a STATE_DESC entry, or nil → the default explainer (no heading).
+local function setCaption(entry)
+  if not (previewCaption and previewCaptionHead) then return end
+  if type(entry) == "table" then
+    previewCaptionHead:SetText(entry[1])
+    previewCaption:SetText(entry[2])
+  else
+    previewCaptionHead:SetText("")
+    previewCaption:SetText(PREVIEW_CAPTION_DEFAULT)
+  end
+end
 
 function C:ToggleSection(s)
-  if previewCaption then previewCaption:SetText(PREVIEW_CAPTION_DEFAULT) end   -- Animations re-sets it in s.refresh
+  setCaption(nil)   -- Animations re-sets it in s.refresh
   local wasOpen = s.open
   for _, x in ipairs(sections) do x.open = false end
   if not wasOpen then s.open = true; if s.refresh then s.refresh() end end   -- reflect current state on open
   relayout()
+end
+
+-- Open (never close) the section with this title — the caption's section links.
+function C:OpenSection(title)
+  for _, s in ipairs(sections) do
+    if s.title == title then
+      if not s.open then self:ToggleSection(s) end
+      return
+    end
+  end
 end
 
 -- A section = an accordion header (orange caret + purple Khand title) over a
@@ -1665,12 +1694,18 @@ function C:RefreshPreview()
   end
 
   -- Caption tucks just below the construction (below the plate when it extends
-  -- downward) so it never sits under the plate.
-  if previewCaption then
+  -- downward) so it never sits under the plate: bold state heading, body under it
+  -- (an empty heading has zero height, so the default caption sits at the top).
+  if previewCaption and previewCaptionHead then
+    local pane2 = previewFrame:GetParent()
+    previewCaptionHead:ClearAllPoints()
+    previewCaptionHead:SetPoint("TOP", previewFrame, "BOTTOM", 0, -(previewExtB + 14))
+    previewCaptionHead:SetPoint("LEFT", pane2, "LEFT", 10, 0)
+    previewCaptionHead:SetPoint("RIGHT", pane2, "RIGHT", -10, 0)
     previewCaption:ClearAllPoints()
-    previewCaption:SetPoint("TOP", previewFrame, "BOTTOM", 0, -(previewExtB + 14))
-    previewCaption:SetPoint("LEFT", previewFrame:GetParent(), "LEFT", 10, 0)
-    previewCaption:SetPoint("RIGHT", previewFrame:GetParent(), "RIGHT", -10, 0)
+    previewCaption:SetPoint("TOP", previewCaptionHead, "BOTTOM", 0, -3)
+    previewCaption:SetPoint("LEFT", pane2, "LEFT", 10, 0)
+    previewCaption:SetPoint("RIGHT", pane2, "RIGHT", -10, 0)
   end
 
   -- A plate texture created THIS frame hasn't rendered, so its first
@@ -1791,7 +1826,7 @@ function C:SetPreviewState(st)
   for s2, chip in pairs(previewChips) do chip:SetActive(s2 == previewState) end
   -- Caption tracks whatever state is previewed (top chips or a section). SetPreviewAnim
   -- runs after this and overrides with the animation trigger's own description.
-  if previewCaption then previewCaption:SetText(STATE_DESC[previewState] or PREVIEW_CAPTION_DEFAULT) end
+  setCaption(STATE_DESC[previewState])
 end
 
 -- Preview the selected trigger's glow (its chip, or idle) PLUS its enabled animations
@@ -1804,7 +1839,7 @@ function C:SetPreviewAnim(triggerKey)
     -- Plate mode: animations span the full 2:1 construction (the bars' ConstructRef).
     GB.Anims:PreviewReconcile(previewFrame, previewPlateOn and previewFrame or previewIcon, GB.db and GB.db.handShape, trigger)
   end
-  if previewCaption then previewCaption:SetText(STATE_DESC[triggerKey] or PREVIEW_CAPTION_DEFAULT) end
+  setCaption(STATE_DESC[triggerKey])
 end
 
 -- Animations — the per-trigger animation system (GB.Anims). Pick a trigger, then
@@ -2126,10 +2161,31 @@ local function buildPreviewPane(parent)
   if previewFlashAnim.SetToFinalAlpha then previewFlashAnim:SetToFinalAlpha(true) end
   previewFlashAnim:SetScript("OnFinished", function() previewFlashFrame:SetAlpha(0) end)
 
-  local cap = newText(pane, FONT.body, 10, MUTE, "CENTER")
-  cap:SetPoint("TOP", frame, "BOTTOM", 0, -16); cap:SetPoint("LEFT", 10, 0); cap:SetPoint("RIGHT", -10, 0)
+  -- Caption = a bold state-name heading (GeneralSans-Semibold) + the description
+  -- body. The body lives on its own mouse-enabled frame with hyperlinks on:
+  -- section names are |Hgbsec:*|h links (caret orange) that open that accordion
+  -- section. RefreshPreview re-anchors both below the construction.
+  local head = newText(pane, FONT.label, 11, TEXT, "CENTER")
+  head:SetJustifyH("CENTER"); head:SetText("")
+  head:SetPoint("TOP", frame, "BOTTOM", 0, -16)
+  head:SetPoint("LEFT", pane, "LEFT", 10, 0); head:SetPoint("RIGHT", pane, "RIGHT", -10, 0)
+  previewCaptionHead = head
+  local capFrame = CreateFrame("Frame", nil, pane)
+  capFrame:SetHyperlinksEnabled(true)
+  capFrame:EnableMouse(true)
+  capFrame:SetScript("OnHyperlinkClick", function(_, link)
+    local title = link and link:match("^gbsec:(.+)$")
+    if not title then return end
+    local st = previewState
+    C:OpenSection(title)
+    C:SetPreviewState(st)   -- some sections hijack the preview on open (Glows → proc); restore the clicked state
+  end)
+  local cap = newText(capFrame, FONT.body, 10, MUTE, "CENTER")
   cap:SetJustifyH("CENTER"); cap:SetText(PREVIEW_CAPTION_DEFAULT)
-  previewCaption = cap   -- RefreshPreview re-anchors it below the construction (below the plate)
+  cap:SetPoint("TOP", head, "BOTTOM", 0, -3)
+  cap:SetPoint("LEFT", pane, "LEFT", 10, 0); cap:SetPoint("RIGHT", pane, "RIGHT", -10, 0)
+  previewCaption = cap
+  capFrame:SetAllPoints(cap)   -- the click surface tracks the body text's rect
 end
 
 local function BuildPanel()
