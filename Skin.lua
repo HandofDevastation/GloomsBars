@@ -766,7 +766,14 @@ local function ApplyHotkeyOverride(btn)
   end
   local ext = ExtensionHeight(icon)
   hk:ClearAllPoints()
-  if conf.zone == "extension" and ext > 0 then
+  if plateActive() and conf.zone == "extension" then
+    -- Plate Stage 4: the plate half IS the extension's successor — centre the
+    -- keybind in the half OPPOSITE the icon (the reference "plate" look). Same
+    -- positioning math as the platefill (CENTER of the button ± half the width).
+    local pw = icon:GetWidth()
+    local pdy = (plateIconSide() == "bottom") and (pw * 0.5) or (-pw * 0.5)
+    hk:SetPoint("CENTER", btn, "CENTER", conf.offsetX or 0, pdy + (conf.offsetY or 0))
+  elseif conf.zone == "extension" and ext > 0 then
     if ExtensionAbove() then
       hk:SetPoint("CENTER", icon, "TOP", conf.offsetX or 0, (ext / 2) + (conf.offsetY or 0))
     else
