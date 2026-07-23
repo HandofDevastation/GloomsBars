@@ -295,6 +295,14 @@ function Glows:Init()
   stateWatcher:RegisterEvent("PET_BAR_UPDATE")
   stateWatcher:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
   stateWatcher:RegisterEvent("UPDATE_SHAPESHIFT_FORMS")
+  -- The "selected" glow faithfully mirrors Blizzard's checked state. ★ Verified
+  -- against the native pet bar (GB fully disabled): Blizzard KEEPS the stance
+  -- button (e.g. Passive) checked even while the pet is actively attacking — Kill
+  -- Command does not change the stance, so Passive stays selected. That's odd but
+  -- it IS Blizzard's behavior (Jason confirmed), and their own glow is just so
+  -- subtle it's easy to miss. We mirror it — and the "selected" trigger defaults
+  -- to a SOFT-BLUE INNER-ONLY glow (Core seed) so a persistently-lit stance reads
+  -- as a quiet indicator, not a shout. Tunable per-trigger in the Glows section.
   stateWatcher:SetScript("OnEvent", function()
     if not Glows.enabled then return end
     GB:ForEachButton(function(btn)

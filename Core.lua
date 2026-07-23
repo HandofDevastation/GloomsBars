@@ -656,7 +656,7 @@ loader:SetScript("OnEvent", function(_, event, arg1)
         cast     = { enabled = true, color = { 1, 0.85, 0.4 },                          opacity = gi, layers = "both" },
         channel  = { enabled = true, color = { 0.6, 1, 0.4 },                           opacity = gi, layers = "both" },
         hover    = { enabled = true, color = sc.hover or { 1, 0.82, 0.35 },             opacity = si, layers = "both" },
-        selected = { enabled = true, color = sc.selected or { 0.45, 0.75, 1 },          opacity = si, layers = "both" },
+        selected = { enabled = true, color = sc.selected or { 0.45, 0.75, 1 },          opacity = si, layers = "inner" },   -- soft blue INNER-ONLY: our restyle of Blizzard's subtle yellow interior stance glow (Jason)
         flash    = { enabled = true, color = sc.flash or { 1, 0.25, 0.25 },             opacity = si, layers = "both" },
       }
       GB.db.triggers = GB.db.triggers or {}
