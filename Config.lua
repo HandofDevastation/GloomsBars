@@ -2757,6 +2757,19 @@ local function buildLayoutSection(bf, s)
     function(v) local c = ensureBarLayout(selBar); c.gapCross = v; apply() end,
     function(v) return v .. "px" end)
 
+  -- Position (phase L3): move mode + per-bar reset. Both need the master
+  -- switch on (position is part of the layout the addon owns).
+  local mvBtn = flatButton(bf, 110, 22, COLOR.purple, "Move bars", 11)
+  mvBtn:SetPoint("TOPLEFT", 18, -436)
+  mvBtn:SetScript("OnClick", function()
+    if GB.Layout then GB.Layout:SetMoveMode(not GB.Layout:MoveModeOn()) end
+  end)
+  attachTip(mvBtn, "Move bars", "Drag any bar's overlay to reposition it. Click an overlay to select it, then nudge with the arrow keys — hold Shift for 10px steps. ESC or this button exits. Out of combat only.")
+  local rsBtn = flatButton(bf, 130, 22, COLOR.heroic, "Reset position", 11)
+  rsBtn:SetPoint("TOPRIGHT", -18, -436)
+  rsBtn:SetScript("OnClick", function() if GB.Layout then GB.Layout:ResetPosition(selBar) end end)
+  attachTip(rsBtn, "Reset position", "Returns the selected bar to wherever Edit Mode places it.")
+
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
   hint:SetPoint("TOPLEFT", 18, -406); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
   hint:SetText("Button size scales the WHOLE button proportionally — icon, text, glows — like Edit Mode's size setting. How the icon sits within its button stays a style choice (the Shape & icon section's Size, saved in the preset). Changes made in combat apply the moment combat ends.")
@@ -2767,7 +2780,7 @@ local function buildLayoutSection(bf, s)
     s.refresh()
   end
 
-  bf:SetHeight(450)
+  bf:SetHeight(478)
   s.refresh = function()
     for _, c in ipairs(chips) do c.b:SetActive(c.k == selBar) end
     local on = layoutOn()
@@ -2787,10 +2800,16 @@ local function buildLayoutSection(bf, s)
     local yOr = multiRow and -416 or -372
     dlab:ClearAllPoints(); dlab:SetPoint("TOPLEFT", 18, yOr - 2)
     orBtns[1].b:ClearAllPoints(); orBtns[1].b:SetPoint("TOPRIGHT", -18, yOr)
+    mvBtn:ClearAllPoints(); mvBtn:SetPoint("TOPLEFT", 18, yOr - 30)
+    rsBtn:ClearAllPoints(); rsBtn:SetPoint("TOPRIGHT", -18, yOr - 30)
+    local moving = (GB.Layout and GB.Layout:MoveModeOn()) or false
+    mvBtn:SetActive(moving)
+    mvBtn:SetText(moving and "Lock bars" or "Move bars")   -- Jason: the button names the NEXT action
+    mvBtn:SetEnabled(on); rsBtn:SetEnabled(on)
     hint:ClearAllPoints()
-    hint:SetPoint("TOPLEFT", 18, multiRow and -450 or -406)
+    hint:SetPoint("TOPLEFT", 18, yOr - 62)
     hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0)
-    bf:SetHeight(multiRow and 494 or 450)
+    bf:SetHeight(multiRow and 522 or 478)
     relayout()
   end
 end

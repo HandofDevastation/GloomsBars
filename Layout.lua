@@ -42,11 +42,16 @@ end
 
 local watcher = CreateFrame("Frame")
 watcher:RegisterEvent("PLAYER_REGEN_ENABLED")
+watcher:RegisterEvent("PLAYER_REGEN_DISABLED")
 watcher:RegisterEvent("ACTIONBAR_SHOWGRID")
 watcher:RegisterEvent("ACTIONBAR_HIDEGRID")
 watcher:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 watcher:SetScript("OnEvent", function(_, event)
-  if event == "PLAYER_REGEN_ENABLED" then
+  if event == "PLAYER_REGEN_DISABLED" then
+    -- Combat starts → move mode closes itself (dragging + keyboard capture
+    -- are combat-restricted; a half-open mode would just misbehave).
+    if Layout.MoveModeOn and Layout:MoveModeOn() then Layout:SetMoveMode(false) end
+  elseif event == "PLAYER_REGEN_ENABLED" then
     if pending then pending = false; Layout:ApplyAll() end
   elseif event == "ACTIONBAR_SHOWGRID" then gridVisible = true; queueApply()
   elseif event == "ACTIONBAR_HIDEGRID" then gridVisible = false; queueApply()
@@ -111,6 +116,16 @@ local function applyBar(barKey)
       if barFrame:IsShown() then (barFrame.HideBase or barFrame.Hide)(barFrame) end
     elseif vis == "show" and barFrame.isShownExternal ~= false then
       if not barFrame:IsShown() then (barFrame.ShowBase or barFrame.Show)(barFrame) end
+    end
+  end
+  -- Position override (phase L3): c.posX/posY = the bar's CENTER in UIParent
+  -- space; nil = Edit Mode's spot. SetPoint offsets live in the anchored
+  -- frame's scaled space → divide by the relative scale.
+  if c.posX ~= nil and c.posY ~= nil then
+    local s = barFrame:GetEffectiveScale() / UIParent:GetEffectiveScale()
+    if s > 0 then
+      barFrame:ClearAllPoints()
+      barFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", c.posX / s, c.posY / s)
     end
   end
   local count = math.max(1, math.min(12, c.count or 12))
@@ -190,6 +205,7 @@ local function releaseBar(barKey)
   if barFrame.UpdateShownButtons then pcall(barFrame.UpdateShownButtons, barFrame) end
   if barFrame.UpdateGridLayout then pcall(barFrame.UpdateGridLayout, barFrame) end
   if barFrame.UpdateVisibility then pcall(barFrame.UpdateVisibility, barFrame) end   -- undo any vis override
+  if barFrame.ApplySystemAnchor then pcall(barFrame.ApplySystemAnchor, barFrame) end -- undo any position override
   if barFrame.Layout then pcall(barFrame.Layout, barFrame) end
   releasing = false
 end
@@ -220,6 +236,198 @@ function Layout:Reassert(barKey)
   applyBar(barKey)
 end
 
+-- ---------------------------------------------------------------------------
+-- Move mode (phase L3): a translucent family-purple mover over every bar —
+-- drag to position, click to select, arrow keys nudge 1px, Shift+arrow 10px
+-- (Jason's spec). ESC or the Config button exits; entering combat exits
+-- automatically (dragging + SetPropagateKeyboardInput are combat-restricted).
+-- Movers are parented to UIParent, not the bars, so a hidden bar can still be
+-- positioned. Positions save as c.posX/posY the moment a drag or nudge lands.
+local movers = {}
+local moveModeOn = false
+local selectedMover
+
+local function ensureConf(barKey)
+  local prof = GB.ActiveProfile and GB:ActiveProfile()
+  if not prof then return nil end
+  prof.barLayout = prof.barLayout or {}
+  prof.barLayout[barKey] = prof.barLayout[barKey] or
+    { size = 45, gap = 4, rows = 1, horizontal = true, count = 12 }
+  return prof.barLayout[barKey]
+end
+
+local function anchorMover(m)
+  local bf = barFrameFor(m.barKey)
+  if not bf then return end
+  m:ClearAllPoints()
+  m:SetPoint("TOPLEFT", bf, "TOPLEFT", -4, 4)
+  m:SetPoint("BOTTOMRIGHT", bf, "BOTTOMRIGHT", 4, -4)
+end
+
+local function selectMover(m)
+  selectedMover = m
+  for _, e in pairs(movers) do e.fill:SetAlpha(e == m and 0.45 or 0.22) end
+end
+
+local function roundf(x) return math.floor(x + 0.5) end
+
+-- Capture a bar's CURRENT centre into its conf (UIParent space, whole px) —
+-- the first nudge of an Edit-Mode-positioned bar starts from where it is.
+local function captureBarCenter(barKey, c)
+  local bf = barFrameFor(barKey)
+  if not (bf and c) then return false end
+  local fx, fy = bf:GetCenter()
+  if not fx then return false end
+  local s = bf:GetEffectiveScale() / UIParent:GetEffectiveScale()
+  c.posX, c.posY = roundf(fx * s), roundf(fy * s)
+  return true
+end
+
+-- Live coordinates on the overlay, CENTER-RELATIVE (Jason: 0 on X = perfectly
+-- centred; negative left / positive right; Y likewise from the vertical
+-- midline). Updated on drag, nudge, and mode entry.
+local function updateMoverCoord(m)
+  local bf = barFrameFor(m.barKey)
+  if not (bf and m.coord) then return end
+  local fx, fy = bf:GetCenter()
+  if not fx then return end
+  local s = bf:GetEffectiveScale() / UIParent:GetEffectiveScale()
+  m.coord:SetText(("%d, %d"):format(
+    roundf(fx * s - UIParent:GetWidth() / 2),
+    roundf(fy * s - UIParent:GetHeight() / 2)))
+end
+
+local function moverFor(barKey)
+  local m = movers[barKey]
+  if m then return m end
+  m = CreateFrame("Frame", nil, UIParent)
+  m.barKey = barKey
+  m:SetFrameStrata("DIALOG")
+  m:EnableMouse(true)
+  m:SetMovable(true)
+  m:RegisterForDrag("LeftButton")
+  m.fill = m:CreateTexture(nil, "BACKGROUND")
+  m.fill:SetAllPoints()
+  m.fill:SetColorTexture(0.58, 0.42, 1, 1)
+  m.fill:SetAlpha(0.22)
+  m.label = m:CreateFontString(nil, "OVERLAY")
+  m.label:SetFont(GB.FONT.label, 12, "OUTLINE")
+  m.label:SetPoint("CENTER", 0, 7)
+  m.coord = m:CreateFontString(nil, "OVERLAY")
+  m.coord:SetFont(GB.FONT.label, 11, "OUTLINE")
+  m.coord:SetPoint("TOP", m.label, "BOTTOM", 0, -2)
+  m:SetScript("OnMouseDown", function(self) selectMover(self) end)
+  m:SetScript("OnDragStart", function(self)
+    if InCombatLockdown() then return end
+    selectMover(self)
+    self:StartMoving()
+    self.dragging = true
+  end)
+  m:SetScript("OnUpdate", function(self)
+    if self.dragging and not InCombatLockdown() then
+      -- The bar follows the mover live while dragging.
+      local fx, fy = self:GetCenter()   -- mover sits at UIParent scale
+      local bf = barFrameFor(self.barKey)
+      if bf and fx then
+        local s = bf:GetEffectiveScale() / UIParent:GetEffectiveScale()
+        bf:ClearAllPoints()
+        bf:SetPoint("CENTER", UIParent, "BOTTOMLEFT", fx / s, fy / s)
+        updateMoverCoord(self)
+      end
+    end
+  end)
+  m:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    self.dragging = nil
+    local fx, fy = self:GetCenter()
+    local c = ensureConf(self.barKey)
+    if c and fx then
+      c.posX, c.posY = roundf(fx), roundf(fy)   -- whole px, so exactly 0 is reachable
+      Layout:Reassert(self.barKey)
+    end
+    anchorMover(self)   -- snap back over the (now-moved) bar
+    updateMoverCoord(self)
+  end)
+  movers[barKey] = m
+  return m
+end
+
+-- One keyboard catcher for the whole mode: arrows nudge the selected mover,
+-- everything else passes through to the game. SetPropagateKeyboardInput is
+-- combat-restricted — move mode exits on PLAYER_REGEN_DISABLED before it
+-- could matter.
+local keyCatcher = CreateFrame("Frame", nil, UIParent)
+keyCatcher:Hide()
+keyCatcher:SetFrameStrata("TOOLTIP")
+keyCatcher:EnableKeyboard(true)
+keyCatcher:SetPropagateKeyboardInput(true)
+keyCatcher:SetScript("OnKeyDown", function(self, key)
+  if InCombatLockdown() then return end   -- can't even change propagation in combat
+  if key == "ESCAPE" then
+    self:SetPropagateKeyboardInput(false)
+    Layout:SetMoveMode(false)
+    return
+  end
+  local dx, dy = 0, 0
+  if key == "UP" then dy = 1 elseif key == "DOWN" then dy = -1
+  elseif key == "LEFT" then dx = -1 elseif key == "RIGHT" then dx = 1
+  else self:SetPropagateKeyboardInput(true); return end
+  if not selectedMover then self:SetPropagateKeyboardInput(true); return end
+  self:SetPropagateKeyboardInput(false)
+  local mult = IsShiftKeyDown() and 10 or 1
+  local barKey = selectedMover.barKey
+  local c = ensureConf(barKey)
+  if not c then return end
+  if c.posX == nil and not captureBarCenter(barKey, c) then return end
+  c.posX = c.posX + dx * mult
+  c.posY = c.posY + dy * mult
+  Layout:Reassert(barKey)
+  anchorMover(selectedMover)
+  updateMoverCoord(selectedMover)
+end)
+
+function Layout:SetMoveMode(on)
+  if on and InCombatLockdown() then
+    GB.msg("move mode needs you out of combat.")
+    return
+  end
+  moveModeOn = on and true or false
+  if moveModeOn then
+    for _, bar in ipairs(GB.BARS) do
+      if barFrameFor(bar.buttonPrefix) then
+        local m = moverFor(bar.buttonPrefix)
+        m.label:SetText(bar.label)
+        anchorMover(m)
+        updateMoverCoord(m)
+        m:Show()
+      end
+    end
+    selectMover(nil)
+    keyCatcher:Show()
+  else
+    for _, m in pairs(movers) do m.dragging = nil; m:Hide() end
+    selectedMover = nil
+    keyCatcher:Hide()
+  end
+  local C = GB.Config
+  if C and C.Refresh then C:Refresh() end   -- the Move-bars button reflects the mode
+end
+function Layout:MoveModeOn() return moveModeOn end
+
+-- Reset one bar to Edit Mode's position (the Config button).
+function Layout:ResetPosition(barKey)
+  local c = conf(barKey)
+  if c then c.posX, c.posY = nil, nil end
+  local bf = barFrameFor(barKey)
+  if bf and not InCombatLockdown() and bf.ApplySystemAnchor then
+    releasing = true
+    pcall(bf.ApplySystemAnchor, bf)
+    releasing = false
+  end
+  local m = movers[barKey]
+  if m and m:IsShown() then anchorMover(m); updateMoverCoord(m) end
+end
+
 -- Blizzard re-lays containers on Edit Mode changes, grid events, etc. →
 -- re-assert ours right after, per bar. Installed once at login.
 function Layout:Init()
@@ -237,6 +445,9 @@ function Layout:Init()
       end
       if bf.UpdateVisibility then
         hooksecurefunc(bf, "UpdateVisibility", function() Layout:Reassert(key) end)
+      end
+      if bf.ApplySystemAnchor then   -- Edit Mode re-anchoring → re-assert our position
+        hooksecurefunc(bf, "ApplySystemAnchor", function() Layout:Reassert(key) end)
       end
     end
   end
