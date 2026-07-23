@@ -1,21 +1,158 @@
 # Gloom's Bars — Session Handoff
-**Last updated: end of session 12 (2026-07-22). ⇒ Read SESSION 12 FIRST. A very high-throughput,
-fully-QA'd session (17 commits, everything verified in-game unless noted): the 3 session-11 bugs FIXED,
-plate Stage 4 COMPLETE, plate dim-on-cooldown (a NEW Midnight duration-object pattern — proven), the
-effects-matrix gaps CLOSED (new Highlight glow trigger), charge-count + countdown-number text styling,
-empty-slot dim/hide, a big preview-pane upgrade (13 state chips + linked captions + live cast drain),
-ALL text styling consolidated into one Text section, and the dormant SDF glow code removed. Sessions
-2–11 remain the valid foundation; the FROZEN docs [SHAPE-CATALOG.md](SHAPE-CATALOG.md) /
+**Last updated: end of session 13 (2026-07-22). ⇒ Read SESSION 13 FIRST. A MASSIVE fully-QA'd session
+(~12 commits): the name-text override (4th Text chip), flyout member skinning (the last square art),
+the ENTIRE PROFILES ARCHITECTURE (profiles → whole-look presets → per-bar assignment, per-character
+active), and the ENTIRE BAR-LAYOUT PHASE (Layout.lua: size/gaps/grid/orientation/count/visibility/
+empty-collapse/position with drag+nudge+coords/quick-keybind launcher). TWO DIRECTION CHANGES from
+Jason mid-session — read them before anything else: (1) **NEVER say "v1"/"later phase"** — "we're
+building the addon; when it's done, it's done"; bar layout was committed roadmap, and it's now BUILT.
+(2) **No engine jargon in UI text or chat** ("ownership" meant nothing to him — name controls by their
+visible labels). Sessions 2–12 remain the valid foundation; the FROZEN docs [SHAPE-CATALOG.md](SHAPE-CATALOG.md) /
 [EFFECTS-MATRIX.md](EFFECTS-MATRIX.md) / [ART-SPEC.md](ART-SPEC.md) still apply.**
 
-## ▶ FIRST THING NEXT SESSION (session 13): nothing is broken or mid-flight — everything committed + QA'd.
-The open items are SCOPE CALLS for Jason (ask which he wants): (a) **Name-text override** (the macro-name
-label — becomes a 4th chip in the Text section, mirror the count block + an ApplyNameOverride in Skin.lua);
-(b) **Flyout member skinning** (the popup buttons of flyout actions — the LAST square art anywhere; a new
-button set beyond the v1 bars); (c) the two Config stubs **Bar layout** / **Apply to bars**; (d) possibly a
-**release tag** (last shipped v0.2.0 — sessions 9–12 have landed since; tag push → packager → WoWUp).
-Watch-items from this session: the green equipped-item border fix (bug #2) had no deterministic repro —
-Jason is keeping an eye out; same for finish-flash behaviour over long rotations.
+## ▶ FIRST THING NEXT SESSION (session 14): nothing broken or mid-flight — all committed + QA'd.
+Jason's parting note: he wants **cosmetic tweaks to the Bar layout section's arrangement** — "largely
+cosmetic", he'll direct. Open items, none blocking:
+- **Pending Jason decisions:** (a) relabel the "Default" mode to **"Blizzard"** across Visibility/Name/etc.
+  (offered when he asked what Default means — no answer yet); (b) rewrite **CLAUDE.md** — its "pure skin
+  v1 / settled decisions" block is NOW STALE (layout is built, profiles exist, no-v1 rule) — offered, not
+  yet approved; (c) a **release tag** (last shipped v0.2.0; sessions 9–13 unshipped).
+- **Deferred/roadmap:** force-SHOW for empty buttons (only Default/Hidden shipped — force-show fights
+  Blizzard's secure SetShown in UpdateShownButtons; needs an Edit-Mode-API write or accepted taint,
+  research before building); flyout members don't get hover glows (Glows wires bars only — fine, revisit);
+  the flyout ARROW stays Blizzard (effects-matrix: leave/revisit); per-bar "text scale" compensation
+  (offered, advised against); GA-style sliding switch for the quick-keybind checkbox (partial reskin
+  shipped, Jason satisfied for now).
+- **Watch-items:** green equipped-border fix + finish-flash over long rotations (both from s12, no repro);
+  **NiceDamage restyles HotKey/Count fonts** (discovered via /gb fontinfo — it beats our text styling;
+  if Jason reports keybind/count styling "not taking", that's why — a bar-text ownership talk someday);
+  mid-combat Edit-Mode paths can transiently fight the combat-visibility state driver (rare, self-heals
+  at the next combat edge).
+
+## ★★★ SESSION 13 (2026-07-22) — NAME TEXT + FLYOUTS + PROFILES + THE WHOLE LAYOUT PHASE. ALL QA'd.
+Commits: `f9f0bf3` (name override), `0188cd6` (flyout members), `f02d65b`/`a533bd9` (profiles 1+2),
+`c64ba25`/`f3f138f` (per-button preset resolution 3a + 3b/3c/fixes), `a88d459` (layout L1+L2),
+`051efd6` (visibility/empty/sliders/neg-gaps), `8812299` (position L3), `3455d03` (quick keybind L4).
+
+### PART A — Macro-name override (`f9f0bf3`): the 4th Text chip. THREE modes: **Default / Custom / Hidden**
+(mode row, not a toggle — Jason caught that off just meant "Blizzard style", not "gone"). ApplyNameOverride
+mirrors the count block (zones bottom/center/plate, offsets, LSM font, size, colour; widens Blizzard's fixed
+36×10 clip box to the icon; pristine stash + exact restore). ★ Name is the ONE text region OUTSIDE
+TextOverlayContainer (btn+0, under our +1/+2 gradient frames) → ADOPTED into the container (SetParent;
+un-adopted on disable). ★ Hidden EMPTIES THE TEXT (SetText post-hook re-assert; un-hide repopulates via
+`C_ActionBar.UsesActionText/GetActionText` — AllowedWhenUntainted, macro names aren't secrets) because
+alpha-0 LOSES: **NiceDamage re-drives label alpha after us** (that addon also re-fonts HotKey/Count — pepsi.otf).
+`/gb fontinfo` now prints alpha/effective-alpha/parent + styleData.name (the probe that cracked it).
+
+### PART B — Flyout member skinning (`0188cd6`): the LAST square art. `SpellFlyoutPopupButton1..N` are
+created LAZILY inside `SpellFlyout:Toggle` (SmallActionButton anatomy + own mixin) → a Toggle post-hook
+sweeps: new members get full ApplyButton (its per-button hooks are all guarded on missing methods), known
+ones an ApplyDecor re-assert each open. ★ Members wear the **1:1 SIBLING** of the bar shape (FLYOUT_1X1:
+pills→circle, squareNN→square, roundsqN-NN→roundsqN) — Blizzard fixes member size/spacing to small squares,
+portrait silhouettes OVERLAPPED (Jason screenshot). Members clamp to natural size (preset sizeScale also
+overlapped). Popup panel Background + bar-button BorderShadow suppressed (Arrow stays). Members follow the
+preset OF THE BAR THE FLYOUT POPPED FROM (owner = Toggle's 2nd arg).
+
+### PART C — PROFILES (Jason's architecture, settled): **profiles → whole-look presets → per-bar assignment.**
+"We need profiles. Within the profiles… save different presets. Then… mix and match and assign different
+presets to different action bars." Per-character ACTIVE profile (shared account-wide library); manual
+create/copy/rename/delete; a preset = the WHOLE look (GB.PRESET_FIELDS, 36 fields); presets AUTO-SAVE (the
+edit preset is a live document — switches snapshot the outgoing look first; PLAYER_LOGOUT saves).
+- **Stage 1 (`f02d65b`):** data model (profiles[name] = {presets, bars, edit}, charProfiles), migration,
+  Snapshot/Save/LoadPreset (always deepcopied), profile mgmt API, RefreshAll (composite over the public
+  refresh surface). `/gb profiles` dev probe.
+- **Stage 2 (`a533bd9`):** "Profiles" section FIRST in the accordion: profile picker + New/Copy/Rename/
+  Delete, preset picker (pick = swap the whole look live) + New/Rename/Delete. Ported GloomsAuras
+  flatEditBox + skinned name dialog (no StaticPopup); two-click "Sure?" deletes; **family hover TOOLTIPS
+  (attachTip — dark plate + purple title, REUSABLE) replaced the hint block** (Jason: "giant ugly").
+- **Stage 3 (`c64ba25`, `f3f138f`): per-button preset resolution — THE architecture.** presetCtx (a preset
+  snapshot) + `pv(field)` as the ONE read funnel + `style()` for styleData, hoisted above every reader in
+  Skin.lua. **KEY RULE: bars on the profile's EDIT preset render the WORKING COPY (editing stays live);
+  only bars on OTHER presets render snapshots.** withPresetCtx wraps the 11 per-button entry points; 4
+  global hooks resolve inline; `rec.barKey` (ForEachButton's bar arg) keys the lookup. Glows/Anims share
+  Skin's ONE ctx via exports (`Skin:PV/PresetFor/ShapeKeyFor/EnterButtonCtx/LeaveButtonCtx`) — a Glows
+  chain landing back in Skin's anchor math resolves the same button. Pulse SPEED stays global BY DESIGN
+  (all procs pulse in sync). Apply-to-bars = the assignment grid (row per bar + preset dropdown).
+  **ROOT-CAUSE BUG:** Enable's loop dropped ForEachButton's bar arg → barKey never set → assignments
+  silently no-op'd; + a second Enable decor pass (the wrapper resolves ctx BEFORE ApplyButton's body
+  learns the bar).
+- **Per-character default (`f3f138f` era):** a character's FIRST login auto-creates its OWN profile,
+  **"Name - Realm" (the GloomsAuras convention — Jason cited it)**; existing bindings honored. Footer
+  "Profile: X" button (an unwired increment-1 stub Jason found) = the live profile SWITCHER (`3455d03`).
+
+### PART D — BAR LAYOUT (Layout.lua, phases L1–L4). Jason's scope: size, gaps, rows/cols, orientation,
+count, visibility, position (drag + arrows + Shift×10), quick keybind. Settings live PER BAR IN THE
+PROFILE (settled: layout is bar geometry, NOT part of a look preset).
+- **★ THE FOUNDATION:** Blizzard lays out each bar's **BUTTON CONTAINERS — plain UNPROTECTED Frames**
+  (ActionBar.lua:14; the secure button sits CENTER'ed inside; `actionButton.container`). We re-anchor +
+  re-SCALE containers ONLY — never the secure buttons. Scale inherits → the whole button (icon, text,
+  glows) renders proportionally, which is WHY text grows with Button size (= Edit Mode's own semantics;
+  explained to Jason: Button size = geometry per bar; Shape&icon Size = icon-in-button, per preset; they
+  MULTIPLY). Re-asserts in per-bar post-hooks (UpdateGridLayout/UpdateShownButtons/UpdateVisibility/
+  ApplySystemAnchor). OUT-OF-COMBAT ONLY + a PLAYER_REGEN_ENABLED queue.
+- **MASTER SWITCH** (Jason: all-or-nothing): `profile.layoutEnabled` arranges ALL bars; per-bar tables are
+  settings only. Un-owning = releaseBar: **unmark FIRST + a `releasing` reentrancy guard** (the Blizzard
+  calls fire OUR hooks — recursed until pcall ate a stack error = the "Rows don't revert" bug), reset
+  scales, invalidate `oldGridSettings`, re-run Blizzard's grid/visibility/anchor.
+- **Gaps:** main-axis Gap + cross-axis **Row gap** (only visible at Rows>1, ABOVE Orientation), both
+  **−32..64** (hex/circle silhouettes don't fill their square rects — negative overlap nestles them;
+  step clamped ≥4px; caveat told to Jason: hit-rects overlap slightly). **Copy layout from** dropdown
+  (tune one bar, copy around). **Visibility** dropdown: Default / Always visible / **In combat / Out of
+  combat (RegisterStateDriver — the ONLY legal combat-edge flip)** / Hidden. **Empty buttons** Shown/Hidden
+  (collapse reacts to the rendered icon; grid slot KEPT — hole, not shuffle; suspends during SHOWGRID;
+  ACTIONBAR_SLOT_CHANGED coalesced via C_Timer.After(0)).
+- **Position (L3, `8812299`):** movers (translucent purple, UIParent-parented so hidden bars are movable),
+  drag = bar follows live, saved whole-px on drop; click selects; arrows 1px / Shift+arrow 10px (first
+  nudge captures the current spot); ESC exits; combat auto-exits (drag + SetPropagateKeyboardInput are
+  combat-restricted). **Live CENTER-RELATIVE coords on each mover** (0,0 = screen centre; X<0 left —
+  Jason wants exact-0 centring). Button reads "Move bars"/"Lock bars" (names the NEXT action).
+  positions = c.posX/posY (bar CENTER, UIParent space, scale-corrected ÷ relative scale on SetPoint).
+- **Quick keybind (L4, `3455d03`):** `QuickKeybindFrame:Show()` (the Settings panel's own entry; addon is
+  NOT LoD). Dialog reskinned IN PLACE (logic untouched, every region guarded): plate + rim + Khand title +
+  GeneralSans + flat buttons + the GA-flatCheck checkbox (orange checkmark, asset → Media/ui/checkmark.png).
+  ★ Their OnHide REOPENS SettingsPanel (assumes that origin) → when WE launched, an OnHide post-hook
+  closes it same-frame. Buttons: Bar-layout section + footer.
+- **QoL:** hovering an Apply-to-bars row or a Bar-layout chip **PINGS the real bar** (Skin:PingBar — the
+  shape's `-inner` art tinted family purple on btn+3, one shared pulse driver, no masks needed).
+
+### ★★ HARD-WON LEARNINGS this session (do NOT rediscover):
+- **Bar button CONTAINERS are unprotected** — the entire layout engine stands on this. Never touch the
+  secure buttons for geometry; scale/anchor containers.
+- **EditMode bars OVERRIDE SetShown/Show/Hide to track `isShownExternal`** — hiding through them poisons
+  it and BLOCKS your own later show ("can't show it again"). Use **ShowBase/HideBase** (what Blizzard's
+  UpdateVisibility itself uses). External (vehicle) hides read that flag — never fight it.
+- **`RegisterStateDriver(bar, "visibility", "[combat] show; hide")`** is the sanctioned combat-edge flip;
+  nothing insecure may touch a bar once combat starts (incl. SetPropagateKeyboardInput!).
+- **`x and false or nil` CAN NEVER YIELD false** (the `or` eats it) — the Empty-buttons Hidden click
+  silently wrote Default. Use a plain if when the intended value is false.
+- **Two slider writers fight:** the native thumb-drag + our click-anywhere seek quantize the cursor
+  DIFFERENTLY near step boundaries → per-frame value flicker ("blur", worst on 0–64). A drag starting
+  ON the thumb now belongs to the native slider alone (both factories).
+- **Releasing/restoring THROUGH Blizzard calls fires YOUR OWN hooks** → unmark state FIRST + a reentrancy
+  guard, or you recurse until a pcall silently eats a stack error (partial revert, no BugSack).
+- **QuickKeybindFrame:OnHide reopens SettingsPanel** unless Edit Mode/GameMenu is up — suppress same-frame
+  when you launched it yourself.
+- **`SetVertexColor`-style traps continue:** FontString alpha wars are unwinnable vs other addons
+  (NiceDamage) — hide TEXT by emptying it (SetText hook), not alpha; macro names restore via
+  C_ActionBar.GetActionText (AllowedWhenUntainted).
+- **Tofu arrows STRUCK AGAIN** (`→` in the layout hint) — session 10's rule stands: no arrow glyphs in any
+  rendered string, ever.
+- **NEW FILES need a full client RESTART** (TOC additions AND new media assets — /reload only re-reads
+  existing files). Layout.lua and checkmark.png both required relaunches.
+- **The per-button ctx architecture** (presetCtx + pv() + ONE Skin-owned ctx exported to Glows/Anims,
+  save/restore wrappers on entry points, ctx falls back to the ENCLOSING ctx for creation-time passes)
+  is THE pattern for any future per-button variance. shapeCtx (flyouts) was its seed.
+- **`local style = style()`** (ApplyDecor) is legal Lua (RHS resolves before the local exists) but shadows
+  the helper for the rest of the function — don't add style() calls inside ApplyDecor below line ~1012.
+
+### ★★ JASON-DIRECTION (saved to memory, but re-read these):
+- **NO "v1", no "later phase", never punt bar layout** — it was committed roadmap and is now BUILT.
+  Deferring is "not now, stays on the roadmap" — never "maybe never". (memory: no-v1-framing)
+- **No engine jargon anywhere he can see** — "ownership" meant nothing; name controls by visible labels.
+  (memory: how-jason-works)
+- **Buttons name the NEXT action** ("Move bars" ↔ "Lock bars").
+- **"Default" mode = we don't touch it, Blizzard decides** — explained; possible "Blizzard" relabel pending.
+- **GloomsAuras is the styling reference** he'll cite (checkbox, per-char profiles, "Name - Realm").
 
 ## ★★★ SESSION 12 (2026-07-21→22) — BUGS FIXED + PLATE COMPLETE + BIG QoL/PREVIEW WAVE. ALL committed + QA'd.
 Commits, in order: `8498c4c` (the 3 bug fixes), `2de95ad` (dim-on-cooldown), `f78de4f` (Stage 4a keybind),
