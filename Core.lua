@@ -500,6 +500,12 @@ end
 -- ⚠ HYPOTHESIS (verify via /gb debug in-game): these are the retail global
 -- names as of Dragonflight+; confirm they still exist in Midnight 12.0.7.
 -- ---------------------------------------------------------------------------
+-- Every bar Gloom's Bars manages. Pet + Stance are full Edit-Mode action bars
+-- too (verified: PetActionBar/StanceBar inherit EditModeActionBarTemplate and
+-- build .container frames via the shared ActionBarMixin, same as bars 1-8), so
+-- they're first-class here — skinned AND layout-managed. `count` is the button
+-- count (default 12; pet 10; stance is CLASS-DEPENDENT so it's a maximum —
+-- surplus globals just don't exist and ForEachButton skips them).
 GB.BARS = {
   { key = "bar1", label = "Action Bar 1", buttonPrefix = "ActionButton" },
   { key = "bar2", label = "Action Bar 2", buttonPrefix = "MultiBarBottomLeftButton" },
@@ -509,13 +515,15 @@ GB.BARS = {
   { key = "bar6", label = "Action Bar 6", buttonPrefix = "MultiBar5Button" },
   { key = "bar7", label = "Action Bar 7", buttonPrefix = "MultiBar6Button" },
   { key = "bar8", label = "Action Bar 8", buttonPrefix = "MultiBar7Button" },
+  { key = "pet",    label = "Pet Bar",    buttonPrefix = "PetActionButton", count = 10 },
+  { key = "stance", label = "Stance Bar", buttonPrefix = "StanceButton",    count = 10 },
 }
-GB.BUTTONS_PER_BAR = 12
+GB.BUTTONS_PER_BAR = 12   -- default per-bar button count (a bar's own .count overrides)
 
 -- Iterate every existing action button: callback(button, barInfo, index).
 function GB:ForEachButton(callback)
   for _, bar in ipairs(GB.BARS) do
-    for i = 1, GB.BUTTONS_PER_BAR do
+    for i = 1, (bar.count or GB.BUTTONS_PER_BAR) do
       local button = _G[bar.buttonPrefix .. i]
       if button then callback(button, bar, i) end
     end
@@ -698,6 +706,7 @@ loader:SetScript("OnEvent", function(_, event, arg1)
     -- Bar layout (phase L1): hook the bars' grid updates + apply any owned
     -- bars' layouts (all buttons exist by PLAYER_LOGIN).
     if GB.Layout then GB.Layout:Init(); GB.Layout:ApplyAll() end
+    if GB.InitMinimapButton then GB:InitMinimapButton() end
   end
 end)
 
@@ -904,9 +913,32 @@ local function FontInfo()
         r or 0, g or 0, bl or 0, tostring(fs:GetText()), tostring(fs:IsShown()),
         fs:GetAlpha() or -1, (fs.GetEffectiveAlpha and fs:GetEffectiveAlpha()) or -1,
         tostring(par and (par:GetName() or par.GetDebugName and par:GetDebugName()) or "?")))
+      -- Shadow state ACTUALLY on the region (vs what our config asked for below).
+      -- fontObj names who primed last (12.0.7: only a FontObject-carried shadow
+      -- renders): GloomsBarsShadowFontN = us, EllesmereUI*Font = EUI.
+      local sr, sg, sb, sa = fs:GetShadowColor()
+      local sx, sy = fs:GetShadowOffset()
+      local fo = fs.GetFontObject and fs:GetFontObject()
+      print(("    shadow on region: color %.2f,%.2f,%.2f a=%.2f offset %.1f,%.1f fontObj=%s"):format(
+        sr or -1, sg or -1, sb or -1, sa or -1, sx or 0, sy or 0,
+        tostring(fo and ((fo.GetName and fo:GetName()) or "?") or "none")))
     end
   end
-  local nmconf = GB.db and GB.db.styleData and GB.db.styleData.name
+  local st = GB.db and GB.db.styleData
+  for _, key in ipairs({ "hotkey", "count", "cdtext", "name" }) do
+    local conf = st and st[key]
+    local sh = type(conf) == "table" and conf.shadow
+    if type(sh) == "table" then
+      local c = sh.color or {}
+      print(("  styleData.%s: flags=%s shadow{en=%s color %.2f,%.2f,%.2f a=%.2f ofs %s,%s}"):format(
+        key, tostring(conf.flags), tostring(sh.enabled),
+        c[1] or -1, c[2] or -1, c[3] or -1, c[4] or -1, tostring(sh.x), tostring(sh.y)))
+    else
+      print(("  styleData.%s: flags=%s shadow=%s"):format(
+        key, tostring(type(conf) == "table" and conf.flags), tostring(sh)))
+    end
+  end
+  local nmconf = st and st.name
   if type(nmconf) == "table" then
     print(("  styleData.name: mode=%s enabled=%s"):format(tostring(nmconf.mode), tostring(nmconf.enabled)))
   else
@@ -1201,6 +1233,77 @@ SlashCmdList.GLOOMSBARS = function(input)
     GB.Skin:SetSweepOvershoot(tonumber(arg))
   elseif cmd == "fontinfo" then
     FontInfo()
+  elseif cmd == "petinfo" then
+    -- Diagnose the dim-pet-bar bug: where's the low opacity coming from? Reads
+    -- the alpha (raw + effective) of the pet bar frame, each button, and its
+    -- icon — pinpoints frame vs button vs icon vs a parent chain.
+    local barf = _G.PetActionButton1 and _G.PetActionButton1.bar
+    msg("pet bar alpha census:")
+    if barf then
+      print(("  bar frame %s: alpha=%.2f eff=%.2f shown=%s"):format(
+        tostring(barf:GetName() or "?"), barf:GetAlpha() or -1,
+        (barf.GetEffectiveAlpha and barf:GetEffectiveAlpha()) or -1, tostring(barf:IsShown())))
+    else
+      print("  PetActionButton1.bar not found")
+    end
+    for i = 1, 3 do
+      local b = _G["PetActionButton" .. i]
+      if b then
+        local ic = b.icon or b.Icon
+        print(("  btn%d: btnW=%.1f iconW=%.1f eff-scale=%.3f | icon shown=%s"):format(
+          i, b:GetWidth() or -1, ic and ic:GetWidth() or -1,
+          (b.GetEffectiveScale and b:GetEffectiveScale()) or -1, tostring(ic and ic:IsShown())))
+        local hk = b.HotKey
+        if hk then
+          local _, sz = hk:GetFont()
+          local pt, rel, relPt, xo, yo = hk:GetPoint()
+          print(("    HotKey: font=%.1f text=%q shown=%s anchor=%s->%s (%.1f,%.1f)"):format(
+            sz or -1, tostring(hk:GetText()), tostring(hk:IsShown()),
+            tostring(pt), tostring(relPt), xo or 0, yo or 0))
+        end
+        -- White-dot hunt: dump the AutoCastOverlay's parts + any small visible child.
+        -- DEEP dot-hunt: walk the WHOLE tree under the button (regions AND child
+        -- frames, recursively) and report EVERY visible texture with a NON-ZERO
+        -- effective alpha — the dot can't hide in a child frame anymore. Reports
+        -- atlas or texture path + effective alpha + size + parent name.
+        local function pname(f) return (f.GetName and f:GetName()) or (f.GetDebugName and f:GetDebugName()) or "?" end
+        local function walk(f, depth)
+          if depth > 4 then return end
+          if f.GetRegions then
+            for _, r in ipairs({ f:GetRegions() }) do
+              if r.GetObjectType and r:GetObjectType() == "Texture" and r.IsShown and r:IsShown() then
+                local ea = (r.GetEffectiveAlpha and r:GetEffectiveAlpha()) or r:GetAlpha() or 0
+                if ea > 0.05 then
+                  local w, h = r:GetSize()
+                  local id = (r.GetAtlas and r:GetAtlas()) or (r.GetTexture and r:GetTexture()) or "?"
+                  print(("      TEX eff=%.2f %.0fx%.0f  %s  (in %s)"):format(ea, w or 0, h or 0, tostring(id), pname(f)))
+                end
+              end
+            end
+          end
+          if f.GetChildren then
+            for _, c in ipairs({ f:GetChildren() }) do walk(c, depth + 1) end
+          end
+        end
+        -- Only dump for buttons that HAVE the dot (autocast overlay present + shown).
+        local ov = b.AutoCastOverlay
+        if ov then
+          print(("    AutoCastOverlay: shown=%s alpha=%.2f eff=%.2f"):format(
+            tostring(ov:IsShown()), ov:GetAlpha() or -1, (ov.GetEffectiveAlpha and ov:GetEffectiveAlpha()) or -1))
+        end
+        walk(b, 0)
+      end
+    end
+    -- Compare to a main-bar button (should be the SAME preset font px).
+    local a1 = _G.ActionButton1
+    if a1 and a1.HotKey then
+      local _, sz = a1.HotKey:GetFont()
+      print(("  ActionButton1 HotKey: font=%.1f btnW=%.1f eff-scale=%.3f (compare vs pet)"):format(
+        sz or -1, a1:GetWidth() or -1, (a1.GetEffectiveScale and a1:GetEffectiveScale()) or -1))
+    end
+    print(("  keybind preset size = %s"):format(tostring(GB.db and GB.db.styleData and GB.db.styleData.hotkey and GB.db.styleData.hotkey.size)))
+    print(("  emptySlots mode = %s (alpha %.2f)"):format(
+      tostring(GB.db and GB.db.emptySlots), (GB.db and GB.db.emptySlotAlpha) or -1))
   elseif cmd == "hkinfo" then
     HotkeyInfo()
   elseif cmd == "glowinfo" then

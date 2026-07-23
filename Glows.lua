@@ -285,8 +285,16 @@ function Glows:Init()
   -- state on ACTIONBAR_UPDATE_STATE. We react to it (reading GetChecked is not a
   -- secret combat value) and drive the shaped "selected" glow. (Hover is hooked
   -- per-button in SetEnabled via OnEnter/OnLeave.)
+  -- ★ Pet/stance checked state (assist/passive/defensive, shapeshift form) is
+  -- driven by PetActionBar/StanceBar :Update on their OWN events — NOT
+  -- ACTIONBAR_UPDATE_STATE. Without these, switching pet stance left our Selected
+  -- glow stuck on the previously-checked button (Jason: assist→passive kept the
+  -- glow on assist). Re-read GetChecked on the same events the skin re-decors on.
   local stateWatcher = CreateFrame("Frame")
   stateWatcher:RegisterEvent("ACTIONBAR_UPDATE_STATE")
+  stateWatcher:RegisterEvent("PET_BAR_UPDATE")
+  stateWatcher:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+  stateWatcher:RegisterEvent("UPDATE_SHAPESHIFT_FORMS")
   stateWatcher:SetScript("OnEvent", function()
     if not Glows.enabled then return end
     GB:ForEachButton(function(btn)

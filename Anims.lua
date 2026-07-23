@@ -122,7 +122,7 @@ local Shine = {
   defaults = { color = { 1, 0.96, 0.7 }, count = 1, spin = 0.5 },
   params = {
     { key = "color", kind = "color",   label = "Colour" },
-    { key = "count", kind = "range",   label = "Comets", min = 1, max = 4, step = 1, fmt = "int" },
+    { key = "count", kind = "range",   label = "Comets", min = 1, max = 8, step = 1, fmt = "int" },
     { key = "spin",  kind = "bispeed", label = "Spin", minRev = SHINE_MIN_REV },
   },
 }
@@ -136,7 +136,7 @@ function Shine:Start(host, icon, key, p)
     inst = { frame = frame, mask = frame:CreateMaskTexture(), texs = {}, masked = {}, phase = 0 }
     shineInst[host] = inst
   end
-  local n = math.max(1, math.min(4, math.floor(p.count or 1)))
+  local n = math.max(1, math.min(8, math.floor(p.count or 1)))
   local spin = p.spin; if spin == nil then spin = 0.5 end
   -- WoW rotation is CCW-positive; negate so positive spin = CLOCKWISE (matches the UI's CW side).
   local w = -spin * ((2 * math.pi) / SHINE_MIN_REV)   -- signed angular velocity (rad/sec)

@@ -4,14 +4,24 @@
 ## Author: Gloom
 ## Version: @project-version@
 ## SavedVariables: GloomsBarsDB
+## IconTexture: Interface\AddOns\GloomsBars\Media\ui\minimap.png
 ## X-Website: https://github.com/HandofDevastation/GloomsBars
+
+# Embedded libraries — load FIRST. LibStub + CallbackHandler are LibDataBroker's
+# deps; LibDBIcon renders the minimap launcher. Fetched into Libs/ by the
+# packager at release time; present in the local working copy (not committed).
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
 
 # Load order: Core (namespace + saved vars + /gb router) first, then the skin
 # engine, the shaped proc glows, the per-trigger animation system, the
-# bar-layout engine, then the style-editor Config UI.
+# bar-layout engine, the style-editor Config UI, then the minimap launcher.
 Core.lua
 Skin.lua
 Glows.lua
 Anims.lua
 Layout.lua
 Config.lua
+MinimapButton.lua

@@ -28,6 +28,8 @@ GB.Skin = Skin
 -- one read funnel for every per-button path; the withPresetCtx wrappers (below
 -- ApplyButton) establish the ctx from rec.barKey → the bar's assignment.
 local records, flyoutButtons   -- assigned below; hoisted so presetFor can see them
+local refreshIconGeometry      -- forward-declared: ReapplyDecor (above its definition) calls it
+local AUTOCAST_ANIM = "shine"  -- the Anims module id driven on pet autocast (RestoreButton, above its use, stops it)
 local presetCtx
 local function pv(field)
   if presetCtx and presetCtx[field] ~= nil then return presetCtx[field] end
@@ -862,6 +864,73 @@ local function symbolizeButton(btn)
   if raw and raw:match("^[scam]%-") then hk:SetText(symbolizeHotkey(raw)) end
 end
 
+-- Text shadow (session 14). The shadow is a SEPARATE property SetFont never
+-- clears — some of Blizzard's font objects bake one in (the macro Name + the
+-- countdown numbers; keybind + count don't). The engine OWNS it:
+-- conf.shadow = { enabled, color = {r,g,b,a}, x, y }. enabled → paint it;
+-- disabled → clear (kills Blizzard's baked one too). conf.shadow ABSENT (legacy
+-- preset snapshots) falls back to defOn — the element's Blizzard reality — so
+-- old data renders exactly as before.
+-- ★ MIDNIGHT 12.0.7: SetShadowColor/SetShadowOffset called directly on a
+-- FontString STORE but no longer RENDER (verified in-game: the fontinfo probe
+-- read our red shadow back off a region that drew nothing; EllesmereUI's source
+-- documents the same client change). A shadow only renders when carried by a
+-- Font OBJECT: SetFontObject(obj) FIRST (priming), THEN SetFont for the face —
+-- the object-carried shadow renders and survives the SetFont. So every styled
+-- FontString gets its own font object whose shadow we configure per apply, and
+-- applyTextShadow must run BEFORE the caller's SetFont.
+local shadowObjs = setmetatable({}, { __mode = "k" })   -- FontString → our font object (own table — never write keys onto Blizzard regions)
+local shadowObjN = 0
+local function applyTextShadow(fs, shadow, defOn)
+  local on
+  if shadow == nil then on = defOn else on = shadow.enabled and true or false end
+  local obj = shadowObjs[fs]
+  if not obj then
+    shadowObjN = shadowObjN + 1
+    obj = CreateFont("GloomsBarsShadowFont" .. shadowObjN)
+    obj:SetFont(GB.FONT.label, 12, "")   -- placeholder face; the caller's SetFont overrides it
+    shadowObjs[fs] = obj
+  end
+  if on then
+    local c = (shadow and shadow.color) or { 0, 0, 0, 1 }
+    obj:SetShadowColor(c[1], c[2], c[3], c[4] or 1)
+    obj:SetShadowOffset((shadow and shadow.x) or 1, (shadow and shadow.y) or -1)
+  else
+    obj:SetShadowColor(0, 0, 0, 0)
+    obj:SetShadowOffset(0, 0)
+  end
+  fs:SetFontObject(obj)
+end
+local function captureShadow(fs)
+  local r, g, b, a = fs:GetShadowColor()
+  local x, y = fs:GetShadowOffset()
+  return { r, g, b, a, x, y }
+end
+local function restoreShadow(fs, s)
+  if not s then return end
+  fs:SetShadowColor(s[1] or 0, s[2] or 0, s[3] or 0, s[4] or 0)
+  fs:SetShadowOffset(s[5] or 0, s[6] or 0)
+end
+
+-- Text-size normalization (session 14). A preset's text sizes are tuned against
+-- the standard 45px action button; on a SMALLER button (pet/stance = 30px) the
+-- same px font occupies a bigger FRACTION of the button and reads oversized. So
+-- scale the font by the button's size relative to the reference, so one preset
+-- looks CONSISTENT across differently-sized bars (Jason: same preset on pet +
+-- main bars must match). Keyed on the button's NATIVE width, so it composes with
+-- Layout's container scaling (which then scales the already-proportional text
+-- uniformly). 45px bars are unchanged (ratio 1). Clamped so it never collapses.
+local TEXT_SIZE_REF = 45
+local function scaledFontSize(btn, size)
+  local w = (btn.GetWidth and btn:GetWidth()) or TEXT_SIZE_REF
+  if not (w and w > 0) then return size end
+  local ratio = w / TEXT_SIZE_REF
+  if ratio > 1.001 or ratio < 0.999 then
+    return math.max(4, size * ratio)
+  end
+  return size
+end
+
 local function ApplyHotkeyOverride(btn)
   local rec = records[btn]
   local hk = btn.HotKey
@@ -874,8 +943,10 @@ local function ApplyHotkeyOverride(btn)
       -- re-anchor/re-size via UpdateHotkeys.
       rec.hkOverridden = nil
       hk:SetJustifyH(rec.hkJustify or "RIGHT")
+      if rec.hkFontObj then hk:SetFontObject(rec.hkFontObj) end   -- un-prime: back to Blizzard's font object
       if rec.hkFont and rec.hkFont[1] then hk:SetFont(rec.hkFont[1], rec.hkFont[2], rec.hkFont[3] or "") end
       if rec.hkColor then hk:SetTextColor(rec.hkColor[1], rec.hkColor[2], rec.hkColor[3], rec.hkColor[4] or 1) end
+      restoreShadow(hk, rec.hkShadow)
       if btn.UpdateHotkeys then btn:UpdateHotkeys(btn.buttonType) end
     end
     return
@@ -898,17 +969,25 @@ local function ApplyHotkeyOverride(btn)
   else
     hk:SetPoint("CENTER", icon, "CENTER", conf.offsetX or 0, conf.offsetY or 0)
   end
-  hk:SetSize(icon:GetWidth(), (conf.size or 13) + 4)
+  local hkSize = scaledFontSize(btn, conf.size or 13)   -- normalize to button size (pet/stance are smaller)
+  hk:SetSize(icon:GetWidth(), hkSize + 4)
   hk:SetJustifyH("CENTER")
-  hk:SetFont(resolveFont(conf.font), conf.size or 13, conf.flags or "OUTLINE")
+  applyTextShadow(hk, conf.shadow, false)   -- BEFORE SetFont (font-object priming)
+  hk:SetFont(resolveFont(conf.font), hkSize, conf.flags or "OUTLINE")
   if conf.color then hk:SetTextColor(unpack(conf.color)) end
+  -- ★ Pet/stance with NO bound key put the RANGE_INDICATOR ("●") in HotKey and
+  -- Hide() it (PetActionButtonMixin:SetHotkeys). Re-styling re-showed that bullet
+  -- as Jason's stray "dot". It's a placeholder, never a real bind → keep it hidden.
+  if hk:GetText() == (_G.RANGE_INDICATOR or "●") then hk:Hide() else hk:Show() end
   rec.hkOverridden = true
 end
 
 -- Charge/stack count override (session 12) — position / font / size / colour for
--- btn.Count, mirroring the keybind override (reads styleData.count). Blizzard
--- re-anchors Count only in the small-button OnLoad — never at runtime (UpdateCount
--- just SetText()s) — so applying from ApplyDecor needs no re-assert hook. Zones:
+-- btn.Count, mirroring the keybind override (reads styleData.count). Applied from
+-- ApplyDecor AND re-asserted in an UpdateCount post-hook (session 14): Blizzard's
+-- own UpdateCount only SetText()s, but a button re-template (override/vehicle
+-- swap, another addon's post-us font pass) re-anchors/re-fonts Count and drops
+-- our styling — the hook re-applies it, same as the keybind's UpdateHotkeys. Zones:
 -- corner (Blizzard's spot, bottom-right ON the icon), center, extension (centred
 -- in the plate half — plate shapes only, falls back to corner elsewhere).
 local function ApplyCountOverride(btn)
@@ -922,8 +1001,10 @@ local function ApplyCountOverride(btn)
       -- Restore the pristine font/colour + Blizzard's stock anchor (a /reload is exact).
       rec.cntOverridden = nil
       cnt:SetJustifyH(rec.cntJustify or "RIGHT")
+      if rec.cntFontObj then cnt:SetFontObject(rec.cntFontObj) end   -- un-prime: back to Blizzard's font object
       if rec.cntFont and rec.cntFont[1] then cnt:SetFont(rec.cntFont[1], rec.cntFont[2], rec.cntFont[3] or "") end
       if rec.cntColor then cnt:SetTextColor(rec.cntColor[1], rec.cntColor[2], rec.cntColor[3], rec.cntColor[4] or 1) end
+      restoreShadow(cnt, rec.cntShadow)
       cnt:ClearAllPoints()
       cnt:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -3, 1)
     end
@@ -943,7 +1024,8 @@ local function ApplyCountOverride(btn)
     cnt:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", -2 + ox, 2 + oy)
     cnt:SetJustifyH("RIGHT")
   end
-  cnt:SetFont(resolveFont(conf.font), conf.size or 14, conf.flags or "OUTLINE")
+  applyTextShadow(cnt, conf.shadow, false)   -- BEFORE SetFont (font-object priming)
+  cnt:SetFont(resolveFont(conf.font), scaledFontSize(btn, conf.size or 14), conf.flags or "OUTLINE")
   if conf.color then cnt:SetTextColor(unpack(conf.color)) end
   rec.cntOverridden = true
 end
@@ -1006,8 +1088,10 @@ local function ApplyNameOverride(btn)
       -- Restore the pristine font/colour + Blizzard's stock geometry (a /reload is exact).
       rec.nmOverridden = nil
       nm:SetJustifyH(rec.nmJustify or "CENTER")
+      if rec.nmFontObj then nm:SetFontObject(rec.nmFontObj) end   -- un-prime: back to Blizzard's font object
       if rec.nmFont and rec.nmFont[1] then nm:SetFont(rec.nmFont[1], rec.nmFont[2], rec.nmFont[3] or "") end
       if rec.nmColor then nm:SetTextColor(rec.nmColor[1], rec.nmColor[2], rec.nmColor[3], rec.nmColor[4] or 1) end
+      restoreShadow(nm, rec.nmShadow)
       nm:ClearAllPoints()
       nm:SetPoint("BOTTOM", btn, "BOTTOM", 0, 2)
       nm:SetSize(36, 10)
@@ -1025,9 +1109,11 @@ local function ApplyNameOverride(btn)
   else   -- "bottom" (and the extension fallback on non-plate shapes)
     nm:SetPoint("BOTTOM", icon, "BOTTOM", ox, 2 + oy)
   end
-  nm:SetSize(icon:GetWidth(), (conf.size or 10) + 4)
+  local nmSize = scaledFontSize(btn, conf.size or 10)   -- normalize to button size (pet/stance are smaller)
+  nm:SetSize(icon:GetWidth(), nmSize + 4)
   nm:SetJustifyH("CENTER")
-  nm:SetFont(resolveFont(conf.font), conf.size or 10, conf.flags or "OUTLINE")
+  applyTextShadow(nm, conf.shadow, true)   -- legacy default ON (Blizzard bakes one); BEFORE SetFont
+  nm:SetFont(resolveFont(conf.font), nmSize, conf.flags or "OUTLINE")
   if conf.color then nm:SetTextColor(unpack(conf.color)) end
   rec.nmOverridden = true
 end
@@ -1296,7 +1382,13 @@ end
 function Skin:ReapplyDecor()
   if not self.enabled then return end
   GB:ForEachButton(function(btn)
-    if records[btn] and records[btn].active then ApplyDecor(btn) end
+    -- refreshIconGeometry (not bare ApplyDecor): the icon SIZE/ASPECT is set from
+    -- the preset ctx, and Enable's FIRST ApplyButton pass sizes it BEFORE rec.barKey
+    -- exists → a bar on a non-edit preset was sized to the WORKING COPY's aspect and
+    -- never corrected (Jason: tall Pill edit-preset stretched his 1:1 Hexagon/Square
+    -- bars). Re-running the full geometry pass now that barKey is set fixes the aspect,
+    -- not just the decoration. (ApplyDecor alone left the stretched icon size.)
+    if records[btn] and records[btn].active then refreshIconGeometry(btn) end
   end)
   for _, btn in ipairs(flyoutButtons) do
     local rec = records[btn]
@@ -1402,7 +1494,8 @@ local function styleCooldownText(btn)
     end
     return
   end
-  fs:SetFont(resolveFont(conf.font), conf.size or 16, conf.flags or "OUTLINE")
+  applyTextShadow(fs, conf.shadow, true)   -- legacy default ON (Blizzard bakes one); BEFORE SetFont
+  fs:SetFont(resolveFont(conf.font), scaledFontSize(btn, conf.size or 16), conf.flags or "OUTLINE")   -- normalize to button size
   local c = conf.color or { 1, 1, 1 }
   fs:SetTextColor(c[1], c[2], c[3])
   fs:ClearAllPoints()
@@ -1519,9 +1612,21 @@ end
 -- shaped finish flash (below) replaces the bling. Blizzard resets the sweep colour
 -- to (0,0,0,1) after a cast (ActionButton OnHide → ActionButton_UpdateCooldown),
 -- so a custom colour is re-asserted in a hook of that global (installed once).
-local function applySwipe(cd)
+-- ★ The swipe TEXTURE is also re-asserted here (session 14): the normal cooldown
+-- path never re-sets swipe textures (API-NOTES §3), BUT an override/vehicle bar
+-- swap (timewalking, etc.) re-templates the button and drops the swipe back to
+-- the default SQUARE. applyShapeArt's rec.artKey cache + the rec.cooldownStyled
+-- gate both think the texture is still ours, so nothing re-set it → the sweep
+-- showed square on a hexagon until zoning out. Re-setting the texture on every
+-- cooldown update (cheap: SetSwipeTexture is a no-op when unchanged) closes it.
+local function swipeTexFor(btn)
+  local hk = handKey()
+  return (hk and GB:HandAsset(hk, handSwipePart())) or shapeArt(btn.icon or btn.Icon).swipe
+end
+local function applySwipe(cd, tex)
   if not cd then return end
   local c = pv("swipeColor") or { 0, 0, 0 }
+  if tex and cd.SetSwipeTexture then cd:SetSwipeTexture(tex) end   -- re-assert the shaped sweep (override-bar swaps drop it)
   if cd.SetDrawSwipe then cd:SetDrawSwipe(true) end    -- charge recharge is edge-only by default → force the shaped swipe
   if cd.SetSwipeColor then cd:SetSwipeColor(c[1], c[2], c[3], pv("swipeAlpha") or 0.8) end
   if cd.SetDrawEdge then cd:SetDrawEdge(false) end     -- can't be shaped → off
@@ -1732,11 +1837,43 @@ local function handIconSize(btn)
   else return short, short end
 end
 
+-- Extend the button's CLICKABLE area to match a non-square construction (session
+-- 14). We reshape the icon texture but Blizzard leaves the secure button's hit
+-- rect square, so on a tall shape (2:1 pill) the icon's top/bottom tips weren't
+-- clickable — which bit pet autocast (a right-click at the visual edge did
+-- nothing). SetHitRectInsets with NEGATIVE insets EXTENDS the hit rect outward;
+-- we extend by the construction's overshoot past the button on each axis, and
+-- NEVER inset below the button (a smaller construction keeps the full button
+-- clickable). This writes to a SECURE button → out of combat only (deferred to
+-- PLAYER_REGEN_ENABLED in combat). Zero visual effect (the hit rect is invisible);
+-- fully reversible (reset to 0,0,0,0 on restore/disable).
+local hitRectPending = false
+local function setHitRect(btn, cw, ch)
+  if not btn.SetHitRectInsets then return end
+  if InCombatLockdown() then hitRectPending = true; return end
+  local bw, bh = btn:GetWidth(), btn:GetHeight()
+  if not (bw and bh and bw > 0 and bh > 0) then return end
+  local ox = math.max(0, (cw - bw) / 2)
+  local oy = math.max(0, (ch - bh) / 2)
+  btn:SetHitRectInsets(-ox, -ox, -oy, -oy)
+end
+-- Non-plate: the icon IS the construction.
+local function applyHitRect(btn)
+  local icon = btn.icon or btn.Icon
+  if not icon then return end
+  local iw, ih = icon:GetWidth(), icon:GetHeight()
+  if iw and ih then setHitRect(btn, iw, ih) end
+end
+-- Plate: the visible construction is w wide × 2w tall (the icon is one half).
+local function applyHitRectPlate(btn, w)
+  setHitRect(btn, w, w * 2)
+end
+
 -- Resize the VISIBLE icon (centered on the button). The secure button's hit area
--- is untouched (textures aren't protected). With a hand shape active, W/H come
--- from the shape's aspect × size scale (and are mirrored into db.iconW/iconH so
--- downstream anchor/preview math stays consistent). Otherwise the legacy free
--- iconW/iconH ("auto"/nil = leave Blizzard's anchoring). Defined before its callers.
+-- is extended to match (applyHitRect, out of combat). With a hand shape active,
+-- W/H come from the shape's aspect × size scale (and are mirrored into db.iconW/
+-- iconH so downstream anchor/preview math stays consistent). Otherwise the legacy
+-- free iconW/iconH ("auto"/nil = leave Blizzard's anchoring). Defined before callers.
 local function applyIconSize(btn)
   local icon = btn.icon or btn.Icon
   if not icon then return end
@@ -1747,6 +1884,9 @@ local function applyIconSize(btn)
     local dy = (plateIconSide() == "bottom") and (-w * 0.5) or (w * 0.5)
     if GB.db then GB.db.iconW, GB.db.iconH = w, w end
     icon:ClearAllPoints(); icon:SetPoint("CENTER", btn, "CENTER", 0, dy); icon:SetSize(w, w)
+    -- Plate: the FULL construction is w×2w tall (icon is one half), so the clickable
+    -- area should cover the whole plate, not just the square icon half.
+    applyHitRectPlate(btn, w)
     return
   end
   if w and h then
@@ -1758,6 +1898,7 @@ local function applyIconSize(btn)
   icon:ClearAllPoints()
   icon:SetPoint("CENTER", btn, "CENTER", 0, 0)
   icon:SetSize(w, h)
+  applyHitRect(btn)
 end
 
 -- `silent` = suppress the chat message (the Config slider calls this every tick;
@@ -1876,7 +2017,7 @@ end
 -- the icon, re-crop (cover-fit), re-pick overlay art for the aspect, re-anchor the
 -- state rings + cooldowns, and rebuild masks/plates via ApplyDecor. All plain
 -- re-anchors + file swaps — the secure hit area is never touched.
-local function refreshIconGeometry(btn)
+refreshIconGeometry = function(btn)   -- assigns the forward-declared local (see top of file)
   local rec = records[btn]
   local icon = btn.icon or btn.Icon
   if not (rec and rec.active and icon) then return end
@@ -1948,9 +2089,9 @@ local function ApplyButton(btn, bar)
     -- Capture the pristine keybind font/justify BEFORE we ever override it, so
     -- turning Custom keybind OFF restores it exactly (Blizzard's UpdateHotkeys
     -- re-anchors + re-sizes but never re-sets the font — API-NOTES §3).
-    if btn.HotKey then rec.hkFont = { btn.HotKey:GetFont() }; rec.hkJustify = btn.HotKey:GetJustifyH(); rec.hkColor = { btn.HotKey:GetTextColor() } end
-    if btn.Count then rec.cntFont = { btn.Count:GetFont() }; rec.cntJustify = btn.Count:GetJustifyH(); rec.cntColor = { btn.Count:GetTextColor() } end
-    if btn.Name then rec.nmFont = { btn.Name:GetFont() }; rec.nmJustify = btn.Name:GetJustifyH(); rec.nmColor = { btn.Name:GetTextColor() }; rec.nmParent = btn.Name:GetParent() end
+    if btn.HotKey then rec.hkFont = { btn.HotKey:GetFont() }; rec.hkJustify = btn.HotKey:GetJustifyH(); rec.hkColor = { btn.HotKey:GetTextColor() }; rec.hkShadow = captureShadow(btn.HotKey); rec.hkFontObj = btn.HotKey:GetFontObject() end
+    if btn.Count then rec.cntFont = { btn.Count:GetFont() }; rec.cntJustify = btn.Count:GetJustifyH(); rec.cntColor = { btn.Count:GetTextColor() }; rec.cntShadow = captureShadow(btn.Count); rec.cntFontObj = btn.Count:GetFontObject() end
+    if btn.Name then rec.nmFont = { btn.Name:GetFont() }; rec.nmJustify = btn.Name:GetJustifyH(); rec.nmColor = { btn.Name:GetTextColor() }; rec.nmShadow = captureShadow(btn.Name); rec.nmFontObj = btn.Name:GetFontObject(); rec.nmParent = btn.Name:GetParent() end
     if btn.UpdateButtonArt then
       hooksecurefunc(btn, "UpdateButtonArt", function(b)
         if Skin.enabled then
@@ -1987,6 +2128,19 @@ local function ApplyButton(btn, bar)
         if not (Skin.enabled and records[b]) then return end
         symbolizeButton(b)                                    -- Mac modifier icons (if opted in)
         if records[b].hkOverridden then ApplyHotkeyOverride(b) end
+      end)
+    end
+    -- Count re-assert (session 14 — hardening). The original comment assumed
+    -- Blizzard never re-touches Count at runtime beyond SetText, so the override
+    -- applied once from ApplyDecor with no hook. TRUE in the normal case, but a
+    -- button RE-TEMPLATE (override/vehicle bar swap; another addon's global font
+    -- pass firing after us) re-anchors + re-fonts Count and drops our styling —
+    -- the /gb fontinfo probe caught Count reverting to Gotham after combat churn.
+    -- UpdateCount runs on every content refresh (:Update calls it), so re-assert
+    -- here, mirroring the keybind's UpdateHotkeys hook.
+    if btn.UpdateCount then
+      hooksecurefunc(btn, "UpdateCount", function(b)
+        if Skin.enabled and records[b] and records[b].cntOverridden then ApplyCountOverride(b) end
       end)
     end
     if btn.UpdateUsable then
@@ -2071,7 +2225,10 @@ local function ApplyButton(btn, bar)
       local r = b and records[b]
       if Skin.enabled and r and r.active then
         local prev = presetCtx; presetCtx = presetFor(b) or prev   -- applySwipe has no btn arg
-        applySwipe(b.cooldown)
+        local tex = swipeTexFor(b)   -- re-assert the shaped sweep texture (override-bar swaps drop it to square)
+        applySwipe(b.cooldown, tex)
+        applySwipe(b.chargeCooldown, tex)
+        applySwipe(b.lossOfControlCooldown, tex)
         presetCtx = prev
         refreshDimProxy(b)      -- plate dim-on-cooldown tracks every cooldown update
         styleCooldownText(b)    -- countdown numbers: lazy FontString + hidden-state re-assert
@@ -2136,6 +2293,15 @@ local function RestoreButton(btn)
   if btn.NewActionTexture then btn.NewActionTexture:SetAlpha(1) end
   if btn.CooldownFlash then btn.CooldownFlash:SetAlpha(1) end
   if btn.BorderShadow then btn.BorderShadow:SetAlpha(1) end
+  -- Pet autocast: stop our Comet Chase + un-suppress Blizzard's square overlay.
+  if btn.AutoCastOverlay then
+    btn.AutoCastOverlay:SetAlpha(1)
+    if rec.autoCastAnim and GB.Anims and GB.Anims.Get and GB.Anims:Get(AUTOCAST_ANIM) then
+      GB.Anims:Get(AUTOCAST_ANIM):Stop(btn)
+    end
+    rec.autoCastAnim = nil
+  end
+  if btn.SetHitRectInsets and not InCombatLockdown() then btn:SetHitRectInsets(0, 0, 0, 0) end   -- restore native clickable area
   btn:SetAlpha(1); rec.emptyAlpha = nil   -- undo any empty-slot dim/hide
   if rec.plates then
     for _, plate in ipairs(rec.plates) do plate.tex:Hide() end
@@ -2147,15 +2313,19 @@ local function RestoreButton(btn)
   if rec.hkOverridden then
     rec.hkOverridden = nil
     btn.HotKey:SetJustifyH(rec.hkJustify or "RIGHT")
+    if rec.hkFontObj then btn.HotKey:SetFontObject(rec.hkFontObj) end
     if rec.hkFont and rec.hkFont[1] then btn.HotKey:SetFont(rec.hkFont[1], rec.hkFont[2], rec.hkFont[3] or "") end
     if rec.hkColor then btn.HotKey:SetTextColor(rec.hkColor[1], rec.hkColor[2], rec.hkColor[3], rec.hkColor[4] or 1) end
+    restoreShadow(btn.HotKey, rec.hkShadow)
     if btn.UpdateHotkeys then btn:UpdateHotkeys(btn.buttonType) end
   end
   if rec.cntOverridden and btn.Count then
     rec.cntOverridden = nil
     btn.Count:SetJustifyH(rec.cntJustify or "RIGHT")
+    if rec.cntFontObj then btn.Count:SetFontObject(rec.cntFontObj) end
     if rec.cntFont and rec.cntFont[1] then btn.Count:SetFont(rec.cntFont[1], rec.cntFont[2], rec.cntFont[3] or "") end
     if rec.cntColor then btn.Count:SetTextColor(rec.cntColor[1], rec.cntColor[2], rec.cntColor[3], rec.cntColor[4] or 1) end
+    restoreShadow(btn.Count, rec.cntShadow)
     btn.Count:ClearAllPoints()
     btn.Count:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -3, 1)   -- stock anchor; a /reload is exact
   end
@@ -2171,8 +2341,10 @@ local function RestoreButton(btn)
   if rec.nmOverridden and btn.Name then
     rec.nmOverridden = nil
     btn.Name:SetJustifyH(rec.nmJustify or "CENTER")
+    if rec.nmFontObj then btn.Name:SetFontObject(rec.nmFontObj) end
     if rec.nmFont and rec.nmFont[1] then btn.Name:SetFont(rec.nmFont[1], rec.nmFont[2], rec.nmFont[3] or "") end
     if rec.nmColor then btn.Name:SetTextColor(rec.nmColor[1], rec.nmColor[2], rec.nmColor[3], rec.nmColor[4] or 1) end
+    restoreShadow(btn.Name, rec.nmShadow)
     btn.Name:ClearAllPoints()
     btn.Name:SetPoint("BOTTOM", btn, "BOTTOM", 0, 2)   -- stock geometry; a /reload is exact
     btn.Name:SetSize(36, 10)
@@ -2279,6 +2451,138 @@ local function hookFlyout()
 end
 
 -- ---------------------------------------------------------------------------
+-- Pet + stance re-skin (session 14). They're full members of GB.BARS now
+-- (skinned by Enable's ForEachButton pass + laid out by Layout.lua), but
+-- Blizzard re-templates their icons on their OWN events (PET_BAR_UPDATE /
+-- UPDATE_SHAPESHIFT_FORM — the bar-level :Update re-shows icons), which the
+-- main bars' hooks don't cover. A watcher re-decors them after, coalesced
+-- next-frame. Guarded on records so it only touches skinned buttons.
+local petStanceBars = { { p = "PetActionButton", n = 10 }, { p = "StanceButton", n = 10 } }
+local refreshAutoCast   -- forward-declared (defined below reskinPetStance; used in its loop)
+
+-- Suppress the SQUARE checked/highlight overlay on pet/stance. PetActionBar:Update
+-- re-drives GetCheckedTexture():SetAlpha(0.5/1.0) on the active pet stance (source
+-- line 144/147) — the alpha-war the main bars' UpdateFlash hook handles, but pet/
+-- stance have no UpdateFlash and it fires all through combat (Jason: the square came
+-- back mid-fight). One-time SetAlpha post-hook per texture (the equipped-border
+-- pattern) re-asserts 0 whenever Blizzard raises it — self-healing on any event.
+-- GUARDED on handKey(): the SDF fallback (no hand shape) legitimately shows the ring,
+-- so only suppress while a hand shape owns the state look. gbSuppressing prevents the
+-- hook from recursing on our own SetAlpha(0).
+local function hookHideAlpha(tex)
+  if not tex or tex.gbAlphaHooked then return end
+  tex.gbAlphaHooked = true
+  hooksecurefunc(tex, "SetAlpha", function(self, a)
+    if self.gbSuppressing then return end
+    if Skin.enabled and handKey() and a and a > 0 then
+      self.gbSuppressing = true
+      self:SetAlpha(0)
+      self.gbSuppressing = false
+    end
+  end)
+end
+local function suppressPetChecked(btn)
+  local ct = btn.GetCheckedTexture and btn:GetCheckedTexture()
+  local hl = btn.GetHighlightTexture and btn:GetHighlightTexture()
+  if handKey() then
+    if ct then ct:SetAlpha(0) end
+    if hl then hl:SetAlpha(0) end
+  end
+  hookHideAlpha(ct)   -- install once; re-asserts on every future Blizzard SetAlpha
+  hookHideAlpha(hl)
+end
+
+local function reskinPetStance()
+  if not Skin.enabled then return end
+  for _, b in ipairs(petStanceBars) do
+    for i = 1, b.n do
+      local btn = _G[b.p .. i]
+      if btn and records[btn] and records[btn].active then
+        ApplyDecor(btn)
+        -- Re-evaluate empty-slot dim/hide: pet actions load ASYNC after login, so
+        -- a button skinned while its icon was still hidden got dimmed and stayed
+        -- dimmed (the main bars' empty re-check is the per-button Update hook,
+        -- which pet/stance lack). PET_BAR_UPDATE / form change is our re-check.
+        applyEmptyAlpha(btn)
+        suppressPetChecked(btn)   -- re-hide + hook the square checked/highlight overlay
+        refreshAutoCast(btn)      -- pet autocast → our shaped Comet Chase (below)
+      end
+    end
+  end
+end
+
+-- ---------------------------------------------------------------------------
+-- Pet autocast → shaped Marching Lines (session 14). Blizzard's autocast overlay
+-- is a SQUARE animated shine on pet abilities set to autocast — it doesn't follow
+-- our shape. We suppress it and run our own Comet Chase animation (the Anims
+-- "shine" module, shape-conforming via its rim mask) with a FIXED look (gold, max
+-- 4 comets, ~5s orbit) — Jason wants it always-on for autocast, not configurable.
+-- `AutoCastOverlay.autoCastEnabled` is a plain rendered-state BOOLEAN (set by
+-- ShowAutoCastEnabled) — no secret read. We post-hook that call per button (it
+-- fires from PetActionBar:Update) + re-check in the reskin sweep.
+-- AUTOCAST_ANIM ("shine" = Comet Chase; was "march"/Marching Lines — too subtle,
+-- Jason) is declared at the top of the file so RestoreButton can stop it.
+local AUTOCAST_PARAMS = { color = { 1, 0.82, 0 }, count = 8, spin = 0.8 / 5 }   -- gold; 8 comets (module max); SHINE_MIN_REV(0.8)/5s orbit
+local function autoCastOn(btn)
+  local ov = btn.AutoCastOverlay
+  return ov and ov.autoCastEnabled and ov:IsShown() and true or false
+end
+refreshAutoCast = function(btn)   -- assign the forward-declared local
+  local ov = btn.AutoCastOverlay
+  if not ov then return end
+  -- Hook the overlay's own toggle once so right-clicking a pet ability (which
+  -- flips autocast in-game) updates our animation the same frame, not only on
+  -- the next PET_BAR_UPDATE. Deferred so we read the flag AFTER Blizzard sets it.
+  if ov.ShowAutoCastEnabled and not ov.gbACHooked then
+    ov.gbACHooked = true
+    hooksecurefunc(ov, "ShowAutoCastEnabled", function()
+      if Skin.enabled then C_Timer.After(0, function() if refreshAutoCast then refreshAutoCast(btn) end end) end
+    end)
+  end
+  if not Skin.enabled or not handKey() then return end
+  local rec = records[btn]
+  if not (rec and rec.active) then return end
+  local on = autoCastOn(btn)
+  -- Suppress Blizzard's autocast overlay whenever it's SHOWN (its square Corners/
+  -- Shine never conform to our shape); our comets replace it on the ENABLED ones
+  -- (below). The overlay appears on any autocast-ALLOWED ability.
+  ov:SetAlpha(ov:IsShown() and 0 or 1)
+  if not (GB.Anims and GB.Anims.Get) then return end
+  local anim = GB.Anims:Get(AUTOCAST_ANIM)
+  if not anim then return end
+  local icon = (Skin.ConstructRef and Skin:ConstructRef(btn)) or btn.icon or btn.Icon
+  local key = (Skin.ShapeKeyFor and Skin:ShapeKeyFor(btn)) or handKey()
+  if on and icon and key then
+    if rec.autoCastAnim ~= key then   -- (re)start only on first-on or a shape change
+      anim:Start(btn, icon, key, AUTOCAST_PARAMS)
+      rec.autoCastAnim = key
+    end
+  elseif rec.autoCastAnim then
+    anim:Stop(btn)
+    rec.autoCastAnim = nil
+  end
+end
+
+local extraWatcher = CreateFrame("Frame")
+local extraQueued = false
+local function queueReskin()
+  if extraQueued or not Skin.enabled then return end
+  extraQueued = true
+  C_Timer.After(0, function() extraQueued = false; reskinPetStance() end)
+end
+extraWatcher:SetScript("OnEvent", function() queueReskin() end)
+local function hookExtras()
+  if Skin._extrasHooked then return end
+  Skin._extrasHooked = true
+  extraWatcher:RegisterEvent("PET_BAR_UPDATE")
+  extraWatcher:RegisterEvent("UNIT_PET")
+  extraWatcher:RegisterEvent("PLAYER_CONTROL_LOST")
+  extraWatcher:RegisterEvent("PLAYER_CONTROL_GAINED")
+  extraWatcher:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+  extraWatcher:RegisterEvent("UPDATE_SHAPESHIFT_FORMS")
+end
+
+-- ---------------------------------------------------------------------------
 -- Bar ping (session 13 QoL): pulse a whole bar's buttons while its Apply-to-
 -- bars row is hovered or its list is open, so it's obvious WHICH bar is being
 -- re-dressed (Jason: several bars on screen look alike). Renders the shape's
@@ -2352,6 +2656,7 @@ function Skin:Enable()
   end)
   hookFlyout()
   sweepFlyout()   -- members that already exist from an earlier open
+  hookExtras()    -- pet/stance re-template watcher (they're skinned in the ForEachButton pass above)
   -- Second decor pass: ApplyButton's FIRST pass resolves its preset ctx before
   -- rec.barKey exists (the wrapper runs before the body sets it), so bars
   -- assigned to non-edit presets would render the working copy until the next
@@ -2380,7 +2685,7 @@ function Skin:Disable()
   self.enabled = false
   if GB.db then GB.db.skinEnabled = false end
   self:PingBar(nil, false)   -- clear any hover ping
-  GB:ForEachButton(function(btn) RestoreButton(btn) end)
+  GB:ForEachButton(function(btn) RestoreButton(btn) end)   -- includes pet + stance (now in GB.BARS)
   for _, btn in ipairs(flyoutButtons) do RestoreButton(btn) end
   if SpellFlyout and SpellFlyout.Background then SpellFlyout.Background:SetAlpha(1) end
   if GB.Glows then GB.Glows:SetEnabled(false) end
@@ -2409,8 +2714,17 @@ local reassert = CreateFrame("Frame")
 reassert:RegisterEvent("PLAYER_ENTERING_WORLD")
 reassert:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 reassert:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
-reassert:SetScript("OnEvent", function()
-  if Skin.enabled then GB:ForEachButton(function(b) Suppress(b) end) end
+reassert:RegisterEvent("PLAYER_REGEN_ENABLED")   -- flush hit-rect writes deferred during combat
+reassert:SetScript("OnEvent", function(_, event)
+  if not Skin.enabled then return end
+  if event == "PLAYER_REGEN_ENABLED" and hitRectPending then
+    hitRectPending = false
+    -- applyIconSize re-derives the hit rect per mode (plate vs non-plate); route
+    -- through it so plate buttons get the full-plate hitbox, not the square half.
+    GB:ForEachButton(function(b) if records[b] and records[b].active then applyIconSize(b) end end)
+  else
+    GB:ForEachButton(function(b) Suppress(b) end)
+  end
 end)
 
 -- Drag grid: an action on the cursor must see every empty slot as a drop target,

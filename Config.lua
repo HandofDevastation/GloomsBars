@@ -311,8 +311,12 @@ end
 -- --------------------------------------------------------------------------
 -- Window shell + one-open accordion
 -- --------------------------------------------------------------------------
-local PANEL_W, PANEL_H = 620, 640
-local PREVIEW_W = 210            -- left preview pane width
+-- Three panels (Jason, session 14): profile + preset selection on the LEFT
+-- (always visible — it decides what everything else edits), the control
+-- accordion in the MIDDLE (widest), the preview pane on the RIGHT.
+local RAIL_W = 200               -- left rail: profile + preset selection
+local PREVIEW_W = 210            -- right preview pane width
+local PANEL_W, PANEL_H = RAIL_W + 410 + PREVIEW_W, 640   -- middle = 401 body + 9 scrollbar gutter
 local TITLE_DIV_Y = -48          -- title bar divider
 local FOOTER_H = 52              -- footer strip height (divider sits here above bottom)
 local SECTION_HDR_H = 36
@@ -1158,6 +1162,80 @@ end
 -- and the section resizes to the selected block (bf:SetHeight + relayout).
 -- Engines: ApplyHotkeyOverride (styleData.hotkey, UpdateHotkeys re-assert),
 -- ApplyCountOverride (styleData.count), styleCooldownText (styleData.cdtext).
+-- OUTLINE & SHADOW group (session 14) — one identical block for every Text
+-- element. Outline = WoW's font flag (None / Outline / Thick); Shadow = the
+-- separate FontString shadow property the engine now owns (toggle + colour with
+-- opacity + X/Y offset). `defOn` mirrors the engine's legacy default when the
+-- element has no saved shadow yet (Blizzard bakes one on name/countdown, not
+-- keybind/count). `onFn` = whether the element's styling is active (greying).
+-- Occupies 216px from `y`; returns { refresh(on) }.
+local function textStyleGroup(parent, y, dataFn, ensureFn, applyFn, defOn, onFn)
+  local g = {}
+  local hdr = newText(parent, FONT.head, 13, COLOR.purple, "LEFT"); hdr:SetPoint("TOPLEFT", 18, y); hdr:SetText("OUTLINE & SHADOW")
+
+  local olab = newText(parent, FONT.body, 12, TEXT, "LEFT"); olab:SetPoint("TOPLEFT", 18, y - 30); olab:SetText("Outline")
+  local obtns, oPrev = {}, nil
+  for i = 3, 1, -1 do   -- reverse → None ends up leftmost
+    local oc = ({ { "", "None" }, { "OUTLINE", "Outline" }, { "THICKOUTLINE", "Thick" } })[i]
+    local b = flatButton(parent, 60, 22, COLOR.heroic, oc[2], 11)
+    if oPrev then b:SetPoint("TOPRIGHT", oPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, y - 28) end
+    b:SetScript("OnClick", function()
+      local c = ensureFn(); if not c then return end
+      c.flags = oc[1]
+      for _, e in ipairs(obtns) do e.b:SetActive(e.f == c.flags) end
+      applyFn()
+    end)
+    obtns[#obtns + 1] = { b = b, f = oc[1] }; oPrev = b
+  end
+
+  local function shadow() local c = dataFn(); return c and c.shadow end
+  local function shadowOn()
+    local sh = shadow()
+    if sh == nil then return defOn end   -- legacy: mirror the engine's fallback
+    return sh.enabled and true or false
+  end
+  local function ensureShadow()
+    local c = ensureFn(); if not c then return nil end
+    c.shadow = c.shadow or { enabled = defOn, color = { 0, 0, 0, 1 }, x = 1, y = -1 }
+    return c.shadow
+  end
+
+  local slab = newText(parent, FONT.body, 12, TEXT, "LEFT"); slab:SetPoint("TOPLEFT", 18, y - 62); slab:SetText("Shadow")
+  local sTog = makeToggle(parent, shadowOn,
+    function(v)
+      local sh = ensureShadow(); if sh then sh.enabled = v and true or false end
+      applyFn(); g.refresh(onFn())
+    end)
+  sTog:SetPoint("TOPRIGHT", -18, y - 60)
+
+  local sclab = newText(parent, FONT.body, 12, TEXT, "LEFT"); sclab:SetPoint("TOPLEFT", 18, y - 94); sclab:SetText("Shadow color")
+  local scs = colorSwatch(parent,
+    function() local sh = shadow(); return sh and sh.color end,
+    function(col) local sh = ensureShadow(); if sh then sh.color = col end; applyFn() end,
+    true)   -- opacity-enabled — a soft shadow is half the point
+  scs.swatch:SetPoint("TOPRIGHT", -18, y - 92)
+
+  local sxRow = sliderRow(parent, y - 126, "Shadow offset X", -8, 8, 1,
+    function() local sh = shadow(); return (sh and sh.x) or 1 end,
+    function(v) local sh = ensureShadow(); if sh then sh.x = v end; applyFn() end,
+    function(v) return v .. "px" end)
+  local syRow = sliderRow(parent, y - 170, "Shadow offset Y", -8, 8, 1,
+    function() local sh = shadow(); return (sh and sh.y) or -1 end,
+    function(v) local sh = ensureShadow(); if sh then sh.y = v end; applyFn() end,
+    function(v) return v .. "px" end)
+
+  g.refresh = function(on)
+    local c = dataFn()
+    local shOn = on and shadowOn()
+    for _, e in ipairs(obtns) do e.b:SetActive(on and ((c and c.flags) or "OUTLINE") == e.f); e.b:SetEnabled(on) end
+    sTog:refresh(); sTog:SetEnabled(on); sTog:SetAlpha(on and 1 or 0.35)
+    scs:refresh(); scs.swatch:EnableMouse(shOn); scs.swatch:SetAlpha(shOn and 1 or 0.35)
+    sxRow:refresh(); syRow:refresh()
+    sxRow:setEnabled(shOn); syRow:setEnabled(shOn)
+  end
+  return g
+end
+
 local function buildTextSection(bf, s)
   local function reapply() if GB.Skin then GB.Skin:ReapplyDecor() end end
   local function reCD() if GB.Skin and GB.Skin.RefreshCooldownText then GB.Skin:RefreshCooldownText() end end
@@ -1178,7 +1256,7 @@ local function buildTextSection(bf, s)
   end
 
   -- ------------------------------------------------------------------ KEYBIND
-  local kb = newBlock("keybind", 404)
+  local kb = newBlock("keybind", 620)
   local lab = newText(kb, FONT.body, 12, TEXT, "LEFT"); lab:SetPoint("TOPLEFT", 18, -14); lab:SetText("Custom keybind")
   local en = makeToggle(kb,
     hotkeyOn,
@@ -1203,14 +1281,16 @@ local function buildTextSection(bf, s)
     function(name) local h = ensureHotkey(); h.font = name; reapply() end)
   fontBtn:SetPoint("TOPRIGHT", -18, -120)
 
+  local kbStyle = textStyleGroup(kb, -160, hotkeyData, ensureHotkey, reapply, false, hotkeyOn)
+
   -- POSITION — zone (over the icon vs. in the extension plate) + nudge offsets.
-  local phdr = newText(kb, FONT.head, 13, COLOR.purple, "LEFT"); phdr:SetPoint("TOPLEFT", 18, -160); phdr:SetText("POSITION")
-  local zlab = newText(kb, FONT.body, 12, TEXT, "LEFT"); zlab:SetPoint("TOPLEFT", 18, -190); zlab:SetText("Zone")
+  local phdr = newText(kb, FONT.head, 13, COLOR.purple, "LEFT"); phdr:SetPoint("TOPLEFT", 18, -376); phdr:SetText("POSITION")
+  local zlab = newText(kb, FONT.body, 12, TEXT, "LEFT"); zlab:SetPoint("TOPLEFT", 18, -406); zlab:SetText("Zone")
   local zoneBtns, zPrev = {}, nil
   for i = 2, 1, -1 do
     local zc = ({ { "center", "Center" }, { "extension", "Extension" } })[i]
     local b = flatButton(kb, 80, 22, COLOR.heroic, zc[2], 11)
-    if zPrev then b:SetPoint("TOPRIGHT", zPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -188) end
+    if zPrev then b:SetPoint("TOPRIGHT", zPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -404) end
     b:SetScript("OnClick", function()
       local h = ensureHotkey(); h.zone = zc[1]
       for _, e in ipairs(zoneBtns) do e.b:SetActive(e.z == h.zone) end; reapply()
@@ -1218,11 +1298,11 @@ local function buildTextSection(bf, s)
     zoneBtns[#zoneBtns + 1] = { b = b, z = zc[1] }; zPrev = b
   end
 
-  local oxRow = sliderRow(kb, -222, "Offset X", -40, 40, 1,
+  local oxRow = sliderRow(kb, -438, "Offset X", -40, 40, 1,
     function() local h = hotkeyData(); return (h and h.offsetX) or 0 end,
     function(v) local h = ensureHotkey(); h.offsetX = v; reapply() end,
     function(v) return v .. "px" end)
-  local oyRow = sliderRow(kb, -266, "Offset Y", -40, 40, 1,
+  local oyRow = sliderRow(kb, -482, "Offset Y", -40, 40, 1,
     function() local h = hotkeyData(); return (h and h.offsetY) or 0 end,
     function(v) local h = ensureHotkey(); h.offsetY = v; reapply() end,
     function(v) return v .. "px" end)
@@ -1231,18 +1311,18 @@ local function buildTextSection(bf, s)
   -- prefixes (m-/s-/c-/a-) for Mac symbols (⌘⇧⌃⌥), hyphen removed. Only renders
   -- while Custom keybind is on (greyed + inert when off); stored per style
   -- (keybindMods) so the choice persists across the master toggle.
-  local mhdr = newText(kb, FONT.head, 13, COLOR.purple, "LEFT"); mhdr:SetPoint("TOPLEFT", 18, -306); mhdr:SetText("MODIFIERS")
-  local mlab = newText(kb, FONT.body, 12, TEXT, "LEFT"); mlab:SetPoint("TOPLEFT", 18, -336); mlab:SetText("Mac symbol icons")
+  local mhdr = newText(kb, FONT.head, 13, COLOR.purple, "LEFT"); mhdr:SetPoint("TOPLEFT", 18, -522); mhdr:SetText("MODIFIERS")
+  local mlab = newText(kb, FONT.body, 12, TEXT, "LEFT"); mlab:SetPoint("TOPLEFT", 18, -552); mlab:SetText("Mac symbol icons")
   local modTog = makeToggle(kb,
     function() local st = GB.db and GB.db.styleData; return st and st.keybindMods == "symbols" end,
     function(v)
       local st = GB.db and GB.db.styleData; if st then st.keybindMods = v and "symbols" or "default" end
       if GB.Skin then GB.Skin:RefreshHotkeyText() end
     end)
-  modTog:SetPoint("TOPRIGHT", -18, -334)
+  modTog:SetPoint("TOPRIGHT", -18, -550)
 
   local kbHint = newText(kb, FONT.body, 11, MUTE, "LEFT")
-  kbHint:SetPoint("TOPLEFT", 18, -366); kbHint:SetPoint("RIGHT", kb, "RIGHT", -16, 0); kbHint:SetJustifyH("LEFT")
+  kbHint:SetPoint("TOPLEFT", 18, -582); kbHint:SetPoint("RIGHT", kb, "RIGHT", -16, 0); kbHint:SetJustifyH("LEFT")
   kbHint:SetText("Everything here needs Custom keybind on. Mac symbol icons replace m-/s-/c-/a- prefixes with ⌘/⇧/⌃/⌥ (macOS binds).")
   kb.refresh = function()
     local h = hotkeyData()
@@ -1255,10 +1335,11 @@ local function buildTextSection(bf, s)
     fontBtn:SetEnabled(on)
     modTog:SetEnabled(on); modTog:SetAlpha(on and 1 or 0.35)
     for _, e in ipairs(zoneBtns) do e.b:SetActive(on and ((h and h.zone) or "extension") == e.z); e.b:SetEnabled(on) end
+    kbStyle.refresh(on)
   end
 
   -- ------------------------------------------------------------- CHARGE COUNT
-  local ct = newBlock("count", 344)
+  local ct = newBlock("count", 560)
   local ctlab = newText(ct, FONT.body, 12, TEXT, "LEFT"); ctlab:SetPoint("TOPLEFT", 18, -14); ctlab:SetText("Custom count")
   local cten = makeToggle(ct, countOn,
     function(v) local c = ensureCount(); if c then c.enabled = v and true or false end; reapply(); ct.refresh() end)
@@ -1281,14 +1362,16 @@ local function buildTextSection(bf, s)
     function(name) local c = ensureCount(); c.font = name; reapply() end)
   ctFont:SetPoint("TOPRIGHT", -18, -120)
 
+  local ctStyle = textStyleGroup(ct, -160, countData, ensureCount, reapply, false, countOn)
+
   -- POSITION — zone (Blizzard's corner / centred on the icon / in the plate half).
-  local ctphdr = newText(ct, FONT.head, 13, COLOR.purple, "LEFT"); ctphdr:SetPoint("TOPLEFT", 18, -160); ctphdr:SetText("POSITION")
-  local ctzlab = newText(ct, FONT.body, 12, TEXT, "LEFT"); ctzlab:SetPoint("TOPLEFT", 18, -190); ctzlab:SetText("Zone")
+  local ctphdr = newText(ct, FONT.head, 13, COLOR.purple, "LEFT"); ctphdr:SetPoint("TOPLEFT", 18, -376); ctphdr:SetText("POSITION")
+  local ctzlab = newText(ct, FONT.body, 12, TEXT, "LEFT"); ctzlab:SetPoint("TOPLEFT", 18, -406); ctzlab:SetText("Zone")
   local ctZone, ctzPrev = {}, nil
   for i = 3, 1, -1 do   -- reverse → Corner ends up leftmost
     local zc = ({ { "corner", "Corner" }, { "center", "Center" }, { "extension", "Plate" } })[i]
     local b = flatButton(ct, 60, 22, COLOR.heroic, zc[2], 11)
-    if ctzPrev then b:SetPoint("TOPRIGHT", ctzPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -188) end
+    if ctzPrev then b:SetPoint("TOPRIGHT", ctzPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -404) end
     b:SetScript("OnClick", function()
       local c = ensureCount(); c.zone = zc[1]
       for _, e in ipairs(ctZone) do e.b:SetActive(e.z == c.zone) end; reapply()
@@ -1296,17 +1379,17 @@ local function buildTextSection(bf, s)
     ctZone[#ctZone + 1] = { b = b, z = zc[1] }; ctzPrev = b
   end
 
-  local ctOx = sliderRow(ct, -222, "Offset X", -40, 40, 1,
+  local ctOx = sliderRow(ct, -438, "Offset X", -40, 40, 1,
     function() local c = countData(); return (c and c.offsetX) or 0 end,
     function(v) local c = ensureCount(); c.offsetX = v; reapply() end,
     function(v) return v .. "px" end)
-  local ctOy = sliderRow(ct, -266, "Offset Y", -40, 40, 1,
+  local ctOy = sliderRow(ct, -482, "Offset Y", -40, 40, 1,
     function() local c = countData(); return (c and c.offsetY) or 0 end,
     function(v) local c = ensureCount(); c.offsetY = v; reapply() end,
     function(v) return v .. "px" end)
 
   local ctHint = newText(ct, FONT.body, 11, MUTE, "LEFT")
-  ctHint:SetPoint("TOPLEFT", 18, -306); ctHint:SetPoint("RIGHT", ct, "RIGHT", -16, 0); ctHint:SetJustifyH("LEFT")
+  ctHint:SetPoint("TOPLEFT", 18, -522); ctHint:SetPoint("RIGHT", ct, "RIGHT", -16, 0); ctHint:SetJustifyH("LEFT")
   ctHint:SetText("Styles the charge / stack / item count. Corner = Blizzard's spot on the icon; Plate centres it in the plate half (2:1 plate shapes only).")
   ct.refresh = function()
     local c = countData()
@@ -1316,10 +1399,11 @@ local function buildTextSection(bf, s)
     ctSize:setEnabled(on); ctOx:setEnabled(on); ctOy:setEnabled(on)
     ctFont:SetEnabled(on)
     for _, e in ipairs(ctZone) do e.b:SetActive(on and ((c and c.zone) or "corner") == e.z); e.b:SetEnabled(on) end
+    ctStyle.refresh(on)
   end
 
   -- ---------------------------------------------------------------- COUNTDOWN
-  local cd = newBlock("cdtext", 280)
+  local cd = newBlock("cdtext", 502)
   local cdlab = newText(cd, FONT.body, 12, TEXT, "LEFT"); cdlab:SetPoint("TOPLEFT", 18, -14); cdlab:SetText("Countdown numbers")
   local cdTog = makeToggle(cd, cdtextOn,
     function(v) local c = ensureCdtext(); if c then c.enabled = v and true or false end; reCD(); cd.refresh() end)
@@ -1342,17 +1426,19 @@ local function buildTextSection(bf, s)
     function(name) local c = ensureCdtext(); c.font = name; reCD() end)
   cdFont:SetPoint("TOPRIGHT", -18, -120)
 
-  local cdOx = sliderRow(cd, -154, "Offset X", -40, 40, 1,
+  local cdStyle = textStyleGroup(cd, -160, cdtextData, ensureCdtext, reCD, true, cdtextOn)
+
+  local cdOx = sliderRow(cd, -376, "Offset X", -40, 40, 1,
     function() local c = cdtextData(); return (c and c.offsetX) or 0 end,
     function(v) local c = ensureCdtext(); c.offsetX = v; reCD() end,
     function(v) return v .. "px" end)
-  local cdOy = sliderRow(cd, -198, "Offset Y", -40, 40, 1,
+  local cdOy = sliderRow(cd, -420, "Offset Y", -40, 40, 1,
     function() local c = cdtextData(); return (c and c.offsetY) or 0 end,
     function(v) local c = ensureCdtext(); c.offsetY = v; reCD() end,
     function(v) return v .. "px" end)
 
   local cdHint = newText(cd, FONT.body, 11, MUTE, "LEFT")
-  cdHint:SetPoint("TOPLEFT", 18, -242); cdHint:SetPoint("RIGHT", cd, "RIGHT", -16, 0); cdHint:SetJustifyH("LEFT")
+  cdHint:SetPoint("TOPLEFT", 18, -464); cdHint:SetPoint("RIGHT", cd, "RIGHT", -16, 0); cdHint:SetJustifyH("LEFT")
   cdHint:SetText("The number Blizzard draws while a cooldown runs. Off = hidden. Styling applies from the next cooldown update.")
   cd.refresh = function()
     local on = cdtextOn()
@@ -1360,10 +1446,11 @@ local function buildTextSection(bf, s)
     cdcs.swatch:EnableMouse(on); cdcs.swatch:SetAlpha(on and 1 or 0.35)
     cdSize:setEnabled(on); cdOx:setEnabled(on); cdOy:setEnabled(on)
     cdFont:SetEnabled(on)
+    cdStyle.refresh(on)
   end
 
   -- --------------------------------------------------------------------- NAME
-  local nm = newBlock("name", 344)
+  local nm = newBlock("name", 560)
   local nmlab = newText(nm, FONT.body, 12, TEXT, "LEFT"); nmlab:SetPoint("TOPLEFT", 18, -14); nmlab:SetText("Macro name")
   local nmModes, nmmPrev = {}, nil
   for i = 3, 1, -1 do   -- reverse → Default ends up leftmost
@@ -1394,14 +1481,17 @@ local function buildTextSection(bf, s)
     function(name) local c = ensureName(); c.font = name; reapply() end)
   nmFont:SetPoint("TOPRIGHT", -18, -120)
 
+  local nmStyle = textStyleGroup(nm, -160, nameData, ensureName, reapply, true,
+    function() return nameMode() == "custom" end)
+
   -- POSITION — zone (Blizzard's bottom edge / centred on the icon / in the plate half).
-  local nmphdr = newText(nm, FONT.head, 13, COLOR.purple, "LEFT"); nmphdr:SetPoint("TOPLEFT", 18, -160); nmphdr:SetText("POSITION")
-  local nmzlab = newText(nm, FONT.body, 12, TEXT, "LEFT"); nmzlab:SetPoint("TOPLEFT", 18, -190); nmzlab:SetText("Zone")
+  local nmphdr = newText(nm, FONT.head, 13, COLOR.purple, "LEFT"); nmphdr:SetPoint("TOPLEFT", 18, -376); nmphdr:SetText("POSITION")
+  local nmzlab = newText(nm, FONT.body, 12, TEXT, "LEFT"); nmzlab:SetPoint("TOPLEFT", 18, -406); nmzlab:SetText("Zone")
   local nmZone, nmzPrev = {}, nil
   for i = 3, 1, -1 do   -- reverse → Bottom ends up leftmost
     local zc = ({ { "bottom", "Bottom" }, { "center", "Center" }, { "extension", "Plate" } })[i]
     local b = flatButton(nm, 60, 22, COLOR.heroic, zc[2], 11)
-    if nmzPrev then b:SetPoint("TOPRIGHT", nmzPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -188) end
+    if nmzPrev then b:SetPoint("TOPRIGHT", nmzPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -404) end
     b:SetScript("OnClick", function()
       local c = ensureName(); c.zone = zc[1]
       for _, e in ipairs(nmZone) do e.b:SetActive(e.z == c.zone) end; reapply()
@@ -1409,17 +1499,17 @@ local function buildTextSection(bf, s)
     nmZone[#nmZone + 1] = { b = b, z = zc[1] }; nmzPrev = b
   end
 
-  local nmOx = sliderRow(nm, -222, "Offset X", -40, 40, 1,
+  local nmOx = sliderRow(nm, -438, "Offset X", -40, 40, 1,
     function() local c = nameData(); return (c and c.offsetX) or 0 end,
     function(v) local c = ensureName(); c.offsetX = v; reapply() end,
     function(v) return v .. "px" end)
-  local nmOy = sliderRow(nm, -266, "Offset Y", -40, 40, 1,
+  local nmOy = sliderRow(nm, -482, "Offset Y", -40, 40, 1,
     function() local c = nameData(); return (c and c.offsetY) or 0 end,
     function(v) local c = ensureName(); c.offsetY = v; reapply() end,
     function(v) return v .. "px" end)
 
   local nmHint = newText(nm, FONT.body, 11, MUTE, "LEFT")
-  nmHint:SetPoint("TOPLEFT", 18, -306); nmHint:SetPoint("RIGHT", nm, "RIGHT", -16, 0); nmHint:SetJustifyH("LEFT")
+  nmHint:SetPoint("TOPLEFT", 18, -522); nmHint:SetPoint("RIGHT", nm, "RIGHT", -16, 0); nmHint:SetJustifyH("LEFT")
   nmHint:SetText("The macro-name label. Default = Blizzard's stock look; Hidden removes it entirely. Custom applies the styling above and widens Blizzard's 36px clip box to the icon. Plate centres it in the plate half (2:1 plate shapes only).")
   nm.refresh = function()
     local c = nameData()
@@ -1431,6 +1521,7 @@ local function buildTextSection(bf, s)
     nmSize:setEnabled(on); nmOx:setEnabled(on); nmOy:setEnabled(on)
     nmFont:SetEnabled(on)
     for _, e in ipairs(nmZone) do e.b:SetActive(on and ((c and c.zone) or "bottom") == e.z); e.b:SetEnabled(on) end
+    nmStyle.refresh(on)
   end
 
   -- Chip row (which text element is being edited) + selection.
@@ -2572,7 +2663,16 @@ end
 -- the edit preset is a live document — switching preset/profile snapshots the
 -- outgoing look first (Core SwitchPreset/SetActiveProfile), logout too — so
 -- there is no Save button. Per-bar assignment arrives with Apply to bars.
-local function buildProfilesSection(bf, s)
+-- Left rail (session 14): profile + preset selection, ALWAYS visible.
+-- Replaced the old "Profiles" accordion section — the profile and preset decide
+-- what every other control edits, so they live outside the accordion, never
+-- hidden. Management (new/copy/rename/delete) lives here too.
+local function buildRailPane(parent)
+  local rail = CreateFrame("Frame", nil, parent)
+  rail:SetPoint("TOPLEFT", 0, TITLE_DIV_Y - 1)
+  rail:SetPoint("BOTTOMLEFT", 0, FOOTER_H)
+  rail:SetWidth(RAIL_W)
+
   local function sortedNames(t)
     local o = {}
     for name in pairs(t or {}) do o[#o + 1] = { value = name, label = name } end
@@ -2583,7 +2683,8 @@ local function buildProfilesSection(bf, s)
   local function presetNames() local prof = GB:ActiveProfile(); return sortedNames(prof and prof.presets) end
   local function editName() local prof = GB:ActiveProfile(); return (prof and prof.edit) or "?" end
 
-  local msgLine   -- inline feedback (name taken / can't delete the last one)
+  local railRefresh   -- fwd-declared upvalue; assigned once both dropdowns exist
+  local msgLine       -- inline feedback (name taken / can't delete the last one)
   local function note(text) msgLine:SetText(text or "") end
   -- Two-click destructive confirm (no popup): first click arms, second fires.
   local function confirmable(b, label, fn)
@@ -2596,29 +2697,32 @@ local function buildProfilesSection(bf, s)
       end
     end)
   end
-  local function actionButton(y, prev, label)
-    local b = flatButton(bf, 62, 20, COLOR.heroic, label, 11); b:SetBase(0.2)
-    if prev then b:SetPoint("TOPRIGHT", prev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, y) end
+
+  local X, W = 14, RAIL_W - 28   -- content column inset + width
+  local function railButton(x, y, w, label)
+    local b = flatButton(rail, w, 20, COLOR.heroic, label, 11); b:SetBase(0.2)
+    b:SetPoint("TOPLEFT", x, y)
     return b
   end
 
-  -- PROFILE row.
-  local plab = newText(bf, FONT.body, 12, TEXT, "LEFT"); plab:SetPoint("TOPLEFT", 18, -14); plab:SetText("Profile")
-  local pdd = animDropdown(bf, 200,   -- wide: "Name - Realm" profile names
+  -- PROFILE block.
+  local ph = newText(rail, FONT.head, 12, MUTE, "LEFT"); ph:SetPoint("TOPLEFT", X, -12); ph:SetText("PROFILE")
+  local pdd = animDropdown(rail, W,
     function() return GB:ActiveProfileName() or "?" end,
     profNames,
     function() return GB:ActiveProfileName() end,
-    function(v) note(""); GB:SetActiveProfile(v); s.refresh() end)
-  pdd:SetPoint("TOPRIGHT", -18, -12)
+    function(v) note(""); GB:SetActiveProfile(v); railRefresh() end)
+  pdd:SetPoint("TOPLEFT", X, -30)
 
-  local pDel = actionButton(-40, nil, "Delete")
-  local pRen = actionButton(-40, pDel, "Rename")
-  local pCopy = actionButton(-40, pRen, "Copy")
-  local pNew = actionButton(-40, pCopy, "New")
+  local bw = (W - 4) / 2   -- 2×2 button grid
+  local pNew  = railButton(X, -58, bw, "New")
+  local pCopy = railButton(X + bw + 4, -58, bw, "Copy")
+  local pRen  = railButton(X, -82, bw, "Rename")
+  local pDel  = railButton(X + bw + 4, -82, bw, "Delete")
   pNew:SetScript("OnClick", function()
     OpenNameDialog("New profile", "", function(name)
       if name == "" then return end
-      if GB:CreateProfile(name) then GB:SetActiveProfile(name); s.refresh()
+      if GB:CreateProfile(name) then GB:SetActiveProfile(name); railRefresh()
       else note("A profile with that name already exists.") end
     end)
   end)
@@ -2626,7 +2730,7 @@ local function buildProfilesSection(bf, s)
     local active = GB:ActiveProfileName()
     OpenNameDialog("Copy profile", (active or "") .. " copy", function(name)
       if name == "" then return end
-      if GB:CopyProfile(active, name) then GB:SetActiveProfile(name); s.refresh()
+      if GB:CopyProfile(active, name) then GB:SetActiveProfile(name); railRefresh()
       else note("A profile with that name already exists.") end
     end)
   end)
@@ -2640,7 +2744,7 @@ local function buildProfilesSection(bf, s)
   end)
   confirmable(pDel, "Delete", function()
     if not GB:DeleteProfile(GB:ActiveProfileName()) then note("Can't delete the last profile.") end
-    s.refresh(); C:Refresh()
+    C:Refresh()
   end)
   attachTip(pdd, "Profile", "The active profile for this character. Each character remembers its own; the profile library is shared account-wide.")
   attachTip(pNew, "New profile", "Creates a profile starting from the current look, and switches to it.")
@@ -2648,24 +2752,25 @@ local function buildProfilesSection(bf, s)
   attachTip(pRen, "Rename profile", "Renames this profile. Characters using it follow the new name.")
   attachTip(pDel, "Delete profile", "Deletes this profile (click twice to confirm). Characters using it fall back to another profile. The last profile can't be deleted.")
 
-  local div = hLine(bf); div:SetPoint("TOPLEFT", 18, -72); div:SetPoint("TOPRIGHT", -18, -72)
+  local div = hLine(rail); div:SetPoint("TOPLEFT", X, -114); div:SetPoint("TOPRIGHT", -X, -114)
 
-  -- PRESET row (the edit target).
-  local slab = newText(bf, FONT.body, 12, TEXT, "LEFT"); slab:SetPoint("TOPLEFT", 18, -88); slab:SetText("Preset (being edited)")
-  local sdd = animDropdown(bf, 150,
+  -- PRESET block (the edit target).
+  local sh = newText(rail, FONT.head, 12, MUTE, "LEFT"); sh:SetPoint("TOPLEFT", X, -126); sh:SetText("PRESET (BEING EDITED)")
+  local sdd = animDropdown(rail, W,
     editName,
     presetNames,
     editName,
-    function(v) note(""); GB:SwitchPreset(v); s.refresh() end)
-  sdd:SetPoint("TOPRIGHT", -18, -86)
+    function(v) note(""); GB:SwitchPreset(v); railRefresh() end)
+  sdd:SetPoint("TOPLEFT", X, -144)
 
-  local sDel = actionButton(-114, nil, "Delete")
-  local sRen = actionButton(-114, sDel, "Rename")
-  local sNew = actionButton(-114, sRen, "New")
+  local tw = (W - 8) / 3   -- 3-across button row
+  local sNew = railButton(X, -172, tw, "New")
+  local sRen = railButton(X + tw + 4, -172, tw, "Rename")
+  local sDel = railButton(X + 2 * (tw + 4), -172, tw, "Delete")
   sNew:SetScript("OnClick", function()
     OpenNameDialog("New preset", "", function(name)
       if name == "" then return end
-      if GB:CreatePreset(name) then s.refresh()
+      if GB:CreatePreset(name) then railRefresh()
       else note("A preset with that name already exists.") end
     end)
   end)
@@ -2678,18 +2783,18 @@ local function buildProfilesSection(bf, s)
   end)
   confirmable(sDel, "Delete", function()
     if not GB:DeletePreset(editName()) then note("Can't delete the last preset.") end
-    s.refresh(); C:Refresh()
+    C:Refresh()
   end)
-  attachTip(sdd, "Preset", "The look being edited — every section below edits this preset, and it saves automatically as you edit. Picking another preset swaps the whole look.")
+  attachTip(sdd, "Preset", "The look being edited — every control in the middle panel edits this preset, and it saves automatically as you edit. Picking another preset swaps the whole look.")
   attachTip(sNew, "New preset", "Creates a preset starting as a copy of the current look, and makes it the one being edited.")
   attachTip(sRen, "Rename preset", "Renames this preset. Bars assigned to it follow the new name.")
   attachTip(sDel, "Delete preset", "Deletes this preset (click twice to confirm). Bars assigned to it fall back to another preset. The last preset can't be deleted.")
 
-  msgLine = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  msgLine:SetPoint("TOPLEFT", 18, -142); msgLine:SetPoint("RIGHT", bf, "RIGHT", -16, 0); msgLine:SetJustifyH("LEFT")
+  msgLine = newText(rail, FONT.body, 11, MUTE, "LEFT")
+  msgLine:SetPoint("TOPLEFT", X, -200); msgLine:SetPoint("RIGHT", rail, "RIGHT", -X, 0); msgLine:SetJustifyH("LEFT")
 
-  bf:SetHeight(164)
-  s.refresh = function() pdd:refresh(); sdd:refresh() end
+  railRefresh = function() pdd:refresh(); sdd:refresh() end
+  parent._railRefresh = railRefresh
 end
 
 -- Bar layout (phase L1+L2) — Gloom's Bars owns bar geometry PER BAR, opt-in;
@@ -2728,10 +2833,14 @@ local function buildLayoutSection(bf, s)
   own:SetPoint("TOPRIGHT", -18, -12)
   attachTip(own, "Gloom's Bars layout", "On: this addon arranges ALL the bars, each with its settings below. Off: Edit Mode arranges everything, exactly as normal.")
 
-  -- Bar chips (2×4), pinging the real bar on hover (same QoL as Apply to bars).
+  -- Bar chips (4-wide grid; 10 bars = 3 rows), pinging the real bar on hover
+  -- (same QoL as Apply to bars). Numbered bars show "Bar N"; pet/stance show
+  -- their name (they're bars 9-10 in GB.BARS but "Bar 9/10" would be wrong).
+  local CHIP_ROWS = math.ceil(#GB.BARS / 4)
   for i, bar in ipairs(GB.BARS) do
     local col, row = (i - 1) % 4, math.floor((i - 1) / 4)
-    local chip = flatButton(bf, 82, 22, COLOR.heroic, "Bar " .. i, 11); chip:SetBase(0.2)
+    local label = bar.key:match("^bar(%d+)$") and ("Bar " .. bar.key:match("^bar(%d+)$")) or bar.label:gsub(" Bar$", "")
+    local chip = flatButton(bf, 82, 22, COLOR.heroic, label, 11); chip:SetBase(0.2)
     chip:SetPoint("TOPLEFT", 18 + col * 88, -44 - row * 26)
     chip:SetScript("OnClick", function() selectBar(bar.buttonPrefix) end)
     chip:HookScript("OnEnter", function() if GB.Skin and GB.Skin.PingBar then GB.Skin:PingBar(bar.buttonPrefix, true) end end)
@@ -2757,7 +2866,11 @@ local function buildLayoutSection(bf, s)
     for _, o in ipairs(VIS_OPTS) do if o.value == v then return o.label end end
     return "Default"
   end
-  local vlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); vlab:SetPoint("TOPLEFT", 18, -106); vlab:SetText("Visibility")
+  -- Content below the chip grid is shifted down by the extra chip row (10 bars
+  -- = 3 rows now that pet/stance are members, vs the 2 rows this section was
+  -- laid out for). BY threads the shift through every fixed offset + the reflow.
+  local BY = (CHIP_ROWS - 2) * 26
+  local vlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); vlab:SetPoint("TOPLEFT", 18, -106 - BY); vlab:SetText("Visibility")
   local visdd = animDropdown(bf, 150, visLabel,
     function() return VIS_OPTS end,
     visValue,
@@ -2766,19 +2879,19 @@ local function buildLayoutSection(bf, s)
       c.vis = (v ~= "default") and v or nil
       apply(); s.refresh()
     end)
-  visdd:SetPoint("TOPRIGHT", -18, -104)
+  visdd:SetPoint("TOPRIGHT", -18, -104 - BY)
   attachTip(visdd, "Visibility", "Default follows Blizzard's rules (Edit Mode, mouseover, vehicles). Always visible shows the bar even if Edit Mode has it disabled. In/Out of combat show it only then. Hidden removes it. Game-driven hides always win.")
 
   -- Empty buttons (Jason, borrowed from Edit Mode's Always Show Buttons):
   -- Shown = Blizzard's rules + the skin's Empty-slots treatment; Hidden =
   -- action-less buttons collapse entirely (their grid slot stays — a hole,
   -- not a shuffle; drag a spell and they reappear as drop targets).
-  local elab = newText(bf, FONT.body, 12, TEXT, "LEFT"); elab:SetPoint("TOPLEFT", 18, -136); elab:SetText("Empty buttons")
+  local elab = newText(bf, FONT.body, 12, TEXT, "LEFT"); elab:SetPoint("TOPLEFT", 18, -136 - BY); elab:SetText("Empty buttons")
   local emBtns, emPrev = {}, nil
   for i = 2, 1, -1 do
     local ec = ({ { true, "Shown" }, { false, "Hidden" } })[i]
     local b = flatButton(bf, 60, 22, COLOR.heroic, ec[2], 11)
-    if emPrev then b:SetPoint("TOPRIGHT", emPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -134) end
+    if emPrev then b:SetPoint("TOPRIGHT", emPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -134 - BY) end
     b:SetScript("OnClick", function()
       local c = ensureBarLayout(selBar)
       -- NOT `x and false or nil` — that idiom can never yield false (the
@@ -2794,13 +2907,13 @@ local function buildLayoutSection(bf, s)
 
   -- Copy another bar's whole layout onto this one (Jason: styling 8 bars one
   -- by one is a chore — tune one, copy it around).
-  local cplab = newText(bf, FONT.body, 12, TEXT, "LEFT"); cplab:SetPoint("TOPLEFT", 18, -164); cplab:SetText("Copy layout from")
+  local cplab = newText(bf, FONT.body, 12, TEXT, "LEFT"); cplab:SetPoint("TOPLEFT", 18, -164 - BY); cplab:SetText("Copy layout from")
   local cpdd = animDropdown(bf, 150,
     function() return "Pick a bar…" end,
     function()
       local o = {}
       for i, bar in ipairs(GB.BARS) do
-        if bar.buttonPrefix ~= selBar then o[#o + 1] = { value = bar.buttonPrefix, label = "Bar " .. i .. "  (" .. bar.label .. ")" } end
+        if bar.buttonPrefix ~= selBar then o[#o + 1] = { value = bar.buttonPrefix, label = bar.label } end
       end
       return o
     end,
@@ -2808,38 +2921,42 @@ local function buildLayoutSection(bf, s)
     function(v)
       local src = barLayoutData(v)
       if not src then return end
-      local prof = GB:ActiveProfile()
-      if not prof then return end
-      prof.barLayout = prof.barLayout or {}
-      prof.barLayout[selBar] = GB.deepcopy(src)
+      -- Copy the ARRANGEMENT only — size, gap, rows, row gap, orientation
+      -- (Jason). Never position (that literally stacks two bars on one spot);
+      -- visibility, button count and empty-button settings stay per-bar too.
+      local dst = ensureBarLayout(selBar)
+      if not dst then return end
+      dst.size, dst.gap, dst.rows = src.size, src.gap, src.rows
+      dst.gapCross, dst.horizontal = src.gapCross, src.horizontal
       apply(); s.refresh()
     end)
-  cpdd:SetPoint("TOPRIGHT", -18, -162)
-  attachTip(cpdd, "Copy layout", "Copies the picked bar's layout settings — size, gaps, rows, buttons, orientation — onto the selected bar.")
+  cpdd:SetPoint("TOPRIGHT", -18, -162 - BY)
+  attachTip(cpdd, "Copy layout", "Copies the picked bar's arrangement — button size, gap, rows, row gap, orientation — onto the selected bar. Its position, visibility, button count and empty-button settings stay as they are.")
 
-  local sizeRow = sliderRow(bf, -194, "Button size", 24, 64, 1,
+  local sizeRow = sliderRow(bf, -194 - BY, "Button size", 24, 64, 1,
     function() local c = data(); return (c and c.size) or 45 end,
     function(v) local c = ensureBarLayout(selBar); c.size = v; apply() end,
     function(v) return v .. "px" end)
-  local gapRow = sliderRow(bf, -238, "Gap", -32, 64, 1,
+  local gapRow = sliderRow(bf, -238 - BY, "Gap", -32, 64, 1,
     function() local c = data(); return (c and c.gap) or 4 end,
     function(v) local c = ensureBarLayout(selBar); c.gap = v; apply() end,
     function(v) return v .. "px" end)
-  local rowsRow = sliderRow(bf, -282, "Rows", 1, 6, 1,
+  local rowsRow = sliderRow(bf, -282 - BY, "Rows", 1, 6, 1,
     function() local c = data(); return (c and c.rows) or 1 end,
     function(v) local c = ensureBarLayout(selBar); c.rows = v; apply(); s.refresh() end,   -- refresh: Row gap shows at rows > 1
     function(v) return tostring(v) end)
-  local cntRow = sliderRow(bf, -326, "Buttons", 1, 12, 1,
+  local cntRow = sliderRow(bf, -326 - BY, "Buttons", 1, 12, 1,
     function() local c = data(); return (c and c.count) or 12 end,
     function(v) local c = ensureBarLayout(selBar); c.count = v; apply() end,
     function(v) return tostring(v) end)
 
-  local dlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); dlab:SetPoint("TOPLEFT", 18, -374); dlab:SetText("Orientation")
+  -- Orientation base y (shifted by BY); Row gap slides it further when rows > 1.
+  local dlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); dlab:SetPoint("TOPLEFT", 18, -374 - BY); dlab:SetText("Orientation")
   local orBtns, orPrev = {}, nil
   for i = 2, 1, -1 do
     local oc = ({ { true, "Horizontal" }, { false, "Vertical" } })[i]
     local b = flatButton(bf, 80, 22, COLOR.heroic, oc[2], 11)
-    if orPrev then b:SetPoint("TOPRIGHT", orPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -372) end
+    if orPrev then b:SetPoint("TOPRIGHT", orPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -372 - BY) end
     b:SetScript("OnClick", function()
       local c = ensureBarLayout(selBar); c.horizontal = oc[1]
       for _, e in ipairs(orBtns) do e.b:SetActive(e.h == c.horizontal) end; apply()
@@ -2850,7 +2967,7 @@ local function buildLayoutSection(bf, s)
   -- Cross-axis gap — between rows (columns on a vertical bar). Only shown when
   -- the bar folds into more than one row (Jason's rule); defaults to Gap. Sits
   -- ABOVE Orientation (Jason), which slides down to make room when it shows.
-  local rgRow = sliderRow(bf, -370, "Row gap", -32, 64, 1,
+  local rgRow = sliderRow(bf, -370 - BY, "Row gap", -32, 64, 1,
     function() local c = data(); return (c and (c.gapCross or c.gap)) or 4 end,
     function(v) local c = ensureBarLayout(selBar); c.gapCross = v; apply() end,
     function(v) return v .. "px" end)
@@ -2886,7 +3003,7 @@ local function buildLayoutSection(bf, s)
     s.refresh()
   end
 
-  bf:SetHeight(478)
+  bf:SetHeight(478 + BY)
   s.refresh = function()
     for _, c in ipairs(chips) do c.b:SetActive(c.k == selBar) end
     local on = layoutOn()
@@ -2900,10 +3017,11 @@ local function buildLayoutSection(bf, s)
     for _, e in ipairs(emBtns) do e.b:SetActive(on and e.v == se); e.b:SetEnabled(on) end
     -- Row gap: visible only when the bar folds into >1 row. It lives above
     -- Orientation, so Orientation + the hint slide down when it shows (only
-    -- the row's ANCHOR button moves — the second is chained to it).
+    -- the row's ANCHOR button moves — the second is chained to it). BY = the
+    -- extra chip-row shift (pet/stance added a third row of bar chips).
     local multiRow = (c and (c.rows or 1) or 1) > 1
     rgRow:SetShown(multiRow); rgRow:setEnabled(on)
-    local yOr = multiRow and -416 or -372
+    local yOr = (multiRow and -416 or -372) - BY
     dlab:ClearAllPoints(); dlab:SetPoint("TOPLEFT", 18, yOr - 2)
     orBtns[1].b:ClearAllPoints(); orBtns[1].b:SetPoint("TOPRIGHT", -18, yOr)
     mvBtn:ClearAllPoints(); mvBtn:SetPoint("TOPLEFT", 18, yOr - 30)
@@ -2915,7 +3033,7 @@ local function buildLayoutSection(bf, s)
     hint:ClearAllPoints()
     hint:SetPoint("TOPLEFT", 18, yOr - 62)
     hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0)
-    bf:SetHeight(multiRow and 522 or 478)
+    bf:SetHeight((multiRow and 522 or 478) + BY)
     relayout()
   end
 end
@@ -2974,8 +3092,8 @@ end
 
 local function buildPreviewPane(parent)
   local pane = CreateFrame("Frame", nil, parent)
-  pane:SetPoint("TOPLEFT", 0, TITLE_DIV_Y - 1)
-  pane:SetPoint("BOTTOMLEFT", 0, FOOTER_H)
+  pane:SetPoint("TOPRIGHT", 0, TITLE_DIV_Y - 1)
+  pane:SetPoint("BOTTOMRIGHT", 0, FOOTER_H)
   pane:SetWidth(PREVIEW_W)
 
   local eb = newText(pane, FONT.head, 12, MUTE, "LEFT"); eb:SetPoint("TOPLEFT", 14, -12); eb:SetText("PREVIEW")
@@ -3115,9 +3233,15 @@ local function BuildPanel()
     CreateColor(COLOR.orange.r, COLOR.orange.g, COLOR.orange.b, 0))
   addEdges(panel, COLOR.rim, 1)
 
-  -- Title bar
+  -- Title bar: the Gb monogram (Media/ui/logo.png, 115×128 art shown at 25×28
+  -- — native aspect; the wordmark is cropped off — the title text IS the
+  -- wordmark here) left of the title.
+  local logo = panel:CreateTexture(nil, "ARTWORK")
+  logo:SetTexture(GB.MEDIA .. "ui\\logo.png")
+  logo:SetSize(25, 28)
+  logo:SetPoint("TOPLEFT", 14, -10)
   local mark = newText(panel, FONT.title, 21, { r = 1, g = 1, b = 1 }, "LEFT")
-  mark:SetPoint("TOPLEFT", 16, -15); mark:SetText("GLOOM'S BARS")
+  mark:SetPoint("LEFT", logo, "RIGHT", 9, 0); mark:SetText("GLOOM'S BARS")
   local sub = newText(panel, FONT.head, 14, COLOR.purple, "LEFT")
   sub:SetPoint("LEFT", mark, "RIGHT", 9, -1); sub:SetText("STYLE EDITOR")
   local close = flatButton(panel, 22, 20, COLOR.heroic, "X", 12)
@@ -3142,62 +3266,45 @@ local function BuildPanel()
   local enLbl = newText(panel, FONT.body, 12.5, TEXT, "LEFT"); enLbl:SetPoint("LEFT", enTog, "RIGHT", 10, 0)
   enLbl:SetText("Enable Gloom's Bars")
   panel._enableToggle = enTog
-  -- Footer profile switcher (was an unwired increment-1 stub — Jason): shows
-  -- the ACTIVE profile, click = the profile list (same flyout as the
-  -- dropdowns), pick = switch. Label inset so long "Name - Realm" names
-  -- truncate instead of overflowing.
-  local prof = flatButton(panel, 170, 24, COLOR.heroic, "", 11); prof:SetBase(0.2)
-  prof:SetPoint("BOTTOMRIGHT", -14, 14)
-  prof.text:SetWordWrap(false)
-  prof.text:ClearAllPoints(); prof.text:SetPoint("LEFT", 8, 0); prof.text:SetPoint("RIGHT", -8, 0); prof.text:SetJustifyH("CENTER")
-  function prof:refresh() self:SetText("Profile: " .. (GB:ActiveProfileName() or "?")) end
-  prof:SetScript("OnClick", function()
-    local o = {}
-    for name in pairs((GB.db and GB.db.profiles) or {}) do o[#o + 1] = { value = name, label = name } end
-    table.sort(o, function(a, b) return a.label < b.label end)
-    openAnimFlyout(prof, o, GB:ActiveProfileName(), function(v)
-      GB:SetActiveProfile(v)   -- LoadPreset → RefreshAll → C:Refresh (label included)
-      prof:refresh()
-    end)
-  end)
-  attachTip(prof, "Profile", "The active profile for this character. Click to switch profiles; managing them (new, copy, rename, delete) lives in the Profiles section.")
-  panel._profileBtn = prof
-  prof:refresh()
-
   -- Footer quick-keybind (Jason: reachable without digging into Bar layout).
+  -- (The old footer profile switcher is gone — the left rail is always visible.)
   local fqk = flatButton(panel, 110, 24, COLOR.heroic, "Quick keybind", 11); fqk:SetBase(0.2)
-  fqk:SetPoint("RIGHT", prof, "LEFT", -8, 0)
+  fqk:SetPoint("BOTTOMRIGHT", -14, 14)
   fqk:SetScript("OnClick", openQuickKeybind)
   attachTip(fqk, "Quick keybind", "Opens Blizzard's Quick Keybind mode: hover any action button and press a key to bind it, ESC when done. Out of combat only.")
 
-  -- Left preview pane + vertical divider
+  -- Three panels: left rail (profiles/presets) · middle controls · right preview,
+  -- with a vertical divider at each seam.
+  buildRailPane(panel)
   buildPreviewPane(panel)
-  local vdiv = panel:CreateTexture(nil, "ARTWORK"); vdiv:SetColorTexture(COLOR.rim.r, COLOR.rim.g, COLOR.rim.b, COLOR.rim.a or 0.1)
-  vdiv:SetWidth(1); vdiv:SetPoint("TOPLEFT", PREVIEW_W, TITLE_DIV_Y); vdiv:SetPoint("BOTTOMLEFT", PREVIEW_W, FOOTER_H)
+  local vdivL = panel:CreateTexture(nil, "ARTWORK"); vdivL:SetColorTexture(COLOR.rim.r, COLOR.rim.g, COLOR.rim.b, COLOR.rim.a or 0.1)
+  vdivL:SetWidth(1); vdivL:SetPoint("TOPLEFT", RAIL_W, TITLE_DIV_Y); vdivL:SetPoint("BOTTOMLEFT", RAIL_W, FOOTER_H)
+  local vdivR = panel:CreateTexture(nil, "ARTWORK"); vdivR:SetColorTexture(COLOR.rim.r, COLOR.rim.g, COLOR.rim.b, COLOR.rim.a or 0.1)
+  vdivR:SetWidth(1); vdivR:SetPoint("TOPRIGHT", -PREVIEW_W, TITLE_DIV_Y); vdivR:SetPoint("BOTTOMRIGHT", -PREVIEW_W, FOOTER_H)
 
-  -- Body: a scroll frame holding the accordion (right of the preview pane).
+  -- Body: a scroll frame holding the accordion (the middle panel).
   -- The section content grows past the window height, so it scrolls (mouse wheel).
   local scroll = CreateFrame("ScrollFrame", nil, panel)
-  scroll:SetPoint("TOPLEFT", PREVIEW_W + 1, TITLE_DIV_Y - 1)
-  scroll:SetPoint("BOTTOMRIGHT", -8, FOOTER_H + 1)
+  scroll:SetPoint("TOPLEFT", RAIL_W + 1, TITLE_DIV_Y - 1)
+  scroll:SetPoint("BOTTOMRIGHT", -(PREVIEW_W + 8), FOOTER_H + 1)
   scroll:EnableMouseWheel(true)
   scroll:SetScript("OnMouseWheel", function(self, delta)
     local range = self:GetVerticalScrollRange()
     self:SetVerticalScroll(math.max(0, math.min(range, self:GetVerticalScroll() - delta * 42)))
   end)
   bodyContainer = CreateFrame("Frame", nil, scroll)
-  bodyContainer:SetSize(PANEL_W - PREVIEW_W - 9, 10)
+  bodyContainer:SetSize(PANEL_W - RAIL_W - PREVIEW_W - 9, 10)
   scroll:SetScrollChild(bodyContainer)
 
   -- Custom thin scrollbar (shared helper): orange thumb + click-to-jump + drag + wheel.
   -- The accordion grows/shrinks as sections open; the bar's OnUpdate tracks it.
+  -- Sits in the middle panel's right gutter, just left of the preview divider.
   makeScrollbar(panel, scroll, function(b)
-    b:SetPoint("TOPRIGHT", -4, TITLE_DIV_Y - 2); b:SetPoint("BOTTOMRIGHT", -4, FOOTER_H + 2)
+    b:SetPoint("TOPRIGHT", -(PREVIEW_W + 4), TITLE_DIV_Y - 2); b:SetPoint("BOTTOMRIGHT", -(PREVIEW_W + 4), FOOTER_H + 2)
   end)
 
-  -- Sections (mockup order). Profiles first — it decides what everything below
-  -- edits. Bar layout (roadmap) + Apply to bars (stage 3) are still stubs.
-  makeSection("Profiles", buildProfilesSection)
+  -- Sections (mockup order). Profiles/presets live in the left rail now — the
+  -- accordion holds the per-preset styling + bar controls.
   makeSection("Shape & icon", buildShapeSection)
   makeSection("Plate", buildPlateSection)
   makeSection("Decoration layers", buildDecorSection)
@@ -3215,6 +3322,14 @@ local function BuildPanel()
   relayout()
 
   tinsert(UISpecialFrames, "GloomsBarsConfig")   -- Escape closes it
+
+  -- Exiting the addon RELOCKS the bars (Jason): however the window goes away —
+  -- the X, ESC, /gb — move mode ends with it, so movers never outlive the
+  -- window. (ESC with the window open ends move mode via one of two paths:
+  -- the mover key catcher eats it, or the window closes and this fires.)
+  panel:HookScript("OnHide", function()
+    if GB.Layout and GB.Layout:MoveModeOn() then GB.Layout:SetMoveMode(false) end
+  end)
   C:RefreshPreview()
   C:SetPreviewState("idle")
 end
@@ -3222,7 +3337,7 @@ end
 function C:Refresh()
   if not panel then return end
   if panel._enableToggle then panel._enableToggle:refresh() end
-  if panel._profileBtn then panel._profileBtn:refresh() end
+  if panel._railRefresh then panel._railRefresh() end
   for _, s in ipairs(sections) do if s.refresh then s.refresh() end end
   C:RefreshPreview()
   C:SetPreviewState(previewState)

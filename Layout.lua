@@ -31,6 +31,14 @@ local appliedBars = {}   -- [barKey] = true — bars whose containers we've re-l
 local pending = false    -- a combat-blocked apply; flushed when combat drops
 local gridVisible = false   -- an action is on the cursor (SHOWGRID) — empty-button collapse suspends
 
+-- Edit Mode SHOWS every bar so the user can see/arrange them; our layout must
+-- not fight that (a "Hidden" bar re-hidden mid-edit flickers/blocks the user).
+-- We suspend while it's open and re-apply on EDIT_MODE_LAYOUTS_UPDATED (exit).
+local function editModeOpen()
+  return EditModeManagerFrame and EditModeManagerFrame.IsEditModeActive
+     and EditModeManagerFrame:IsEditModeActive() or false
+end
+
 -- Coalesce bursty triggers (a page flip fires ACTIONBAR_SLOT_CHANGED per slot)
 -- into ONE ApplyAll next frame.
 local applyQueued = false
@@ -46,6 +54,26 @@ watcher:RegisterEvent("PLAYER_REGEN_DISABLED")
 watcher:RegisterEvent("ACTIONBAR_SHOWGRID")
 watcher:RegisterEvent("ACTIONBAR_HIDEGRID")
 watcher:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+-- Override/vehicle/temp-shapeshift bar swaps (timewalking, dragonriding, boss
+-- vehicles, possess, etc.) re-page the bars and re-drive their visibility
+-- OUTSIDE the grid/slot events above (Jason: a timewalking dungeon un-hid three
+-- "Hidden" bars mid-run; they came back on zone-out). These fire on entering AND
+-- leaving the swap, so re-asserting our layout on each closes the visibility hole.
+-- ACTIONBAR_PAGE_CHANGED covers plain paging (stances/stealth/bonus bars).
+watcher:RegisterEvent("UPDATE_OVERRIDE_ACTIONBAR")
+watcher:RegisterEvent("UPDATE_VEHICLE_ACTIONBAR")
+watcher:RegisterEvent("UPDATE_POSSESS_BAR")
+watcher:RegisterEvent("ACTIONBAR_PAGE_CHANGED")
+watcher:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
+watcher:RegisterEvent("PLAYER_ENTERING_WORLD")   -- zone/instance change re-lays the bars
+-- Edit Mode (Jason: bars set to "Hidden" reappeared after exiting Edit Mode).
+-- Entering Edit Mode SHOWS every bar so you can arrange them; on exit Blizzard
+-- re-applies its own layout — neither path fires the events above, so our
+-- Hidden override never re-asserts. EDIT_MODE_LAYOUTS_UPDATED fires on exit AND
+-- on any layout change; we re-apply on the next frame (queueApply) after
+-- Blizzard's exit fully settles, and SUSPEND our layout WHILE Edit Mode is open
+-- (below) so we never fight its deliberate show-all.
+watcher:RegisterEvent("EDIT_MODE_LAYOUTS_UPDATED")
 watcher:SetScript("OnEvent", function(_, event)
   if event == "PLAYER_REGEN_DISABLED" then
     -- Combat starts → move mode closes itself (dragging + keyboard capture
@@ -55,7 +83,7 @@ watcher:SetScript("OnEvent", function(_, event)
     if pending then pending = false; Layout:ApplyAll() end
   elseif event == "ACTIONBAR_SHOWGRID" then gridVisible = true; queueApply()
   elseif event == "ACTIONBAR_HIDEGRID" then gridVisible = false; queueApply()
-  elseif event == "ACTIONBAR_SLOT_CHANGED" then queueApply()   -- empty-collapse tracks slot contents
+  else queueApply()   -- slot change, override/vehicle/page swaps, zone-in: re-assert layout + visibility
   end
 end)
 
@@ -63,6 +91,15 @@ local function conf(barKey)
   local prof = GB.ActiveProfile and GB:ActiveProfile()
   local t = prof and prof.barLayout
   return t and t[barKey]
+end
+
+-- Max button count for a bar (12 default; pet 10; stance class-dependent, its
+-- entry caps at 10). Keyed by buttonPrefix — the barKey the engine passes around.
+local function barMax(barKey)
+  for _, bar in ipairs(GB.BARS) do
+    if bar.buttonPrefix == barKey then return bar.count or GB.BUTTONS_PER_BAR end
+  end
+  return GB.BUTTONS_PER_BAR
 end
 
 -- The MASTER switch (Jason: layout is all-or-nothing — one switch says
@@ -114,6 +151,10 @@ local function applyBar(barKey)
     end
     if vis == "hide" then
       if barFrame:IsShown() then (barFrame.HideBase or barFrame.Hide)(barFrame) end
+      return   -- ★ nothing to lay out on a hidden bar; the container loop below
+               -- SetShown(true)s every container + ResizeLayoutFrame re-shows the
+               -- frame, which fought the hide (Jason: "Hidden" bars showed as empty
+               -- grid outlines, worst under ACTIONBAR_SHOWGRID).
     elseif vis == "show" and barFrame.isShownExternal ~= false then
       if not barFrame:IsShown() then (barFrame.ShowBase or barFrame.Show)(barFrame) end
     end
@@ -128,14 +169,15 @@ local function applyBar(barKey)
       barFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", c.posX / s, c.posY / s)
     end
   end
-  local count = math.max(1, math.min(12, c.count or 12))
+  local maxN = barMax(barKey)
+  local count = math.max(1, math.min(maxN, c.count or maxN))
   local rows = math.max(1, math.min(count, c.rows or 1))
   local gap = c.gap or 4              -- between adjacent buttons, along the bar's flow
   local gapCross = c.gapCross or gap  -- between rows (columns on a vertical bar); defaults to gap
   local horizontal = c.horizontal ~= false
   local stride = math.ceil(count / rows)
   local shown = {}
-  for i = 1, 12 do
+  for i = 1, maxN do
     local btn = _G[barKey .. i]
     local cont = btn and btn.container
     if cont then
@@ -215,6 +257,7 @@ end
 -- queues, and the watcher re-runs it the moment combat drops.
 function Layout:ApplyAll()
   if InCombatLockdown() then pending = true; return end
+  if editModeOpen() then return end   -- suspended while Edit Mode is open (re-applies on its exit)
   local on = layoutOn()
   for _, bar in ipairs(GB.BARS) do
     local key = bar.buttonPrefix
@@ -226,6 +269,7 @@ end
 -- Per-bar re-assert, used by the Blizzard-side post-hooks and Config setters.
 function Layout:Reassert(barKey)
   if releasing then return end
+  if editModeOpen() then return end   -- Blizzard's Edit-Mode churn fires our hooks; don't fight it (re-applies on exit)
   if not layoutOn() then
     if appliedBars[barKey] then
       if InCombatLockdown() then pending = true else releaseBar(barKey) end

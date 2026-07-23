@@ -6,10 +6,16 @@ package-as: GloomsBars
 
 enable-nolib-creation: no
 
-# No embedded libraries yet. When the config UI phase lands, add LibStub +
-# CallbackHandler + LibSharedMedia (and LibDataBroker/LibDBIcon if we ship a
-# minimap button) here, fetched into Libs/ at release build time — see the
-# GloomsAuras .pkgmeta for the exact external URLs.
+# Embedded libraries (minimap launcher). Fetched into Libs/ at release build
+# time only — NOT committed to the repo (gitignored). Locally, Libs/ is present
+# in the working copy; MinimapButton.lua also self-falls-back if absent. Same
+# model + URLs as GloomsAuras. (LibSharedMedia stays standalone-consumed for
+# now — embedding it is still the future hardening step.)
+externals:
+  Libs/LibStub: https://repos.wowace.com/wow/libstub/trunk
+  Libs/CallbackHandler-1.0: https://repos.wowace.com/wow/callbackhandler/trunk/CallbackHandler-1.0
+  Libs/LibDataBroker-1.1: https://github.com/tekkub/libdatabroker-1-1
+  Libs/LibDBIcon-1.0: https://repos.wowace.com/wow/libdbicon-1-0/trunk/LibDBIcon-1.0
 
 # Keep repo-management files out of the packaged addon zip.
 ignore:
