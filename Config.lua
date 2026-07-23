@@ -150,7 +150,21 @@ local function sliderRow(parent, yTop, labelText, minV, maxV, step, get, set, fm
     if step and step > 0 then v = minV + math.floor((v - minV) / step + 0.5) * step end
     self:SetValue(v)
   end
-  sl:SetScript("OnMouseDown", function(self) if self:IsEnabled() then self._seek = true; seek(self) end end)
+  -- A drag STARTING ON THE THUMB belongs to the native slider alone: with our
+  -- seek also writing every frame, the two quantize the cursor differently
+  -- near step boundaries and the value flickers between neighbours (Jason:
+  -- "blurs" — worst on wide ranges like Gap's 0–64). Off-thumb, seek owns it.
+  sl:SetScript("OnMouseDown", function(self)
+    if not self:IsEnabled() then return end
+    local left, w = self:GetLeft(), self:GetWidth()
+    if left and w and w > 0 then
+      local cx = GetCursorPosition() / self:GetEffectiveScale()
+      local mn, mx = self:GetMinMaxValues()
+      local tx = left + ((self:GetValue() - mn) / math.max(mx - mn, 1e-6)) * w
+      if math.abs(cx - tx) <= 8 then return end   -- on the thumb → native drag
+    end
+    self._seek = true; seek(self)
+  end)
   sl:SetScript("OnMouseUp", function(self) self._seek = false end)
   sl:SetScript("OnUpdate", function(self)
     if self._seek then
@@ -1493,7 +1507,21 @@ local function opacityCell(bf, xLeft, yTop, key, onChange)
     frac = math.max(0, math.min(1, frac))
     self:SetValue(math.floor(frac / 0.05 + 0.5) * 0.05)
   end
-  sl:SetScript("OnMouseDown", function(self) if self:IsEnabled() then self._seek = true; seek(self) end end)
+  -- A drag STARTING ON THE THUMB belongs to the native slider alone: with our
+  -- seek also writing every frame, the two quantize the cursor differently
+  -- near step boundaries and the value flickers between neighbours (Jason:
+  -- "blurs" — worst on wide ranges like Gap's 0–64). Off-thumb, seek owns it.
+  sl:SetScript("OnMouseDown", function(self)
+    if not self:IsEnabled() then return end
+    local left, w = self:GetLeft(), self:GetWidth()
+    if left and w and w > 0 then
+      local cx = GetCursorPosition() / self:GetEffectiveScale()
+      local mn, mx = self:GetMinMaxValues()
+      local tx = left + ((self:GetValue() - mn) / math.max(mx - mn, 1e-6)) * w
+      if math.abs(cx - tx) <= 8 then return end   -- on the thumb → native drag
+    end
+    self._seek = true; seek(self)
+  end)
   sl:SetScript("OnMouseUp", function(self) self._seek = false end)
   sl:SetScript("OnUpdate", function(self)
     if self._seek then
@@ -2614,10 +2642,61 @@ local function buildLayoutSection(bf, s)
     chips[#chips + 1] = { b = chip, k = bar.buttonPrefix }
   end
 
+  -- Visibility (Jason: "I don't use all 8 bars" + Edit Mode's conditional
+  -- modes): Default = Blizzard's rules; Always visible forces a bar Edit Mode
+  -- disabled to appear; In/Out of combat use a secure state driver (the only
+  -- legal way to flip a bar at combat edges); Hidden removes it.
+  local VIS_OPTS = {
+    { value = "default",  label = "Default" },
+    { value = "show",     label = "Always visible" },
+    { value = "combat",   label = "In combat" },
+    { value = "nocombat", label = "Out of combat" },
+    { value = "hide",     label = "Hidden" },
+  }
+  local function visValue() local c = data(); return (c and c.vis) or "default" end
+  local function visLabel()
+    local v = visValue()
+    for _, o in ipairs(VIS_OPTS) do if o.value == v then return o.label end end
+    return "Default"
+  end
+  local vlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); vlab:SetPoint("TOPLEFT", 18, -106); vlab:SetText("Visibility")
+  local visdd = animDropdown(bf, 150, visLabel,
+    function() return VIS_OPTS end,
+    visValue,
+    function(v)
+      local c = ensureBarLayout(selBar)
+      c.vis = (v ~= "default") and v or nil
+      apply(); s.refresh()
+    end)
+  visdd:SetPoint("TOPRIGHT", -18, -104)
+  attachTip(visdd, "Visibility", "Default follows Blizzard's rules (Edit Mode, mouseover, vehicles). Always visible shows the bar even if Edit Mode has it disabled. In/Out of combat show it only then. Hidden removes it. Game-driven hides always win.")
+
+  -- Empty buttons (Jason, borrowed from Edit Mode's Always Show Buttons):
+  -- Shown = Blizzard's rules + the skin's Empty-slots treatment; Hidden =
+  -- action-less buttons collapse entirely (their grid slot stays — a hole,
+  -- not a shuffle; drag a spell and they reappear as drop targets).
+  local elab = newText(bf, FONT.body, 12, TEXT, "LEFT"); elab:SetPoint("TOPLEFT", 18, -136); elab:SetText("Empty buttons")
+  local emBtns, emPrev = {}, nil
+  for i = 2, 1, -1 do
+    local ec = ({ { true, "Shown" }, { false, "Hidden" } })[i]
+    local b = flatButton(bf, 60, 22, COLOR.heroic, ec[2], 11)
+    if emPrev then b:SetPoint("TOPRIGHT", emPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -134) end
+    b:SetScript("OnClick", function()
+      local c = ensureBarLayout(selBar)
+      -- NOT `x and false or nil` — that idiom can never yield false (the
+      -- `or` eats it), which silently wrote Default here (Jason's bug).
+      if ec[1] then c.showEmpty = nil else c.showEmpty = false end
+      for _, e in ipairs(emBtns) do e.b:SetActive(e.v == ec[1]) end
+      apply()
+    end)
+    emBtns[#emBtns + 1] = { b = b, v = ec[1] }; emPrev = b
+  end
+  attachTip(emBtns[2].b, "Shown", "Empty slots render normally — Blizzard's rules plus the Empty slots section's treatment.")
+  attachTip(emBtns[1].b, "Hidden", "Buttons with no action disappear entirely. Their spot in the grid stays reserved, and they reappear while you drag a spell.")
+
   -- Copy another bar's whole layout onto this one (Jason: styling 8 bars one
-  -- by one is a chore — own one, tune it, copy it around). Copies EVERYTHING
-  -- including ownership, so copying an owned bar owns this one too.
-  local cplab = newText(bf, FONT.body, 12, TEXT, "LEFT"); cplab:SetPoint("TOPLEFT", 18, -104); cplab:SetText("Copy layout from")
+  -- by one is a chore — tune one, copy it around).
+  local cplab = newText(bf, FONT.body, 12, TEXT, "LEFT"); cplab:SetPoint("TOPLEFT", 18, -164); cplab:SetText("Copy layout from")
   local cpdd = animDropdown(bf, 150,
     function() return "Pick a bar…" end,
     function()
@@ -2637,32 +2716,32 @@ local function buildLayoutSection(bf, s)
       prof.barLayout[selBar] = GB.deepcopy(src)
       apply(); s.refresh()
     end)
-  cpdd:SetPoint("TOPRIGHT", -18, -102)
+  cpdd:SetPoint("TOPRIGHT", -18, -162)
   attachTip(cpdd, "Copy layout", "Copies the picked bar's layout settings — size, gaps, rows, buttons, orientation — onto the selected bar.")
 
-  local sizeRow = sliderRow(bf, -134, "Button size", 24, 64, 1,
+  local sizeRow = sliderRow(bf, -194, "Button size", 24, 64, 1,
     function() local c = data(); return (c and c.size) or 45 end,
     function(v) local c = ensureBarLayout(selBar); c.size = v; apply() end,
     function(v) return v .. "px" end)
-  local gapRow = sliderRow(bf, -178, "Gap", 0, 64, 1,
+  local gapRow = sliderRow(bf, -238, "Gap", -32, 64, 1,
     function() local c = data(); return (c and c.gap) or 4 end,
     function(v) local c = ensureBarLayout(selBar); c.gap = v; apply() end,
     function(v) return v .. "px" end)
-  local rowsRow = sliderRow(bf, -222, "Rows", 1, 6, 1,
+  local rowsRow = sliderRow(bf, -282, "Rows", 1, 6, 1,
     function() local c = data(); return (c and c.rows) or 1 end,
     function(v) local c = ensureBarLayout(selBar); c.rows = v; apply(); s.refresh() end,   -- refresh: Row gap shows at rows > 1
     function(v) return tostring(v) end)
-  local cntRow = sliderRow(bf, -266, "Buttons", 1, 12, 1,
+  local cntRow = sliderRow(bf, -326, "Buttons", 1, 12, 1,
     function() local c = data(); return (c and c.count) or 12 end,
     function(v) local c = ensureBarLayout(selBar); c.count = v; apply() end,
     function(v) return tostring(v) end)
 
-  local dlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); dlab:SetPoint("TOPLEFT", 18, -314); dlab:SetText("Orientation")
+  local dlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); dlab:SetPoint("TOPLEFT", 18, -374); dlab:SetText("Orientation")
   local orBtns, orPrev = {}, nil
   for i = 2, 1, -1 do
     local oc = ({ { true, "Horizontal" }, { false, "Vertical" } })[i]
     local b = flatButton(bf, 80, 22, COLOR.heroic, oc[2], 11)
-    if orPrev then b:SetPoint("TOPRIGHT", orPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -312) end
+    if orPrev then b:SetPoint("TOPRIGHT", orPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -372) end
     b:SetScript("OnClick", function()
       local c = ensureBarLayout(selBar); c.horizontal = oc[1]
       for _, e in ipairs(orBtns) do e.b:SetActive(e.h == c.horizontal) end; apply()
@@ -2673,13 +2752,13 @@ local function buildLayoutSection(bf, s)
   -- Cross-axis gap — between rows (columns on a vertical bar). Only shown when
   -- the bar folds into more than one row (Jason's rule); defaults to Gap. Sits
   -- ABOVE Orientation (Jason), which slides down to make room when it shows.
-  local rgRow = sliderRow(bf, -310, "Row gap", 0, 64, 1,
+  local rgRow = sliderRow(bf, -370, "Row gap", -32, 64, 1,
     function() local c = data(); return (c and (c.gapCross or c.gap)) or 4 end,
     function(v) local c = ensureBarLayout(selBar); c.gapCross = v; apply() end,
     function(v) return v .. "px" end)
 
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
-  hint:SetPoint("TOPLEFT", 18, -346); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetPoint("TOPLEFT", 18, -406); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
   hint:SetText("Button size scales the WHOLE button proportionally — icon, text, glows — like Edit Mode's size setting. How the icon sits within its button stays a style choice (the Shape & icon section's Size, saved in the preset). Changes made in combat apply the moment combat ends.")
 
   selectBar = function(k)
@@ -2688,7 +2767,7 @@ local function buildLayoutSection(bf, s)
     s.refresh()
   end
 
-  bf:SetHeight(390)
+  bf:SetHeight(450)
   s.refresh = function()
     for _, c in ipairs(chips) do c.b:SetActive(c.k == selBar) end
     local on = layoutOn()
@@ -2697,18 +2776,21 @@ local function buildLayoutSection(bf, s)
     local c = data()
     local hz = not c or c.horizontal ~= false
     for _, e in ipairs(orBtns) do e.b:SetActive(on and e.h == hz); e.b:SetEnabled(on) end
+    visdd:refresh(); visdd:SetEnabled(on)
+    local se = not (c and c.showEmpty == false)   -- nil/true = Shown
+    for _, e in ipairs(emBtns) do e.b:SetActive(on and e.v == se); e.b:SetEnabled(on) end
     -- Row gap: visible only when the bar folds into >1 row. It lives above
     -- Orientation, so Orientation + the hint slide down when it shows (only
     -- the row's ANCHOR button moves — the second is chained to it).
     local multiRow = (c and (c.rows or 1) or 1) > 1
     rgRow:SetShown(multiRow); rgRow:setEnabled(on)
-    local yOr = multiRow and -356 or -312
+    local yOr = multiRow and -416 or -372
     dlab:ClearAllPoints(); dlab:SetPoint("TOPLEFT", 18, yOr - 2)
     orBtns[1].b:ClearAllPoints(); orBtns[1].b:SetPoint("TOPRIGHT", -18, yOr)
     hint:ClearAllPoints()
-    hint:SetPoint("TOPLEFT", 18, multiRow and -390 or -346)
+    hint:SetPoint("TOPLEFT", 18, multiRow and -450 or -406)
     hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0)
-    bf:SetHeight(multiRow and 434 or 390)
+    bf:SetHeight(multiRow and 494 or 450)
     relayout()
   end
 end

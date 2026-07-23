@@ -29,11 +29,29 @@ GB.Layout = Layout
 
 local appliedBars = {}   -- [barKey] = true — bars whose containers we've re-laid (need Release when un-owned)
 local pending = false    -- a combat-blocked apply; flushed when combat drops
+local gridVisible = false   -- an action is on the cursor (SHOWGRID) — empty-button collapse suspends
+
+-- Coalesce bursty triggers (a page flip fires ACTIONBAR_SLOT_CHANGED per slot)
+-- into ONE ApplyAll next frame.
+local applyQueued = false
+local function queueApply()
+  if applyQueued then return end
+  applyQueued = true
+  C_Timer.After(0, function() applyQueued = false; Layout:ApplyAll() end)
+end
 
 local watcher = CreateFrame("Frame")
 watcher:RegisterEvent("PLAYER_REGEN_ENABLED")
-watcher:SetScript("OnEvent", function()
-  if pending then pending = false; Layout:ApplyAll() end
+watcher:RegisterEvent("ACTIONBAR_SHOWGRID")
+watcher:RegisterEvent("ACTIONBAR_HIDEGRID")
+watcher:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+watcher:SetScript("OnEvent", function(_, event)
+  if event == "PLAYER_REGEN_ENABLED" then
+    if pending then pending = false; Layout:ApplyAll() end
+  elseif event == "ACTIONBAR_SHOWGRID" then gridVisible = true; queueApply()
+  elseif event == "ACTIONBAR_HIDEGRID" then gridVisible = false; queueApply()
+  elseif event == "ACTIONBAR_SLOT_CHANGED" then queueApply()   -- empty-collapse tracks slot contents
+  end
 end)
 
 local function conf(barKey)
@@ -64,6 +82,37 @@ local function applyBar(barKey)
   local c = conf(barKey) or {}   -- an unconfigured bar lays out with the defaults
   local barFrame = barFrameFor(barKey)
   if not barFrame then return end
+  -- Visibility override (c.vis): "show" forces a bar Edit Mode has disabled
+  -- to appear, "hide" removes one, "combat"/"nocombat" show it only in/out of
+  -- combat, nil leaves Blizzard's rules alone. Game-driven external hides
+  -- (vehicles etc. — isShownExternal) always win on the show path.
+  -- ★ Combat-conditional modes use RegisterStateDriver — the sanctioned
+  -- secure API (nothing insecure may touch the bar once combat starts; the
+  -- driver flips it inside the secure system at combat edges).
+  -- ★ Static modes use the BASE (raw) show/hide: these bars OVERRIDE
+  -- SetShown/Show/Hide to track external visibility — hiding through them
+  -- poisoned isShownExternal, which then blocked our own show path (Jason's
+  -- "can't show it again" bug). ShowBase/HideBase are what Blizzard's own
+  -- UpdateVisibility uses.
+  local vis = c.vis
+  if vis == "combat" or vis == "nocombat" then
+    if barFrame.gbVisDriver ~= vis then
+      RegisterStateDriver(barFrame, "visibility",
+        vis == "combat" and "[combat] show; hide" or "[nocombat] show; hide")
+      barFrame.gbVisDriver = vis
+    end
+  else
+    if barFrame.gbVisDriver then
+      UnregisterStateDriver(barFrame, "visibility")
+      barFrame.gbVisDriver = nil
+      if barFrame.UpdateVisibility then pcall(barFrame.UpdateVisibility, barFrame) end
+    end
+    if vis == "hide" then
+      if barFrame:IsShown() then (barFrame.HideBase or barFrame.Hide)(barFrame) end
+    elseif vis == "show" and barFrame.isShownExternal ~= false then
+      if not barFrame:IsShown() then (barFrame.ShowBase or barFrame.Show)(barFrame) end
+    end
+  end
   local count = math.max(1, math.min(12, c.count or 12))
   local rows = math.max(1, math.min(count, c.rows or 1))
   local gap = c.gap or 4              -- between adjacent buttons, along the bar's flow
@@ -75,18 +124,33 @@ local function applyBar(barKey)
     local btn = _G[barKey .. i]
     local cont = btn and btn.container
     if cont then
-      local show = i <= count
+      local inGrid = i <= count
+      local show = inGrid
+      -- Empty-button collapse (c.showEmpty == false, Jason: "or does it just
+      -- disappear entirely"): react to the rendered icon — Blizzard Hide()s
+      -- it when the slot has no action (the skin's empty-slot signal, no API
+      -- read). Suspended while the pickup grid is out (drop targets stay).
+      if show and c.showEmpty == false and not gridVisible then
+        local ic = btn.icon or btn.Icon
+        if not (ic and ic:IsShown()) then show = false end
+      end
       cont:SetShown(show)
       local native = cont:GetWidth()   -- unscaled (SetScale never changes it)
       local scale = (c.size and native > 0) and (c.size / native) or 1
       cont:SetScale(scale)
-      if show then shown[#shown + 1] = { cont = cont, scale = scale, px = native * scale } end
+      -- A collapsed empty KEEPS its grid slot (a hole, not a shuffle) so the
+      -- other buttons never move as slots fill and empty.
+      if inGrid then shown[#shown + 1] = { cont = cont, scale = scale, px = native * scale } end
     end
   end
   for idx, e in ipairs(shown) do
     local major = math.floor((idx - 1) / stride)   -- row (horizontal) / column (vertical)
     local minor = (idx - 1) % stride
-    local stepMain, stepCross = e.px + gap, e.px + gapCross
+    -- Gaps may be NEGATIVE (Jason: hex/circle silhouettes don't fill their
+    -- square rects — overlap the frames so the shapes nestle). Clamp the step
+    -- so extreme size+overlap combos can never stack buttons on one spot.
+    local stepMain = math.max(e.px + gap, 4)
+    local stepCross = math.max(e.px + gapCross, 4)
     local xBar, yBar
     if horizontal then xBar, yBar = minor * stepMain, -major * stepCross
     else xBar, yBar = major * stepCross, -minor * stepMain end
@@ -118,9 +182,14 @@ local function releaseBar(barKey)
     local btn = _G[barKey .. i]
     if btn and btn.container then btn.container:SetScale(1) end
   end
+  if barFrame.gbVisDriver then   -- drop any combat-visibility driver
+    UnregisterStateDriver(barFrame, "visibility")
+    barFrame.gbVisDriver = nil
+  end
   barFrame.oldGridSettings = nil   -- invalidate ShouldUpdateGrid's cache
   if barFrame.UpdateShownButtons then pcall(barFrame.UpdateShownButtons, barFrame) end
   if barFrame.UpdateGridLayout then pcall(barFrame.UpdateGridLayout, barFrame) end
+  if barFrame.UpdateVisibility then pcall(barFrame.UpdateVisibility, barFrame) end   -- undo any vis override
   if barFrame.Layout then pcall(barFrame.Layout, barFrame) end
   releasing = false
 end
@@ -165,6 +234,9 @@ function Layout:Init()
       end
       if bf.UpdateShownButtons then
         hooksecurefunc(bf, "UpdateShownButtons", function() Layout:Reassert(key) end)
+      end
+      if bf.UpdateVisibility then
+        hooksecurefunc(bf, "UpdateVisibility", function() Layout:Reassert(key) end)
       end
     end
   end
