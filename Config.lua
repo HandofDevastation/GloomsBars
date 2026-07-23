@@ -665,6 +665,104 @@ local function attachTip(f, title, body)
   f:HookScript("OnLeave", function() if tipFrame then tipFrame:Hide() end end)
 end
 
+-- ---------------------------------------------------------------------------
+-- Quick keybind launcher (phase L4) — opens Blizzard's quick-bind flow (their
+-- BINDING logic untouched), reskinned to the family language on first open.
+-- Shared by the Bar-layout section button and the footer button. Every styled
+-- region is guarded: if a patch renames a piece it keeps its stock look.
+local qkFromUs = false
+local function flatifyBlizzButton(b)
+  if not b or b.gbStyled then return end
+  b.gbStyled = true
+  for _, k in ipairs({ "Left", "Right", "Middle", "Center" }) do
+    local tex = b[k]
+    if tex and tex.SetAlpha then tex:SetAlpha(0) end
+  end
+  for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetDisabledTexture" }) do
+    local tex = b[get] and b[get](b)
+    if tex then tex:SetAlpha(0) end
+  end
+  local fill = b:CreateTexture(nil, "BACKGROUND")
+  fill:SetAllPoints()
+  fill:SetColorTexture(COLOR.heroic.r, COLOR.heroic.g, COLOR.heroic.b, 1)
+  fill:SetAlpha(0.5)
+  b:HookScript("OnEnter", function() fill:SetAlpha(0.8) end)
+  b:HookScript("OnLeave", function() fill:SetAlpha(0.5) end)
+  local fs = b.GetFontString and b:GetFontString()
+  if fs then setFont(fs, FONT.bodyM, 12); fs:SetTextColor(1, 1, 1) end
+end
+local function styleQuickKeybind()
+  local f = QuickKeybindFrame
+  if not f or f.gbStyled then return end
+  f.gbStyled = true
+  if f.BG then f.BG:SetAlpha(0) end         -- their dialog border + fill
+  skinPlate(f)
+  addEdges(f, COLOR.rim, 1)
+  if f.Header then
+    f.Header:SetAlpha(0)                    -- their gold header art (text included)
+    local title = f:CreateFontString(nil, "OVERLAY")
+    setFont(title, FONT.title, 18)
+    title:SetTextColor(COLOR.purple.r, COLOR.purple.g, COLOR.purple.b)
+    title:SetPoint("TOP", 0, -14)
+    title:SetText((f.Header.Text and f.Header.Text:GetText()) or "Quick Keybind Mode")
+  end
+  for _, key in ipairs({ "InstructionText", "CancelDescriptionText", "OutputText" }) do
+    local fs = f[key]
+    if fs and fs.SetFont then setFont(fs, FONT.body, 13) end   -- faces only; OutputText's colour is Blizzard's live status
+  end
+  flatifyBlizzButton(f.OkayButton)
+  flatifyBlizzButton(f.CancelButton)
+  flatifyBlizzButton(f.DefaultsButton)
+  -- Character-specific checkbox: GloomsAuras's flatCheck look (20px box, 10%
+  -- white fill, orange checkmark — same asset, copied to GB media), applied
+  -- over Blizzard's CheckButton so its bindings mechanics stay theirs.
+  local cb = f.UseCharacterBindingsButton
+  if cb then
+    for _, get in ipairs({ "GetNormalTexture", "GetPushedTexture", "GetHighlightTexture", "GetCheckedTexture", "GetDisabledCheckedTexture" }) do
+      local tex = cb[get] and cb[get](cb)
+      if tex then tex:SetAlpha(0) end
+    end
+    local box = cb:CreateTexture(nil, "ARTWORK")
+    box:SetSize(20, 20); box:SetPoint("CENTER")
+    box:SetColorTexture(1, 1, 1, 0.10)
+    local mark = cb:CreateTexture(nil, "OVERLAY")
+    mark:SetSize(20, 20); mark:SetPoint("CENTER")
+    mark:SetTexture(GB.MEDIA .. "ui\\checkmark.png")
+    mark:SetVertexColor(COLOR.orange.r, COLOR.orange.g, COLOR.orange.b, 1)
+    local function sync() mark:SetShown(cb:GetChecked()) end
+    cb:HookScript("OnClick", sync)
+    cb:HookScript("OnShow", sync)
+    sync()
+    local cbText = cb.Text or cb.text
+    if cbText and cbText.SetFont then setFont(cbText, FONT.body, 12) end
+  end
+end
+local function openQuickKeybind()
+  if InCombatLockdown() then GB.msg("quick keybind needs you out of combat."); return end
+  if GB.Layout and GB.Layout.MoveModeOn and GB.Layout:MoveModeOn() then GB.Layout:SetMoveMode(false) end
+  if panel then panel:Hide() end
+  local f = QuickKeybindFrame
+  if not f then GB.msg("Quick keybind isn't available in this client."); return end
+  if not f.gbHideHooked then
+    f.gbHideHooked = true
+    f:HookScript("OnHide", function()
+      if not qkFromUs then return end
+      qkFromUs = false
+      -- Blizzard's OnHide reopens the SETTINGS panel (their flow assumes you
+      -- came from it — Jason: "make that not happen"): close it again in the
+      -- same frame, before it ever renders. Launches from Settings itself
+      -- (qkFromUs false) keep Blizzard's return-trip behaviour.
+      if SettingsPanel then
+        if SettingsPanel.Close then pcall(SettingsPanel.Close, SettingsPanel, true)
+        else HideUIPanel(SettingsPanel) end
+      end
+    end)
+  end
+  qkFromUs = true
+  f:Show()
+  styleQuickKeybind()
+end
+
 -- Placeholder body for sections not yet wired (increment 1).
 local function stubBody(bf)
   local t = newText(bf, FONT.body, 11, MUTE, "LEFT")
@@ -2765,6 +2863,14 @@ local function buildLayoutSection(bf, s)
     if GB.Layout then GB.Layout:SetMoveMode(not GB.Layout:MoveModeOn()) end
   end)
   attachTip(mvBtn, "Move bars", "Drag any bar's overlay to reposition it. Click an overlay to select it, then nudge with the arrow keys — hold Shift for 10px steps. ESC or this button exits. Out of combat only.")
+  -- Quick keybind (phase L4, the last layout-scope item): launches Blizzard's
+  -- own quick-bind flow — hover a button, press a key. Same entry the
+  -- Settings panel uses (close the open panel, then Show). Not gated on the
+  -- master switch: keybinding isn't layout.
+  local qkBtn = flatButton(bf, 110, 22, COLOR.heroic, "Quick keybind", 11)
+  qkBtn:SetPoint("LEFT", mvBtn, "RIGHT", 8, 0)
+  qkBtn:SetScript("OnClick", openQuickKeybind)
+  attachTip(qkBtn, "Quick keybind", "Opens Blizzard's Quick Keybind mode: hover any action button and press a key to bind it, ESC when done. Out of combat only.")
   local rsBtn = flatButton(bf, 130, 22, COLOR.heroic, "Reset position", 11)
   rsBtn:SetPoint("TOPRIGHT", -18, -436)
   rsBtn:SetScript("OnClick", function() if GB.Layout then GB.Layout:ResetPosition(selBar) end end)
@@ -3036,8 +3142,33 @@ local function BuildPanel()
   local enLbl = newText(panel, FONT.body, 12.5, TEXT, "LEFT"); enLbl:SetPoint("LEFT", enTog, "RIGHT", 10, 0)
   enLbl:SetText("Enable Gloom's Bars")
   panel._enableToggle = enTog
-  local prof = flatButton(panel, 118, 24, COLOR.heroic, "Profile: Default", 11); prof:SetBase(0.2)
+  -- Footer profile switcher (was an unwired increment-1 stub — Jason): shows
+  -- the ACTIVE profile, click = the profile list (same flyout as the
+  -- dropdowns), pick = switch. Label inset so long "Name - Realm" names
+  -- truncate instead of overflowing.
+  local prof = flatButton(panel, 170, 24, COLOR.heroic, "", 11); prof:SetBase(0.2)
   prof:SetPoint("BOTTOMRIGHT", -14, 14)
+  prof.text:SetWordWrap(false)
+  prof.text:ClearAllPoints(); prof.text:SetPoint("LEFT", 8, 0); prof.text:SetPoint("RIGHT", -8, 0); prof.text:SetJustifyH("CENTER")
+  function prof:refresh() self:SetText("Profile: " .. (GB:ActiveProfileName() or "?")) end
+  prof:SetScript("OnClick", function()
+    local o = {}
+    for name in pairs((GB.db and GB.db.profiles) or {}) do o[#o + 1] = { value = name, label = name } end
+    table.sort(o, function(a, b) return a.label < b.label end)
+    openAnimFlyout(prof, o, GB:ActiveProfileName(), function(v)
+      GB:SetActiveProfile(v)   -- LoadPreset → RefreshAll → C:Refresh (label included)
+      prof:refresh()
+    end)
+  end)
+  attachTip(prof, "Profile", "The active profile for this character. Click to switch profiles; managing them (new, copy, rename, delete) lives in the Profiles section.")
+  panel._profileBtn = prof
+  prof:refresh()
+
+  -- Footer quick-keybind (Jason: reachable without digging into Bar layout).
+  local fqk = flatButton(panel, 110, 24, COLOR.heroic, "Quick keybind", 11); fqk:SetBase(0.2)
+  fqk:SetPoint("RIGHT", prof, "LEFT", -8, 0)
+  fqk:SetScript("OnClick", openQuickKeybind)
+  attachTip(fqk, "Quick keybind", "Opens Blizzard's Quick Keybind mode: hover any action button and press a key to bind it, ESC when done. Out of combat only.")
 
   -- Left preview pane + vertical divider
   buildPreviewPane(panel)
@@ -3091,6 +3222,7 @@ end
 function C:Refresh()
   if not panel then return end
   if panel._enableToggle then panel._enableToggle:refresh() end
+  if panel._profileBtn then panel._profileBtn:refresh() end
   for _, s in ipairs(sections) do if s.refresh then s.refresh() end end
   C:RefreshPreview()
   C:SetPreviewState(previewState)
