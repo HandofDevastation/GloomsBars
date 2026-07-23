@@ -7,10 +7,11 @@
 ## X-Website: https://github.com/HandofDevastation/GloomsBars
 
 # Load order: Core (namespace + saved vars + /gb router) first, then the skin
-# engine, the shaped proc glows, the per-trigger animation system, then the
-# style-editor Config UI.
+# engine, the shaped proc glows, the per-trigger animation system, the
+# bar-layout engine, then the style-editor Config UI.
 Core.lua
 Skin.lua
 Glows.lua
 Anims.lua
+Layout.lua
 Config.lua

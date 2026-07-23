@@ -430,6 +430,7 @@ function GB:RefreshAll()
       if A and A.Invalidate then A:Invalidate(k) end
     end
   end
+  if GB.Layout then GB.Layout:ApplyAll() end   -- bar layouts follow the profile
   local C = GB.Config
   if C then
     if C.Refresh then C:Refresh() end
@@ -694,6 +695,9 @@ loader:SetScript("OnEvent", function(_, event, arg1)
     end
     PreloadFonts()
     RegisterMedia()
+    -- Bar layout (phase L1): hook the bars' grid updates + apply any owned
+    -- bars' layouts (all buttons exist by PLAYER_LOGIN).
+    if GB.Layout then GB.Layout:Init(); GB.Layout:ApplyAll() end
   end
 end)
 

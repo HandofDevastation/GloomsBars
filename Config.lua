@@ -2566,6 +2566,153 @@ local function buildProfilesSection(bf, s)
   s.refresh = function() pdd:refresh(); sdd:refresh() end
 end
 
+-- Bar layout (phase L1+L2) — Gloom's Bars owns bar geometry PER BAR, opt-in;
+-- Edit Mode keeps any bar left off. Engine: Layout.lua (containers only —
+-- never the secure buttons; out-of-combat with a combat queue). Settings live
+-- per bar in the PROFILE (barLayout[barKey]), beside the preset assignments.
+local function barLayoutData(barKey)
+  local prof = GB:ActiveProfile(); local t = prof and prof.barLayout; return t and t[barKey]
+end
+local function ensureBarLayout(barKey)
+  local prof = GB:ActiveProfile(); if not prof then return nil end
+  prof.barLayout = prof.barLayout or {}
+  prof.barLayout[barKey] = prof.barLayout[barKey] or
+    { size = 45, gap = 4, rows = 1, horizontal = true, count = 12 }
+  return prof.barLayout[barKey]
+end
+local function layoutOn() local prof = GB:ActiveProfile(); return (prof and prof.layoutEnabled) or false end
+
+local function buildLayoutSection(bf, s)
+  local selBar = GB.BARS[1].buttonPrefix
+  local chips = {}
+  local selectBar   -- fwd-declared
+
+  local function data() return barLayoutData(selBar) end
+  local function apply() if GB.Layout then GB.Layout:Reassert(selBar) end end
+
+  -- THE master switch (Jason: all-or-nothing — when on, this addon arranges
+  -- ALL the bars with the per-bar settings below; when off, Edit Mode does).
+  local olab = newText(bf, FONT.body, 12, TEXT, "LEFT"); olab:SetPoint("TOPLEFT", 18, -14); olab:SetText("Gloom's Bars layout")
+  local own = makeToggle(bf, layoutOn,
+    function(v)
+      local prof = GB:ActiveProfile(); if prof then prof.layoutEnabled = v and true or false end
+      if GB.Layout then GB.Layout:ApplyAll() end
+      s.refresh()
+    end)
+  own:SetPoint("TOPRIGHT", -18, -12)
+  attachTip(own, "Gloom's Bars layout", "On: this addon arranges ALL the bars, each with its settings below. Off: Edit Mode arranges everything, exactly as normal.")
+
+  -- Bar chips (2×4), pinging the real bar on hover (same QoL as Apply to bars).
+  for i, bar in ipairs(GB.BARS) do
+    local col, row = (i - 1) % 4, math.floor((i - 1) / 4)
+    local chip = flatButton(bf, 82, 22, COLOR.heroic, "Bar " .. i, 11); chip:SetBase(0.2)
+    chip:SetPoint("TOPLEFT", 18 + col * 88, -44 - row * 26)
+    chip:SetScript("OnClick", function() selectBar(bar.buttonPrefix) end)
+    chip:HookScript("OnEnter", function() if GB.Skin and GB.Skin.PingBar then GB.Skin:PingBar(bar.buttonPrefix, true) end end)
+    chip:HookScript("OnLeave", function() if GB.Skin and GB.Skin.PingBar then GB.Skin:PingBar(bar.buttonPrefix, false) end end)
+    attachTip(chip, bar.label, "Select this bar to edit its layout settings. Hovering pulses it on screen.")
+    chips[#chips + 1] = { b = chip, k = bar.buttonPrefix }
+  end
+
+  -- Copy another bar's whole layout onto this one (Jason: styling 8 bars one
+  -- by one is a chore — own one, tune it, copy it around). Copies EVERYTHING
+  -- including ownership, so copying an owned bar owns this one too.
+  local cplab = newText(bf, FONT.body, 12, TEXT, "LEFT"); cplab:SetPoint("TOPLEFT", 18, -104); cplab:SetText("Copy layout from")
+  local cpdd = animDropdown(bf, 150,
+    function() return "Pick a bar…" end,
+    function()
+      local o = {}
+      for i, bar in ipairs(GB.BARS) do
+        if bar.buttonPrefix ~= selBar then o[#o + 1] = { value = bar.buttonPrefix, label = "Bar " .. i .. "  (" .. bar.label .. ")" } end
+      end
+      return o
+    end,
+    function() return nil end,
+    function(v)
+      local src = barLayoutData(v)
+      if not src then return end
+      local prof = GB:ActiveProfile()
+      if not prof then return end
+      prof.barLayout = prof.barLayout or {}
+      prof.barLayout[selBar] = GB.deepcopy(src)
+      apply(); s.refresh()
+    end)
+  cpdd:SetPoint("TOPRIGHT", -18, -102)
+  attachTip(cpdd, "Copy layout", "Copies the picked bar's layout settings — size, gaps, rows, buttons, orientation — onto the selected bar.")
+
+  local sizeRow = sliderRow(bf, -134, "Button size", 24, 64, 1,
+    function() local c = data(); return (c and c.size) or 45 end,
+    function(v) local c = ensureBarLayout(selBar); c.size = v; apply() end,
+    function(v) return v .. "px" end)
+  local gapRow = sliderRow(bf, -178, "Gap", 0, 64, 1,
+    function() local c = data(); return (c and c.gap) or 4 end,
+    function(v) local c = ensureBarLayout(selBar); c.gap = v; apply() end,
+    function(v) return v .. "px" end)
+  local rowsRow = sliderRow(bf, -222, "Rows", 1, 6, 1,
+    function() local c = data(); return (c and c.rows) or 1 end,
+    function(v) local c = ensureBarLayout(selBar); c.rows = v; apply(); s.refresh() end,   -- refresh: Row gap shows at rows > 1
+    function(v) return tostring(v) end)
+  local cntRow = sliderRow(bf, -266, "Buttons", 1, 12, 1,
+    function() local c = data(); return (c and c.count) or 12 end,
+    function(v) local c = ensureBarLayout(selBar); c.count = v; apply() end,
+    function(v) return tostring(v) end)
+
+  local dlab = newText(bf, FONT.body, 12, TEXT, "LEFT"); dlab:SetPoint("TOPLEFT", 18, -314); dlab:SetText("Orientation")
+  local orBtns, orPrev = {}, nil
+  for i = 2, 1, -1 do
+    local oc = ({ { true, "Horizontal" }, { false, "Vertical" } })[i]
+    local b = flatButton(bf, 80, 22, COLOR.heroic, oc[2], 11)
+    if orPrev then b:SetPoint("TOPRIGHT", orPrev, "TOPLEFT", -4, 0) else b:SetPoint("TOPRIGHT", -18, -312) end
+    b:SetScript("OnClick", function()
+      local c = ensureBarLayout(selBar); c.horizontal = oc[1]
+      for _, e in ipairs(orBtns) do e.b:SetActive(e.h == c.horizontal) end; apply()
+    end)
+    orBtns[#orBtns + 1] = { b = b, h = oc[1] }; orPrev = b
+  end
+
+  -- Cross-axis gap — between rows (columns on a vertical bar). Only shown when
+  -- the bar folds into more than one row (Jason's rule); defaults to Gap. Sits
+  -- ABOVE Orientation (Jason), which slides down to make room when it shows.
+  local rgRow = sliderRow(bf, -310, "Row gap", 0, 64, 1,
+    function() local c = data(); return (c and (c.gapCross or c.gap)) or 4 end,
+    function(v) local c = ensureBarLayout(selBar); c.gapCross = v; apply() end,
+    function(v) return v .. "px" end)
+
+  local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
+  hint:SetPoint("TOPLEFT", 18, -346); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
+  hint:SetText("Button size scales the WHOLE button proportionally — icon, text, glows — like Edit Mode's size setting. How the icon sits within its button stays a style choice (the Shape & icon section's Size, saved in the preset). Changes made in combat apply the moment combat ends.")
+
+  selectBar = function(k)
+    selBar = k
+    for _, c in ipairs(chips) do c.b:SetActive(c.k == k) end
+    s.refresh()
+  end
+
+  bf:SetHeight(390)
+  s.refresh = function()
+    for _, c in ipairs(chips) do c.b:SetActive(c.k == selBar) end
+    local on = layoutOn()
+    own:refresh(); sizeRow:refresh(); gapRow:refresh(); rowsRow:refresh(); cntRow:refresh(); rgRow:refresh()
+    sizeRow:setEnabled(on); gapRow:setEnabled(on); rowsRow:setEnabled(on); cntRow:setEnabled(on)
+    local c = data()
+    local hz = not c or c.horizontal ~= false
+    for _, e in ipairs(orBtns) do e.b:SetActive(on and e.h == hz); e.b:SetEnabled(on) end
+    -- Row gap: visible only when the bar folds into >1 row. It lives above
+    -- Orientation, so Orientation + the hint slide down when it shows (only
+    -- the row's ANCHOR button moves — the second is chained to it).
+    local multiRow = (c and (c.rows or 1) or 1) > 1
+    rgRow:SetShown(multiRow); rgRow:setEnabled(on)
+    local yOr = multiRow and -356 or -312
+    dlab:ClearAllPoints(); dlab:SetPoint("TOPLEFT", 18, yOr - 2)
+    orBtns[1].b:ClearAllPoints(); orBtns[1].b:SetPoint("TOPRIGHT", -18, yOr)
+    hint:ClearAllPoints()
+    hint:SetPoint("TOPLEFT", 18, multiRow and -390 or -346)
+    hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0)
+    bf:SetHeight(multiRow and 434 or 390)
+    relayout()
+  end
+end
+
 -- Apply to bars — the per-bar preset assignment grid (Jason's architecture:
 -- mix and match presets across bars). One row per Edit-Mode bar: label +
 -- preset dropdown. Assigning the preset being edited = that bar renders your
@@ -2828,7 +2975,7 @@ local function BuildPanel()
   makeSection("Cast & channel", buildCastSection)
   makeSection("Cooldown & availability", buildCooldownSection)
   makeSection("Empty slots", buildEmptySection)
-  makeSection("Bar layout", stubBody)
+  makeSection("Bar layout", buildLayoutSection)
   makeSection("Apply to bars", buildApplySection)
 
   -- All sections start CLOSED (Jason 2026-07-20 — easier to find the one you want
