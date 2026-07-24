@@ -975,6 +975,30 @@ local function ApplyHotkeyOverride(btn)
   applyTextShadow(hk, conf.shadow, false)   -- BEFORE SetFont (font-object priming)
   hk:SetFont(resolveFont(conf.font), hkSize, conf.flags or "OUTLINE")
   if conf.color then hk:SetTextColor(unpack(conf.color)) end
+  -- ★ Pet keybind colour re-assert. Blizzard's ActionButton_UpdateRangeIndicator
+  -- (fired CONTINUOUSLY by PetActionBarMixin:OnUpdate's rangeTimer, ~5/s) recolours
+  -- the HotKey via hk:SetVertexColor(ACTIONBAR_HOTKEY_FONT_COLOR = 0.8 grey when in
+  -- range / RED when out) — SetVertexColor TINTS a FontString, overriding our
+  -- SetTextColor, so pet keybinds flickered orange→grey every frame (Jason). Pet
+  -- has no UpdateHotkeys self-heal hook. Re-assert our colour in a SetVertexColor
+  -- post-hook (the equipped-border pattern), but LEAVE Blizzard's out-of-range RED
+  -- alone so range feedback survives. gbReasserting guards our own write.
+  if conf.color and not hk.gbVertexHooked then
+    hk.gbVertexHooked = true
+    hooksecurefunc(hk, "SetVertexColor", function(self, r, g, b)
+      if not Skin.enabled or self.gbReasserting then return end
+      local rc = records[btn]
+      if not (rc and rc.hkOverridden) then return end
+      local hc = (style().hotkey or {}).color
+      if not hc then return end
+      -- Skip the out-of-range RED (let Blizzard's range warning show through).
+      local red = RED_FONT_COLOR and { RED_FONT_COLOR:GetRGB() }
+      if red and math.abs(r - red[1]) < 0.05 and math.abs(g - red[2]) < 0.05 and math.abs(b - red[3]) < 0.05 then return end
+      self.gbReasserting = true
+      self:SetVertexColor(hc[1], hc[2], hc[3], hc[4] or 1)   -- re-apply OUR colour over Blizzard's grey
+      self.gbReasserting = nil
+    end)
+  end
   -- ★ Pet/stance with NO bound key put the RANGE_INDICATOR ("●") in HotKey and
   -- Hide() it (PetActionButtonMixin:SetHotkeys). Re-styling re-showed that bullet
   -- as Jason's stray "dot". It's a placeholder, never a real bind → keep it hidden.
@@ -2580,6 +2604,7 @@ local function hookExtras()
   extraWatcher:RegisterEvent("PLAYER_CONTROL_GAINED")
   extraWatcher:RegisterEvent("UPDATE_SHAPESHIFT_FORM")
   extraWatcher:RegisterEvent("UPDATE_SHAPESHIFT_FORMS")
+  extraWatcher:RegisterEvent("UPDATE_BINDINGS")   -- re-skin (installs the colour hook) when a pet keybind is (re)assigned
 end
 
 -- ---------------------------------------------------------------------------
