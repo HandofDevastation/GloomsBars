@@ -75,10 +75,14 @@ end
 
 -- Flat, alpha-driven button. Opacity is the only state: _base (50%) vs active
 -- (100%); hover brightens. Colour stays fully opaque.
+-- ★ Consistent button state colour (Jason): PURPLE when off/unselected, ORANGE
+-- when on/selected — for EVERY flatButton. The off colour is the button's own
+-- creation colour (all are purple-family: heroic/purple); active repaints ORANGE.
 local function flatButton(parent, w, h, cc, label, size)
   local b = CreateFrame("Button", nil, parent)
   b:SetSize(w, h)
   b._base, b._active = 0.5, false
+  b._offColor = cc                       -- restored when inactive
   b.fill = b:CreateTexture(nil, "BACKGROUND")
   b.fill:SetAllPoints(); b.fill:SetColorTexture(cc.r, cc.g, cc.b, 1); b.fill:SetAlpha(b._base)
   b.text = newText(b, FONT.bodyM, size or 12, { r = 1, g = 1, b = 1 }, "CENTER")
@@ -86,12 +90,16 @@ local function flatButton(parent, w, h, cc, label, size)
   b:SetFontString(b.text)
   if label then b.text:SetText(label) end
   local function level() return b._active and 1 or b._base end
+  local function paint()   -- fill colour follows state: orange active, off-colour otherwise
+    local c = b._active and COLOR.orange or b._offColor
+    b.fill:SetColorTexture(c.r, c.g, c.b, 1); b.fill:SetAlpha(level())
+  end
   b:SetScript("OnEnter", function(self) if self:IsEnabled() and not self._active then self.fill:SetAlpha(math.min(1, self._base + 0.25)) end end)
-  b:SetScript("OnLeave", function(self) self.fill:SetAlpha(level()) end)
+  b:SetScript("OnLeave", function(self) paint() end)
   b:SetScript("OnDisable", function(self) self.fill:SetAlpha(0.2); self.text:SetTextColor(0.5, 0.5, 0.5) end)
-  b:SetScript("OnEnable", function(self) self.fill:SetAlpha(level()); self.text:SetTextColor(1, 1, 1) end)
-  function b:SetActive(a) self._active = a and true or false; self.fill:SetAlpha(level()) end
-  function b:SetBase(a) self._base = a; self.fill:SetAlpha(level()) end
+  b:SetScript("OnEnable", function(self) paint(); self.text:SetTextColor(1, 1, 1) end)
+  function b:SetActive(a) self._active = a and true or false; paint() end
+  function b:SetBase(a) self._base = a; paint() end
   return b
 end
 
@@ -1260,7 +1268,7 @@ local function buildTextSection(bf, s)
   local function reapply() if GB.Skin then GB.Skin:ReapplyDecor() end end
   local function reCD() if GB.Skin and GB.Skin.RefreshCooldownText then GB.Skin:RefreshCooldownText() end end
 
-  local TEXT_TABS = { { "keybind", "Keybind" }, { "count", "Charge count" }, { "cdtext", "Countdown" }, { "name", "Name" } }
+  local TEXT_TABS = { { "keybind", "Keybind" }, { "count", "Charge Count" }, { "cdtext", "Countdown" }, { "name", "Name" } }
   local tab = "keybind"
   local BLOCK_TOP = -44                   -- blocks hang below the chip row
   local blocks, chips = {}, {}
@@ -1913,8 +1921,8 @@ local PREVIEW_STATES = {
   { "cast", "Cast" }, { "channel", "Channel" },
   { "hover", "Hover" }, { "selected", "Selected" },
   { "flash", "Flash" }, { "cooldown", "Cooldown" },
-  { "unusable", "Unusable" }, { "oom", "Out of mana" },
-  { "range", "Out of range" },
+  { "unusable", "Unusable" }, { "oom", "Out of Mana" },
+  { "range", "Out of Range" },
 }
 local RING_TINT = { hover = { 1, 0.82, 0.35 }, selected = { 0.45, 0.75, 1 }, flash = { 1, 0.25, 0.25 } }
 
@@ -2823,7 +2831,12 @@ local function buildRailPane(parent)
   msgLine = newText(rail, FONT.body, 11, MUTE, "LEFT")
   msgLine:SetPoint("TOPLEFT", X, -200); msgLine:SetPoint("RIGHT", rail, "RIGHT", -X, 0); msgLine:SetJustifyH("LEFT")
 
-  railRefresh = function() pdd:refresh(); sdd:refresh() end
+  railRefresh = function()
+    pdd:refresh(); sdd:refresh()
+    -- Re-point the preset-focus highlight at the newly-selected edit preset's bars
+    -- (no-op if the highlight is off).
+    if GB.Skin and GB.Skin.RefreshPresetHighlight then GB.Skin:RefreshPresetHighlight() end
+  end
   parent._railRefresh = railRefresh
 end
 
@@ -2885,9 +2898,9 @@ local function buildLayoutSection(bf, s)
   -- legal way to flip a bar at combat edges); Hidden removes it.
   local VIS_OPTS = {
     { value = "default",  label = "Default" },
-    { value = "show",     label = "Always visible" },
-    { value = "combat",   label = "In combat" },
-    { value = "nocombat", label = "Out of combat" },
+    { value = "show",     label = "Always Visible" },
+    { value = "combat",   label = "In Combat" },
+    { value = "nocombat", label = "Out of Combat" },
     { value = "hide",     label = "Hidden" },
   }
   local function visValue() local c = data(); return (c and c.vis) or "default" end
@@ -3047,24 +3060,24 @@ local function buildLayoutSection(bf, s)
 
   -- Position (phase L3): move mode + per-bar reset. Both need the master
   -- switch on (position is part of the layout the addon owns).
-  local mvBtn = flatButton(bf, 110, 22, COLOR.purple, "Move bars", 11)
+  local mvBtn = flatButton(bf, 110, 22, COLOR.purple, "Move Bars", 11)
   mvBtn:SetPoint("TOPLEFT", 18, -436)
   mvBtn:SetScript("OnClick", function()
     if GB.Layout then GB.Layout:SetMoveMode(not GB.Layout:MoveModeOn()) end
   end)
-  attachTip(mvBtn, "Move bars", "Drag any bar's overlay to reposition it. Click an overlay to select it, then nudge with the arrow keys — hold Shift for 10px steps. ESC or this button exits. Out of combat only.")
+  attachTip(mvBtn, "Move Bars", "Drag any bar's overlay to reposition it. Click an overlay to select it, then nudge with the arrow keys — hold Shift for 10px steps. ESC or this button exits. Out of combat only.")
   -- Quick keybind (phase L4, the last layout-scope item): launches Blizzard's
   -- own quick-bind flow — hover a button, press a key. Same entry the
   -- Settings panel uses (close the open panel, then Show). Not gated on the
   -- master switch: keybinding isn't layout.
-  local qkBtn = flatButton(bf, 110, 22, COLOR.heroic, "Quick keybind", 11)
+  local qkBtn = flatButton(bf, 110, 22, COLOR.heroic, "Quick Keybind", 11)
   qkBtn:SetPoint("LEFT", mvBtn, "RIGHT", 8, 0)
   qkBtn:SetScript("OnClick", openQuickKeybind)
-  attachTip(qkBtn, "Quick keybind", "Opens Blizzard's Quick Keybind mode: hover any action button and press a key to bind it, ESC when done. Out of combat only.")
-  local rsBtn = flatButton(bf, 130, 22, COLOR.heroic, "Reset position", 11)
+  attachTip(qkBtn, "Quick Keybind", "Opens Blizzard's Quick Keybind mode: hover any action button and press a key to bind it, ESC when done. Out of combat only.")
+  local rsBtn = flatButton(bf, 130, 22, COLOR.heroic, "Reset Position", 11)
   rsBtn:SetPoint("TOPRIGHT", -18, -436)
   rsBtn:SetScript("OnClick", function() if GB.Layout then GB.Layout:ResetPosition(selBar) end end)
-  attachTip(rsBtn, "Reset position", "Returns the selected bar to wherever Edit Mode places it.")
+  attachTip(rsBtn, "Reset Position", "Returns the selected bar to wherever Edit Mode places it.")
 
   local hint = newText(bf, FONT.body, 11, MUTE, "LEFT")
   hint:SetPoint("TOPLEFT", 18, -406); hint:SetPoint("RIGHT", bf, "RIGHT", -16, 0); hint:SetJustifyH("LEFT")
@@ -3104,7 +3117,7 @@ local function buildLayoutSection(bf, s)
     rsBtn:ClearAllPoints(); rsBtn:SetPoint("TOPRIGHT", -18, yOr - 30)
     local moving = (GB.Layout and GB.Layout:MoveModeOn()) or false
     mvBtn:SetActive(moving)
-    mvBtn:SetText(moving and "Lock bars" or "Move bars")   -- Jason: the button names the NEXT action
+    mvBtn:SetText(moving and "Lock Bars" or "Move Bars")   -- Jason: the button names the NEXT action
     mvBtn:SetEnabled(on); rsBtn:SetEnabled(on)
     hint:ClearAllPoints()
     hint:SetPoint("TOPLEFT", 18, yOr - 62)
@@ -3292,10 +3305,53 @@ local function BuildPanel()
   panel._enableToggle = enTog
   -- Footer quick-keybind (Jason: reachable without digging into Bar layout).
   -- (The old footer profile switcher is gone — the left rail is always visible.)
-  local fqk = flatButton(panel, 110, 24, COLOR.heroic, "Quick keybind", 11); fqk:SetBase(0.2)
+  local fqk = flatButton(panel, 110, 24, COLOR.heroic, "Quick Keybind", 11); fqk:SetBase(0.2)
   fqk:SetPoint("BOTTOMRIGHT", -14, 14)
   fqk:SetScript("OnClick", openQuickKeybind)
-  attachTip(fqk, "Quick keybind", "Opens Blizzard's Quick Keybind mode: hover any action button and press a key to bind it, ESC when done. Out of combat only.")
+  attachTip(fqk, "Quick Keybind", "Opens Blizzard's Quick Keybind mode: hover any action button and press a key to bind it, ESC when done. Out of combat only.")
+
+  -- Preset-focus highlight toggle (Jason, session 15): a session-only switch that
+  -- puts a 50% purple block behind every bar wearing the preset you're editing, so
+  -- you can see/watch which bars your edits touch — persists with the window closed
+  -- and in combat. Purple off → orange on (flatButton's SetActive); text flips
+  -- OFF/ON. Left of Quick keybind. Built with SetBase(1) so the off purple is full.
+  local fhl = flatButton(panel, 246, 24, COLOR.purple, "Highlight Bars Using Current Preset: OFF", 11)
+  fhl:SetBase(1)
+  fhl:SetPoint("BOTTOMRIGHT", fqk, "BOTTOMLEFT", -8, 0)
+  local function hlText(on) fhl.text:SetText("Highlight Bars Using Current Preset: " .. (on and "ON" or "OFF")) end
+  local function hlSync(on) fhl:SetActive(on); hlText(on) end
+  fhl:SetScript("OnClick", function()
+    if not (GB.Skin and GB.Skin.SetPresetHighlight) then return end
+    local now = GB.Skin:SetPresetHighlight(not GB.Skin:SetPresetHighlight())   -- toggle (query then flip)
+    hlSync(now)
+  end)
+  attachTip(fhl, "Highlight bars using current preset", "Puts a translucent block behind every bar that wears the preset you're currently editing, so it's clear which bars your changes affect — handy for watching live previews. Stays on with this window closed and through combat. Resets off when you log in.")
+  panel._hlToggle = fhl; panel._hlText = hlText; panel._hlSync = hlSync
+
+  -- Footer Move bars (Jason: reachable from the footer too, like Quick keybind).
+  -- Mirrors the Bar Layout section's button — same SetMoveMode toggle, same
+  -- "Move Bars" ↔ "Lock Bars" next-action label. Purple off → orange on.
+  local fmv = flatButton(panel, 110, 24, COLOR.purple, "Move Bars", 11)
+  fmv:SetBase(1)
+  fmv:SetPoint("BOTTOMRIGHT", fhl, "BOTTOMLEFT", -8, 0)
+  local function mvSync()
+    local moving = (GB.Layout and GB.Layout.MoveModeOn and GB.Layout:MoveModeOn()) or false
+    fmv:SetActive(moving)
+    fmv.text:SetText(moving and "Lock Bars" or "Move Bars")   -- names the NEXT action
+  end
+  fmv:SetScript("OnClick", function()
+    if GB.Layout then GB.Layout:SetMoveMode(not GB.Layout:MoveModeOn()) end
+    mvSync()
+  end)
+  attachTip(fmv, "Move Bars", "Drag any bar's overlay to reposition it. Click an overlay to select it, then nudge with the arrow keys — hold Shift for 10px steps. ESC or this button exits. Out of combat only.")
+  panel._mvFooter = fmv; panel._mvFooterSync = mvSync
+
+  -- Sync both footer toggles to live state whenever the window opens (each
+  -- persists / can change independently of the window).
+  panel:HookScript("OnShow", function()
+    if GB.Skin and GB.Skin.SetPresetHighlight then hlSync(GB.Skin:SetPresetHighlight()) end
+    mvSync()
+  end)
 
   -- Three panels: left rail (profiles/presets) · middle controls · right preview,
   -- with a vertical divider at each seam.
@@ -3363,6 +3419,10 @@ function C:Refresh()
   if panel._enableToggle then panel._enableToggle:refresh() end
   if panel._railRefresh then panel._railRefresh() end
   for _, s in ipairs(sections) do if s.refresh then s.refresh() end end
+  -- Keep the footer Move-bars button in step with the section button + auto-exits
+  -- (combat/ESC route through SetMoveMode → C:Refresh); highlight follows too.
+  if panel._mvFooterSync then panel._mvFooterSync() end
+  if panel._hlSync and GB.Skin and GB.Skin.SetPresetHighlight then panel._hlSync(GB.Skin:SetPresetHighlight()) end
   C:RefreshPreview()
   C:SetPreviewState(previewState)
 end

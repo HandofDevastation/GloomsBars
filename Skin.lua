@@ -2646,6 +2646,121 @@ function Skin:PingBar(barKey, on)
   if next(pingButtons) then pingPhase = 0; pingDriver:Show() end
 end
 
+-- ---------------------------------------------------------------------------
+-- Preset-focus highlight (session 15, Jason): a persistent 50%-opacity purple
+-- BLOCK behind every bar that wears the preset currently being EDITED (the
+-- profile's edit/rail preset), so it's obvious which bars your edits affect and
+-- you can watch the live preview on them. Toggled from the footer button; SESSION-
+-- ONLY (defaults off each login); persists while the config window is closed AND
+-- in combat (it's a plain UIParent texture — no secure ops).
+-- ★ Z-ORDER (Jason's requirement): the block must sit BELOW all action bars +
+-- their overlays so a neighbouring bar overlapping it shows THROUGH on top, never
+-- covered. The host frame is BACKGROUND strata at frame level 0 — every real bar
+-- (MEDIUM/HIGH strata) draws above it. The block hugs each bar's VISIBLE-button
+-- bounding box (padded), so it never overlaps the icons themselves.
+local HL_TINT = { 0.58, 0.42, 1 }   -- family purple #936bff
+local HL_ALPHA = 0.5                -- Jason: 50% opacity
+local HL_PAD = 6                    -- how far the block extends past the icon cluster
+local presetHLOn = false
+local presetHLHost                  -- lazy BACKGROUND-strata container on UIParent
+local presetHLTex = {}              -- [barKey] = texture (pooled)
+
+local function presetHLEnsureHost()
+  if presetHLHost then return end
+  local h = CreateFrame("Frame", nil, UIParent)
+  h:SetFrameStrata("BACKGROUND"); h:SetFrameLevel(0)
+  h:SetAllPoints(UIParent)
+  h:Hide()
+  presetHLHost = h
+end
+
+-- The UIParent-space bounding box of a bar's VISIBLE, action-bearing buttons.
+-- Returns nil if the bar has none shown (empty/hidden bar → no block). ★ Each
+-- button's GetLeft/Right/Top/Bottom is in the BUTTON's own coordinate space —
+-- converted to UIParent space by its effective scale ÷ UIParent's (the movers'
+-- proven idiom, Layout.lua captureBarCenter). Buttons on scaled containers have
+-- different scales, so convert BEFORE min/maxing.
+local function barVisibleBounds(barKey)
+  local uiScale = UIParent:GetEffectiveScale()
+  local L, R, B, T
+  GB:ForEachButton(function(btn, bar)
+    if bar.buttonPrefix ~= barKey then return end
+    if not btn:IsVisible() then return end
+    local icon = btn.icon or btn.Icon
+    if not (icon and icon:IsShown()) then return end   -- skip empty slots (no action)
+    local l, r, b, t = btn:GetLeft(), btn:GetRight(), btn:GetBottom(), btn:GetTop()
+    if not (l and r and b and t) then return end
+    local s = btn:GetEffectiveScale() / uiScale     -- button space → UIParent space
+    l, r, b, t = l * s, r * s, b * s, t * s
+    L = math.min(L or l, l); R = math.max(R or r, r)
+    B = math.min(B or b, b); T = math.max(T or t, t)
+  end)
+  return L, R, B, T   -- UIParent-space edges (nil if no visible button)
+end
+
+-- Recompute + place the block for every bar; a bar wearing the edit preset with
+-- visible buttons gets one, everything else is hidden. Cheap enough to run on a
+-- throttle so the blocks live-follow moves/resizes/preset reassignments.
+local function presetHLRefresh()
+  if not presetHLOn then return end
+  presetHLEnsureHost()
+  local prof = GB:ActiveProfile()
+  local edit = prof and prof.edit
+  for _, bar in ipairs(GB.BARS) do
+    local key = bar.buttonPrefix
+    local wears = edit and prof.bars and prof.bars[key] == edit
+    local tex = presetHLTex[key]
+    if wears then
+      local L, R, B, T = barVisibleBounds(key)   -- already UIParent-space
+      if L then
+        if not tex then
+          tex = presetHLHost:CreateTexture(nil, "ARTWORK")
+          tex:SetColorTexture(HL_TINT[1], HL_TINT[2], HL_TINT[3], HL_ALPHA)
+          presetHLTex[key] = tex
+        end
+        -- Host is SetAllPoints(UIParent) at UIParent scale, so the UIParent-space
+        -- bounds place directly against its BOTTOMLEFT (padded outward).
+        tex:ClearAllPoints()
+        tex:SetPoint("BOTTOMLEFT", presetHLHost, "BOTTOMLEFT", L - HL_PAD, B - HL_PAD)
+        tex:SetPoint("TOPRIGHT", presetHLHost, "BOTTOMLEFT", R + HL_PAD, T + HL_PAD)
+        tex:Show()
+      elseif tex then
+        tex:Hide()   -- wears the preset but nothing visible to frame
+      end
+    elseif tex then
+      tex:Hide()
+    end
+  end
+end
+
+local presetHLDriver = CreateFrame("Frame")
+presetHLDriver:Hide()
+local presetHLAccum = 0
+presetHLDriver:SetScript("OnUpdate", function(_, dt)
+  presetHLAccum = presetHLAccum + dt
+  if presetHLAccum < 0.15 then return end   -- ~7 Hz: tracks moves without churn
+  presetHLAccum = 0
+  presetHLRefresh()
+end)
+
+-- Public: toggle the preset-focus highlight (footer button). on=nil → query.
+function Skin:SetPresetHighlight(on)
+  if on == nil then return presetHLOn end
+  presetHLOn = on and true or false
+  presetHLEnsureHost()
+  if presetHLOn then
+    presetHLHost:Show(); presetHLRefresh(); presetHLDriver:Show()
+  else
+    presetHLDriver:Hide()
+    for _, tex in pairs(presetHLTex) do tex:Hide() end
+    presetHLHost:Hide()
+  end
+  return presetHLOn
+end
+-- Public: recompute now (Config calls this when the edit/rail preset changes so
+-- the highlight jumps to the newly-selected preset's bars without waiting a tick).
+function Skin:RefreshPresetHighlight() presetHLRefresh() end
+
 function Skin:Enable()
   self.enabled = true
   if GB.db then GB.db.skinEnabled = true end
@@ -2685,6 +2800,7 @@ function Skin:Disable()
   self.enabled = false
   if GB.db then GB.db.skinEnabled = false end
   self:PingBar(nil, false)   -- clear any hover ping
+  self:SetPresetHighlight(false)   -- clear the preset-focus highlight (no skin → nothing to focus)
   GB:ForEachButton(function(btn) RestoreButton(btn) end)   -- includes pet + stance (now in GB.BARS)
   for _, btn in ipairs(flyoutButtons) do RestoreButton(btn) end
   if SpellFlyout and SpellFlyout.Background then SpellFlyout.Background:SetAlpha(1) end

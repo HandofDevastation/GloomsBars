@@ -422,6 +422,7 @@ function GB:RefreshAll()
     S:RefreshHotkeyText()
     S:RefreshPlateDim()
     if S.RefreshPlate then S:RefreshPlate() end
+    if S.RefreshPresetHighlight then S:RefreshPresetHighlight() end   -- re-point the preset-focus block (no-op if off)
   end
   if G and G.enabled then
     G:RefreshShape(); G:RefreshSize(); G:RefreshState()
