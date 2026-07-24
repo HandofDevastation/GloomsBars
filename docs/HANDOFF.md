@@ -1,74 +1,166 @@
 # Gloom's Bars — Session Handoff
-**Last updated: end of session 14 (2026-07-23). ⇒ Read SESSION 14 FIRST, then the OPEN-BUGS block below it.
-A LONG session (all changes UNCOMMITTED at handoff time — commit is the last step). Delivered: the
-3-PANEL Config window (profiles/presets rail · controls · preview), a MINIMAP BUTTON (LibDBIcon) + title-bar
-logo, TEXT OUTLINE + SHADOW controls on all 4 Text chips (with the Midnight font-object shadow fix), PET +
-STANCE BARS as full GB.BARS members (skinned + layout-managed), pet-autocast → shaped Comet Chase, the
-CLICKABLE-HITBOX extension for non-square shapes (first secure-frame interactive-geometry write — TAINT-CLEAN
-in combat testing), Comet Chase max 4→8, plus several bug fixes. ★ JASON DIRECTION SHIFTS THIS SESSION: (a)
-the "pure skin / never touch secure frames" caution is MINE, not his rule — he's fine treading into
-secure-geometry IF IT WORKS, unwind if not; STOP over-flagging it. (b) STOP repeatedly raising "out of
-combat only" as a caveat — it's normal for WoW addons, note once and move on. (c) When context fills and bugs
-pile up, he'll say I'm "SWIRLING" — that means STOP editing on theory, get a PROBE/evidence, fix the ONE
-identified thing, verify. This session I swirled on the pet "white dot" (two wrong autocast-overlay hooks)
-before he found it was the keybind range-dot. Sessions 2–13 remain the valid foundation; the FROZEN docs
-[SHAPE-CATALOG.md](SHAPE-CATALOG.md) / [EFFECTS-MATRIX.md](EFFECTS-MATRIX.md) / [ART-SPEC.md](ART-SPEC.md)
-still apply. Prior rules STILL HOLD: NEVER say "v1"/"later phase"; no engine jargon in UI text/chat; GUI-only
-for user controls (dev slash probes OK, Jason wants them KEPT until the build settles); ONE QA step at a time.**
+**Last updated: end of session 15 (2026-07-23). ⇒ Read SESSION 15 FIRST, then the NO-OPEN-BUGS block below.
+Everything is COMMITTED + QA'd (5 commits, tree clean, 67 ahead of origin — a push closes it out). Session 15
+resolved all THREE session-14 open bugs (two were Blizzard-working-as-intended, not GB defects), shipped four
+Config UX improvements + a new PRESET-FOCUS HIGHLIGHT feature, and fixed TWO nasty in-play bugs Jason hit
+live (a combat taint that froze cooldowns, and pet keybind colour reverting to grey). ★★ THE BIG PROCESS
+LESSON (Jason watched me swirl HARD on the keybind bug): when a rendered value (colour/font/anchor) is wrong
+or reverts, **TRAP THE ACTUAL WRITE** with `hooksecurefunc(region, "SetFont"/"SetVertexColor"/"SetTextColor", …)`
++ `debugstack` — do NOT infer, and do NOT blame addons by grep. I burned ~8 rounds + many reloads accusing
+ArcUI, EnhanceQoL, Platynator (all innocent) before a SetFont trap named the real culprit (DominosHotkeyStyler,
+a Claude-authored addon Jason had) in ONE reload, and a SetVertexColor trap cracked the pet colour. See
+SESSION 15 PART F + the [[fontstring-setvertexcolor-trap]] memory. Sessions 2–14 remain the valid foundation;
+the FROZEN docs [SHAPE-CATALOG.md](SHAPE-CATALOG.md) / [EFFECTS-MATRIX.md](EFFECTS-MATRIX.md) /
+[ART-SPEC.md](ART-SPEC.md) still apply. Prior rules STILL HOLD: NEVER say "v1"/"later phase"; no engine jargon
+in UI text/chat; GUI-only for user controls (dev slash probes OK, Jason wants them KEPT until the build
+settles); ONE QA step at a time; the secure-frame / out-of-combat caution is MINE not his — note once, move on.**
 
-## ▶▶ OPEN BUGS AT SESSION-14 END — FIX THESE FIRST (all reported in-game by Jason, uncommitted code present).
-**Jason stopped the session here because I was swirling; he wants these fixed fresh. Get a PROBE first, don't
-theorize.** The relevant dev probe is `/gb petinfo` (Core.lua — reports pet button geometry, HotKey anchor +
-text, autocast overlay parts, and a DEEP frame-tree texture walk). Also `/gb profiles`, `/gb fontinfo`.
-
-1. **★ HIDDEN BARS RETURN AGAIN (regression, NOT fully fixed).** Bars set to Visibility=Hidden (both empty
-   ones showing as grid outlines AND a POPULATED one, Bar 5, showing its real icons) keep reappearing. I
-   made a fix that WORKED ONCE then regressed: **`applyBar` (Layout.lua) was calling `HideBase()` then
-   CONTINUING to lay out containers (`cont:SetShown(true)`) + `barFrame:Layout()` (ResizeLayoutFrame),
-   which RE-SHOWED the frame.** Fix applied = an early `return` right after `HideBase()` (skip the whole
-   container loop on a hidden bar). This made them vanish, but Jason reports they RETURNED again later —
-   so something re-shows the bar AFTER our applyBar runs (suspects: `barFrame:Layout()` fired by a
-   DIFFERENT path; the Layout `Reassert` hooks on UpdateVisibility/UpdateShownButtons/UpdateGridLayout
-   re-running and the re-show winning; SHOWGRID; or an Edit-Mode/combat edge). NEEDS: a probe that logs
-   WHEN the bar gets re-shown (hook the bar frame's Show/SetShown, print a stack) to find the exact
-   re-show path, then re-assert the hide there. The `vis=="hide"` path uses `HideBase` (raw hide, what
-   Blizzard's UpdateVisibility uses) — do NOT use plain Hide (poisons isShownExternal, session-13 learning).
-2. **PET AUTOCAST "WHITE DOT" — real cause FOUND, fix applied but UNVERIFIED.** ★ It was NEVER the autocast
-   overlay (I wasted 2 rounds hooking AutoCastOverlay Show/SetAlpha — Jason found it by moving the keybind
-   X/Y sliders and the dots moved WITH the text). The dot = **Blizzard's `RANGE_INDICATOR` ("●", a global)**:
-   pet abilities with NO bound key get "●" put in `.HotKey` and Hide()'d by `PetActionButtonMixin:SetHotkeys`;
-   OUR keybind override re-styled + re-SHOWED that hidden bullet. FIX (Skin.lua ApplyHotkeyOverride, end):
-   `if hk:GetText() == (_G.RANGE_INDICATOR or "●") then hk:Hide() else hk:Show() end`. I reverted the two
-   bogus autocast-overlay hooks. NOT yet QA'd — verify dots gone on unbound pet abilities + a real bound key
-   still shows/styles. (The autocast-overlay suppression itself stays — `ov:SetAlpha(ov:IsShown() and 0 or 1)`
-   in refreshAutoCast — it legitimately hides Blizzard's square autocast marker under our comets.)
-3. **PET STANCE "SELECTED" GLOW STUCK on mode change via COMMAND (new, unfixed).** Hunter pet: pet in
-   Passive, then Kill Command (an attack command) flips it to Assist — the pet attacks, BUT the "Passive"
-   glow stays lit and Assist doesn't light. Our Selected glow reads `GetChecked()` re-evaluated on
-   PET_BAR_UPDATE / UPDATE_SHAPESHIFT_FORM (Glows.lua stateWatcher — added this session). A command-driven
-   mode flip may not fire those, or fires before Blizzard updates checked state. NEEDS: find the event a
-   command-driven pet-mode change fires (PET_BAR_UPDATE_USABLE? UNIT_PET? a 1-frame-late re-check?) and add
-   it to the stateWatcher, OR re-check checked state one frame after (C_Timer.After(0)).
-
-## ▶ SESSION-15 UI-POLISH ITEMS (Jason flagged; do after the 3 bugs).
-- **★ SHADOW controls sit ABOVE TEXT-POSITION controls in every Text chip — "totally bonkers" (Jason).**
-  This caused a false-alarm ("keybind X/Y not working on pet bar") — he was moving the SHADOW offset,
-  which is invisible without a shadow, thinking it was the text. In `textStyleGroup` (Config.lua ~1165)
-  the OUTLINE & SHADOW group renders at y=-160 (shadow offset X/Y sliders inside it); the POSITION group
-  (text offset X/Y) is at y=-376 — so shadow-offset is ABOVE text-position. REORDER so text POSITION comes
-  first / shadow controls sit below (or clearly separate them). Applies to all 4 chips (keybind/count/
-  countdown/name), all using the shared `textStyleGroup` + the per-chip POSITION block.
-- Other polish: revisit whatever else reads awkwardly in the reorganized sections.
+## ▶▶ NO OPEN GB BUGS. All three session-14 bugs resolved (details in SESSION 15). Two were Blizzard behaviour:
+1. **Hidden bars return → LEFT (mostly Blizzard).** Jason reproduced it with GB fully DISABLED on native
+   Blizzard bars: pet detach / walking out of range flashes ALL hidden bars visible until back in range.
+   Two layers: (a) Blizzard flashing them — UNFIXABLE, native does it; (b) GB slow to re-hide (the Layout
+   watcher doesn't listen for UNIT_PET / PLAYER_CONTROL_*). Jason chose "leave it — good enough." Do NOT
+   re-open as a GB defect. If ever revisited, the only fixable part is registering the pet-detach events on
+   the Layout watcher (Layout.lua ~line 51) to narrow the lingering window. ([[hidden-bars-return-mostly-blizzard]])
+2. **Pet autocast "white dot" → WON'T-FIX (Blizzard's RANGE_INDICATOR).** It appears on TARGET (Jason found
+   it's targeting, not combat) — it's Blizzard's range dot working as intended, NOT an unbound-key leftover.
+   Jason dropped it. The session-14 line-981 `hk:GetText()=="●"` hide still lingers (a harmless half-fix);
+   optional one-line removal if tidying. Do NOT chase it. ([[pet-dot-is-range-indicator-wontfix]])
+3. **Pet stance glow "stuck" → FIXED as not-a-bug + restyled.** Probe (`/gb petglow`, now removed) proved the
+   pet's STANCE stays checked while it attacks — Kill Command fires a one-off attack ON TOP, it does NOT
+   change the stance. Verified against native Blizzard bars (their glow is just a very subtle yellow interior
+   one). GB now mirrors Blizzard faithfully (no attack-action special-casing) and defaults the "selected"
+   trigger to a SOFT-BLUE INNER-ONLY glow (Core seed `layers="inner"`) so a persistently-lit stance reads
+   quiet. Existing profiles set inner-only in the Glows section; the seed only affects fresh installs.
+   Commit `9080b82`. ([[pet-stance-glow-mirrors-blizzard]])
 
 ## ▶ STILL-PENDING JASON DECISIONS (carried, none blocking):
-- (a) "Default" mode label — Jason said KEEP "Default" (do NOT relabel to "Blizzard"). CLOSED, noted here so it's not re-raised.
+- (a) "Default" mode label — KEEP "Default" (do NOT relabel to "Blizzard"). CLOSED.
 - (b) Rewrite **CLAUDE.md** — its "pure skin v1 / settled decisions" block is STALE (layout built, profiles
-  exist, pet/stance skinned+laid-out, no-"v1" rule, secure-geometry now in play). Offered, not yet done.
-- (c) **Release tag** — last shipped v0.2.0; sessions 9–14 all unshipped. A LOT of unshipped work
-  (animations, plate, profiles, layout, 3-panel, minimap, pet/stance…). Cut a tag when the 3 bugs are fixed.
+  exist, pet/stance skinned+laid-out, no-"v1" rule, secure-geometry now in play, RefreshAll combat-gated).
+  Offered across several sessions, not yet done.
+- (c) **Release tag** — last shipped v0.2.0; sessions 9–15 all unshipped. A LOT of unshipped work
+  (animations, plate, profiles, layout, 3-panel, minimap, pet/stance, preset-focus highlight, the two
+  in-play bug fixes). Bugs are now clean → a tag is warranted whenever Jason wants to cut one.
+- (d) **Modifier symbols (⌘⇧⌃⌥) don't take outline/shadow — DEFERRED but Jason wants it.** They're inline PNG
+  textures (Skin.lua MOD_ICON), which WoW can't outline/shadow, and a single FontString can't mix fonts.
+  The approved path: render the symbols as their OWN separate FontString in a glyph font overlaid next to the
+  keybind, same outline/shadow applied to both. Fiddly (anchoring/zones/combat re-assert) — a focused task,
+  not a quick fix. ([[modifier-symbols-outline-deferred]])
 
-## ★★★ SESSION 14 (2026-07-23) — 3-PANEL UI · MINIMAP · TEXT OUTLINE/SHADOW · PET+STANCE · HITBOX · fixes. UNCOMMITTED.
-Everything below is in the WORKING TREE, un-committed (base `9c33bf2`). QA status noted per item.
+## ★★★ SESSION 15 (2026-07-23) — 3 BUGS RESOLVED · CONFIG UX WAVE · PRESET-FOCUS HIGHLIGHT · 2 IN-PLAY BUG FIXES. ALL COMMITTED + QA'd.
+Commits, in order: `9080b82` (pet stance glow), `adf8dc4` (Config UX), `ad881b4` (highlight + footer + colours
++ title case), `2c2ee75` (RefreshAll combat-gate), `cfd9719` (pet keybind colour). Tree clean; 67 ahead of origin.
+
+### PART A — The 3 session-14 open bugs, RESOLVED (`9080b82` + the two won't-fix calls above).
+- **Pet stance glow (`9080b82`):** see the NO-OPEN-BUGS block #3. Method that cracked it: a temporary
+  `/gb petglow` probe (armed a logger on all candidate pet events, printed each button's GetChecked/isActive/
+  IsPetAttackAction per event). The Kill Command trace showed the stance NEVER un-checks — so it's not a
+  glow bug, it's Blizzard's model. **★ LESSON: probe-first turned two of three "GB bugs" into confirmed
+  Blizzard behaviour** — far better than shipping fixes that fight the game. Blizzard's own pet code
+  (`PetActionButtonMixin:Update`, verified in `/Applications/World of Warcraft/…/Blizzard_ActionBar/Shared/
+  PetActionBar.lua`) drives SetChecked from `isActive`; `IsPetAttackAction(i)` distinguishes the attack
+  command from a stance (it flashes + half-alphas instead of a solid check).
+
+### PART B — CONFIG UX WAVE (`adf8dc4`). All QA'd by Jason.
+- **Scroll-to-top on section open:** opening an accordion section scrolls it near the top of the pane, leaving
+  ONE collapsed header visible above, so the opened content fills the view. `C:ToggleSection` computes the
+  header offset (`(idx-2)*SECTION_HDR_H`), scrolls `contentScroll` (new module ref) deferred one frame (valid
+  range after relayout), clamped. The scrollbar tracks via its own OnUpdate.
+- **Text chip control REORDER (the "bonkers" item):** OUTLINE & SHADOW now follows POSITION in all four Text
+  chips (keybind/count/countdown/name) — was rendering ABOVE it. All chips use fixed absolute Y offsets;
+  re-flowed each (POSITION at ~-160, OUTLINE & SHADOW at ~-304). Name block grew to 600 for its longer hint.
+  ★ Jason noted spacing is still a touch inconsistent but it's LOW priority — leave it.
+- **Merged "Apply to bars" → "Bar Layout & Preset":** the separate Apply-to-bars section is GONE
+  (`buildApplySection` deleted). A PRESET dropdown now sits just below the bar-selector chips and assigns the
+  whole-look preset to the SELECTED bar (pet/stance included). Folded the row into the section's `BY` shift
+  (`baseBY` + `PRESET_ROW`). Preset assignment stays ENABLED regardless of the layout master switch (assigning
+  a look ≠ owning geometry). Ping-on-hover QoL preserved (keyed to selBar).
+
+### PART C — PRESET-FOCUS HIGHLIGHT (`ad881b4`, Jason's feature). Built + QA'd.
+A session-only footer toggle (**"Highlight Bars Using Current Preset"**, left of Move Bars) that draws a
+**50%-opacity purple BLOCK** behind every bar wearing the EDIT/rail preset (`prof.edit`), so it's obvious
+which bars your edits affect + you can watch live previews on them. ★ Jason's constraints, all honoured:
+must NOT overlap the icons (block hugs each bar's visible-button bounding box, padded 6px OUTSIDE) and must
+sit BELOW all bars + overlays (host = BACKGROUND strata, frame level 0, on UIParent — a neighbouring bar
+overlapping it shows THROUGH on top). Engine `Skin:SetPresetHighlight(on)` / `RefreshPresetHighlight()`
+(Skin.lua). Bounds via each button's GetLeft/etc × effectiveScale/UIParent-scale (the movers' idiom).
+Live-follows via a ~7Hz throttle + RefreshAll + rail-refresh hooks. Persists window-closed AND in combat
+(plain texture, no secure ops). Session-only (defaults off each login). Cleared on Skin:Disable.
+
+### PART D — CONSISTENT BUTTON COLOURS + FOOTER MOVE BARS + TITLE CASE (`ad881b4`).
+- **Every flatButton is now PURPLE off/unselected, ORANGE on/selected** (baked into `flatButton`'s SetActive —
+  repaints the fill; off = the button's creation colour, all purple-family). Applies to chips, mode rows,
+  layer cells, footer toggles — one change, universal. Jason's rule.
+- **Footer Move Bars button** (left of the highlight toggle): mirrors the Bar Layout section's button (same
+  SetMoveMode toggle, "Move Bars" ↔ "Lock Bars" next-action label), kept in sync via `C:Refresh` (incl.
+  combat/ESC auto-exit, which routes through SetMoveMode → C:Refresh).
+- **Title-case sweep** of button/chip/dropdown-option labels: Move Bars, Reset Position, Quick Keybind,
+  Charge Count, Always Visible / In Combat / Out of Combat, Out of Mana / Out of Range. Field labels, section
+  headers, hints, tooltips LEFT in sentence case (not buttons).
+
+### PART E — RefreshAll COMBAT-GATE (`2c2ee75`). ★ A REAL TAINT BUG Jason hit live in a delve.
+Switching PROFILES mid-combat froze cooldown sweeps + ability swaps (Raptor Strike→Mongoose Bite) until
+combat ended. BugSack: `ADDON_ACTION_BLOCKED … GloomsBars … MultiBarBottomLeftButton1:SetShown()` + a
+`SetCooldown` "secret values only allowed during untainted execution" error. Root cause: `GB:RefreshAll`
+re-applies the skin/glows/layout across EVERY secure button (a profile switch is the widest such pass) with
+NO combat guard → a secure button carried GB taint into Blizzard's UpdateShownButtons/SetCooldown. A /reload
+cleared the sticky taint (that's why it "fixed itself"). **FIX:** RefreshAll now defers its VISUAL re-apply
+in combat (queue `refreshPending`, re-run on PLAYER_REGEN_ENABLED — the Layout engine's pattern); the
+config-UI refresh runs FIRST, unconditionally, so a profile switch still shows in the window live mid-combat.
+LoadPreset/SetActiveProfile/SwitchPreset/AssignBarPreset all flow through RefreshAll → all covered.
+★★ DO NOT ungate this. ([[refreshall-combat-gate]])
+
+### PART F — PET KEYBIND COLOUR reverting to grey (`cfd9719`). ★★ THE SWIRL — read the LESSON.
+Pet action-button keybinds wouldn't hold their orange — flickered orange then reverted to grey EVERY FRAME.
+**Root cause (from Blizzard source):** `ActionButton_UpdateRangeIndicator` (ActionButton.lua:1273) recolours
+the HotKey via **`SetVertexColor`** (grey `ACTIONBAR_HOTKEY_FONT_COLOR` in range / RED out), fired CONTINUOUSLY
+by `PetActionBarMixin:OnUpdate`'s rangeTimer (~5/s). **SetVertexColor TINTS a FontString**, overriding our
+SetTextColor — and pet buttons have NO UpdateHotkeys self-heal hook. FIX: re-assert our colour in a
+`hooksecurefunc(hk, "SetVertexColor", …)` post-hook (the session-12 equipped-border pattern), guarded against
+self-recursion, SKIPPING Blizzard's out-of-range RED so range feedback survives; + reskin on UPDATE_BINDINGS
+so the hook installs on newly-bound pet buttons.
+- **★★ THE PROCESS FAILURE (Jason called it out, rightly):** I spent ~8 rounds + many reloads INFERRING and
+  BLAMING addons — ArcUI, EnhanceQoL, Platynator — every one WRONG. What actually worked, twice, in ONE
+  reload each: **trap the write** with `hooksecurefunc(region, "SetFont"/"SetVertexColor", …)` + debugstack.
+  - The ACTION-BAR keybinds showing green Lato (a DIFFERENT bug, surfaced same session) = **DominosHotkeyStyler**
+    (a Claude-authored addon Jason had for Dominos, no longer used) re-styling on a 1s/3s/5s login timer +
+    UpdateHotkeys hook. Jason DELETED it → fixed. Not GB.
+  - The PET grey = Blizzard's SetVertexColor (above). A SetTextColor trap NEVER caught it (wrong method).
+  - LESSON, saved to memory: continuously-reverting COLOUR ⇒ suspect SetVertexColor on the FontString, not
+    SetTextColor (same trap family as session-12's equipped-border). Trap the write EARLY; read Blizzard's
+    source for the exact recolor call; don't grep-and-accuse. ([[fontstring-setvertexcolor-trap]])
+
+### ★★ SESSION-15 LEARNINGS (do NOT rediscover):
+- **Probe-first pays off HUGE:** two of three "GB bugs" were Blizzard-working-as-intended, proven by a probe
+  (`/gb petglow`) + testing with GB disabled + reading Blizzard's PetActionBar.lua. Confirm the CULPRIT before
+  writing a fix; a fix that fights the game is worse than none.
+- **TRAP THE WRITE, don't infer or blame addons.** `hooksecurefunc(region, "SetFont"/"SetVertexColor"/
+  "SetTextColor", …)` + `debugstack` names the exact caller (file:line + addon) in one reload. This is THE
+  move for "why is this rendered value wrong / reverting." I failed to reach for it early and it cost the session.
+- **SetVertexColor tints FontStrings** (not just textures) — overrides SetTextColor. Blizzard's pet range
+  indicator uses it on a continuous OnUpdate timer. Re-assert in a SetVertexColor post-hook.
+- **RefreshAll (profile/preset switch) is the WIDEST secure-button pass** — must be combat-gated or it taints
+  buttons and freezes cooldowns. Individual Skin setters (SetAlpha, texture writes) are NOT protected and are
+  combat-safe alone; it's the full simultaneous re-apply overlapping Blizzard's secure update that taints.
+- **Blizzard's actual 12.0.7 source is ON DISK** at `/Applications/World of Warcraft/_retail_/BlizzardInterface
+  Code/Interface/AddOns/…` — READ IT for pet/action-bar behaviour (PetActionBar.lua, ActionButton.lua) instead
+  of guessing. It cracked both the stance-glow and the pet-colour bugs.
+- **The preset-focus highlight z-order pattern:** BACKGROUND strata + frame level 0 on UIParent puts a block
+  BELOW every real bar/overlay so overlaps show through — reusable for any "behind everything" highlight.
+- **Deep-in-the-weeds debugging protocol (Jason):** he'll keep testing/reloading to help isolate, but expects
+  EVIDENCE-driven moves. When he says a suspect is wrong (he disabled/tested it), BELIEVE him and stop
+  re-accusing it. He finds bugs by EXPERIMENTING (targeting→dot, sliders→dot, clearing a keybind→flicker).
+
+### ✔ CLOSED / DROPPED this session:
+- All THREE session-14 open bugs (see the NO-OPEN-BUGS block). The `/gb petglow` probe was added then REMOVED.
+- The `/gb fontinfo` per-preset + pet-keybind diagnostic dumps were added for the keybind hunt then REMOVED.
+- DominosHotkeyStyler (Jason's leftover Claude-authored addon) deleted by Jason — it was the action-bar
+  keybind clobberer. NOT a GB issue; noted so it isn't re-investigated.
+
+## ★★★ SESSION 14 (2026-07-23) — 3-PANEL UI · MINIMAP · TEXT OUTLINE/SHADOW · PET+STANCE · HITBOX · fixes. COMMITTED (`cb1274d`).
+All session-14 work was committed as `cb1274d` (the handoff's "uncommitted" note predated the final commit).
+Its 3 open bugs were all resolved in SESSION 15 above. QA status noted per item.
 
 ### PART A — 3-PANEL Config window (QA'd). Was: left preview · right accordion (+ footer profile switcher).
 NOW: **left RAIL (profiles + presets, ALWAYS visible) · middle accordion (controls) · right preview.** Jason:
