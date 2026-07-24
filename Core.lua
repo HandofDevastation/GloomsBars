@@ -410,7 +410,33 @@ end
 
 -- Re-render everything from the (just-rewritten) working copy. Uses the public
 -- refresh surface only; each call is a no-op-safe re-assert.
+-- ★ Combat gate (session 15): RefreshAll re-applies the skin/glows/layout across
+-- EVERY secure button — a profile/preset switch is the widest such pass. Running
+-- it during combat taints the action buttons (Jason's delve bug: switching
+-- profiles mid-delve froze cooldown sweeps + ability swaps until combat ended,
+-- because a secure button carried our taint into Blizzard's UpdateShownButtons/
+-- SetCooldown). Blizzard's own action-bar updates are locked in combat for this
+-- reason. So: in combat, QUEUE and re-run the moment combat drops — the same
+-- pattern the Layout engine uses. Config data still updates live (it's just db
+-- writes); only the VISUAL re-apply defers.
+local refreshPending = false
+local refreshWatcher = CreateFrame("Frame")
+refreshWatcher:RegisterEvent("PLAYER_REGEN_ENABLED")
+refreshWatcher:SetScript("OnEvent", function()
+  if refreshPending then refreshPending = false; GB:RefreshAll() end
+end)
+
 function GB:RefreshAll()
+  -- The config UI refresh is the addon's OWN frames — always safe, always live, so
+  -- a profile/preset switch shows in the window immediately even mid-combat.
+  local C = GB.Config
+  if C then
+    if C.Refresh then C:Refresh() end
+    if C.RefreshPreview then C:RefreshPreview() end
+  end
+  -- The VISUAL re-apply below touches every secure button → combat-gated (queued,
+  -- re-run on PLAYER_REGEN_ENABLED). See the note above refreshWatcher.
+  if InCombatLockdown() then refreshPending = true; return end
   local S, G, A = GB.Skin, GB.Glows, GB.Anims
   if S and S.enabled then
     S:SetHandShape(GB.db.handShape)      -- geometry + decor via refreshIconGeometry
@@ -432,11 +458,6 @@ function GB:RefreshAll()
     end
   end
   if GB.Layout then GB.Layout:ApplyAll() end   -- bar layouts follow the profile
-  local C = GB.Config
-  if C then
-    if C.Refresh then C:Refresh() end
-    if C.RefreshPreview then C:RefreshPreview() end
-  end
 end
 local FONT_DIR = GB.MEDIA .. "fonts\\"
 GB.FONT = {
